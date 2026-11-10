@@ -1,0 +1,21 @@
+name: Runner bootstrap check
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: hrx-runner-bootstrap
+  cancel-in-progress: false
+jobs:
+  bootstrap:
+    runs-on: [self-hosted, linux, hrx-systems-test-bootstrap]
+    timeout-minutes: 10
+    env:
+      HRX_SYSTEMS_ROOT: ${{ vars.HRX_SYSTEMS_ROOT }}
+      BOOTSTRAP_IMAGE: ${{ vars.BOOTSTRAP_IMAGE }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Check host prerequisites
+        run: bash scripts/bootstrap-runner.sh check
+      - name: Check container storage boundary
+        run: bash scripts/check-container-storage.sh

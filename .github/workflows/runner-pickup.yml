@@ -1,0 +1,42 @@
+name: Runner pickup test
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pickup:
+    runs-on: [self-hosted, linux, hrx-systems-test-bootstrap]
+    timeout-minutes: 5
+    steps:
+      - name: Execute work on the assigned runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/hrx-runner-pickup-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.txt"
+          {
+            printf 'status=executed\n'
+            printf 'runner=%s\n' "$RUNNER_NAME"
+            printf 'os=%s\n' "$RUNNER_OS"
+            printf 'architecture=%s\n' "$RUNNER_ARCH"
+            printf 'repository=%s\n' "$GITHUB_REPOSITORY"
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+            printf 'completed_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > "$evidence"
+          test -s "$evidence"
+          cat "$evidence"
+          {
+            printf '## Runner pickup succeeded\n\n'
+            printf 'The assigned runner executed the job and wrote its result.\n\n'
+            printf '```text\n'
+            cat "$evidence"
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload execution evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runner-pickup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hrx-runner-pickup-${{ github.run_id }}-${{ github.run_attempt }}.txt
+          if-no-files-found: error
+          retention-days: 7

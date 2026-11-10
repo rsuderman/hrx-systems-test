@@ -1,0 +1,7 @@
+# Runner credentials, model assets and generated state belong outside the repo.
+.runner
+.credentials*
+.env
+*.gguf
+*.safetensors
+__pycache__/
