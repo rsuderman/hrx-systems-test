@@ -1,0 +1,58 @@
+name: Single-model E2E skeleton
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Fixture contract check or prerequisite check for real execution
+        type: choice
+        options: [fixture, real]
+        default: fixture
+permissions:
+  contents: read
+concurrency:
+  group: hrx-single-model-hardware
+  cancel-in-progress: false
+jobs:
+  single-model:
+    runs-on: [self-hosted, linux, hrx-systems-test-bootstrap]
+    timeout-minutes: 15
+    env:
+      MODE: ${{ inputs.mode }}
+      HRX_SYSTEMS_ROOT: ${{ vars.HRX_SYSTEMS_ROOT }}
+      SINGLE_MODEL_IMAGE: ${{ vars.SINGLE_MODEL_IMAGE }}
+      SINGLE_MODEL_QUALIFICATION: ${{ vars.SINGLE_MODEL_QUALIFICATION }}
+      PYTHONNOUSERSITE: '1'
+      PYTHONPATH: ''
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Run single-selection stage contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${HRX_SYSTEMS_ROOT:-$HOME/.local/share/hrx-systems-test}"
+          output="$root/runs/single-model/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          printf 'E2E_OUTPUT=%s\n' "$output" >> "$GITHUB_ENV"
+          args=(--mode "$MODE" --cache "$root/cache" --output "$output" --image "$SINGLE_MODEL_IMAGE")
+          if [[ -n "$SINGLE_MODEL_QUALIFICATION" ]]; then
+            args+=(--qualification "$SINGLE_MODEL_QUALIFICATION")
+          fi
+          python3 scripts/single-model-e2e.py "${args[@]}"
+      - name: Publish readable summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${E2E_OUTPUT:-}" && -f "$E2E_OUTPUT/summary.md" ]]; then
+            cat "$E2E_OUTPUT/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload report even on blocked or failed attempts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: single-model-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.E2E_OUTPUT }}/report.json
+            ${{ env.E2E_OUTPUT }}/plan.json
+            ${{ env.E2E_OUTPUT }}/summary.md
+            ${{ env.E2E_OUTPUT }}/response.json
+          if-no-files-found: error
+          retention-days: 7

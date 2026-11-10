@@ -3,7 +3,21 @@
 Status: **Draft for discussion**. This repository is a workspace for developing
 the model-test design. The separate [runner bootstrap](runner-bootstrap.md)
 provides host setup and a manual storage smoke check; it does not implement the
-nightly model tests. Update this document as requirements and decisions resolve.
+nightly model tests. The [single-model skeleton](single-model-e2e.md) adds a
+fixture stage contract and manual hookup; real adapters remain pending. Update
+this document as requirements and decisions resolve.
+
+The first implementation epic is [one model end to end](acquisition-spike.md):
+manual asset seeding, fresh pipeline/HRX inputs, read-only CI consumption, real
+model readiness, bounded inference and owned cleanup. It assumes the operator
+selects a compatible host/model. The later
+[hardware-specific seed list](acquisition-spike.md#hardware-specific-model-list-and-seeding)
+automates suitability checks and does not block this basic end-to-end milestone.
+For this epic, use one known compatible HRX release and pinned pipeline to
+validate the testing infrastructure. The selected SDK release is downloaded into each run and is not persistently
+cached. Fresh run directories do not imply newer versions; release upgrades and candidate-build testing are separate work.
+The [restriction inventory](platform-restrictions.md) records the comparisons
+needed between model/pipeline requirements and the actual platform/runtime.
 
 The system acquires a known set of published Hugging Face model packages, retains
 GGUFs and other assets locally between runs, executes nightly serving checks, and
@@ -28,6 +42,9 @@ node coordinating workers on different hardware.
 - Use a separate caching/prefetch run with writable persistent storage, followed
   by test containers with read-only access to verified cached inputs. Limit
   acquisition to the assets required by the planned model/preset selections.
+- Initially, a person seeds the model assets using a simple script. CI mounts
+  that cache read-only; automatic CI seeding can be added later. Each CI run
+  acquires its selected pipeline and Loom/HRX build and checks their compatibility.
 - Persist reusable assets such as weights and tokenizers across runs. Download
   the selected pipeline afresh for each nightly into that run's staging area;
   do not reuse a previous run's installed pipeline as the candidate under test.
@@ -64,24 +81,27 @@ flowchart LR
     Catalog[Known model catalog] --> Plan[Nightly run snapshot]
     Sizes[Model size and memory index] --> Plan
     Capacity[Runner capabilities] --> Plan
-    Plan --> Prefetch[Prefetch]
-    Prefetch --> Cache[(Persistent local model cache)]
-    Plan --> Worker[Local model test worker]
-    Cache --> Worker
+    Operator[Operator-run seed script] --> Cache[(Persistent model-asset cache)]
+    Plan --> Inputs[Fresh pipeline and exact HRX SDK]
+    Inputs --> Verify[Verify cached asset closure]
+    Cache -->|read-only| Verify
+    Verify --> Worker[Local model test worker]
+    Cache -->|read-only| Worker
     Worker --> Results[Local result bundle]
     Results --> Publish[Upload and coverage report]
 ```
 
 GitHub Actions triggers one nightly coordinator invocation. The coordinator
-resolves the run, checks runner eligibility, acquires inputs, calls the local
-worker and publishes results. A continuously running head-node service is not
+resolves the run, checks runner eligibility, downloads the pipeline and selected
+SDK, verifies the read-only asset cache, calls the local worker and publishes
+results. Missing model assets are reported for manual reseeding. A continuously running head-node service is not
 required for v1.
 
 ## GitHub Actions execution
 
 The CI repository owns a scheduled workflow using the GitHub Actions `schedule`
-event. An additional manual `workflow_dispatch` trigger is proposed for reruns,
-prefetching and investigating failures. Exact clock time/timezone remain open;
+event. An additional manual `workflow_dispatch` trigger is proposed for reruns
+and investigating failures. Asset seeding is operator-run in v1, not a CI job. Exact clock time/timezone remain open;
 the schedule should be explicit and recorded with each run.
 
 Scheduled workflows run from the default branch and may be delayed or dropped
@@ -105,7 +125,7 @@ created by this design.
 | Model catalog | The repositories/presets and checks we promise to exercise, with hardware requirements and explicit exclusions |
 | Size and memory index | Track acquisition sizes separately from workload-specific memory estimates and observations |
 | Run planning | Freeze publication/runtime/test identities, evaluate runner eligibility and record assigned/excluded jobs |
-| Acquisition | Fetch and verify the selected model-card closure through `loom-fetch`; retain persistent caches |
+| Acquisition | Operator uses `loom-fetch` to seed assets; CI downloads pipeline/SDK and verifies the read-only cached closure |
 | Worker | Manage the service lifecycle, run checks and return a result bundle |
 | Results publication | Upload evidence, aggregate coverage and preserve history |
 
@@ -131,8 +151,10 @@ hostile executable inputs, evaluate a stronger VM or disposable-host boundary.
 
 The proposed execution contract is:
 
-- Pin the runtime/test image by digest; record that digest alongside the host
-  driver and runtime identities. Host GPU drivers remain a provisioned dependency.
+- Pin the base container by digest. For each run, install the exact selected HRX
+  SDK and dependency closure in a fresh venv; invoke its tools through explicit
+  paths and record artifact/imported-package identity. A host- or image-bundled
+  SDK is not the candidate. Host GPU drivers remain a provisioned dependency.
 - Expose the assigned GPU and required driver interfaces only. Verify physical
   device identity inside the container; an environment visibility setting alone
   must not be treated as enforced device isolation. Backend-specific device
@@ -140,15 +162,15 @@ The proposed execution contract is:
 - Use a non-root workload user where supported, minimal capabilities and normal
   isolation profiles. Avoid privileged mode, host PID/network namespaces, broad
   host mounts and access to the Docker socket from model execution.
-- Keep checkpoint caches on persistent host storage. Prefetch needs write access
-  to its designated cache; execution should receive immutable acquired inputs
-  read-only, with separate writable scratch/state and results directories. Mount
+- Keep checkpoint caches on persistent host storage. Only the operator-run seed
+  container has model-cache write access in v1. CI verifies and consumes these
+  inputs read-only, with separate writable scratch/state and results directories. Mount
   the selected asset closure so all shared-file references resolve inside the
   container. Shared caches remain an integrity boundary, not disposable scratch.
 - Limit CPU, host RAM, processes and scratch usage explicitly. Docker's host-RAM
   limit does not establish a GPU VRAM budget; retain the separate live-VRAM
   admission check. Host-memory admission must also respect container limits.
-- Give prefetch only the credentials/network access needed to acquire assets.
+- Give manual seeding only the credentials/network access needed to acquire assets.
   Keep GitHub publication credentials outside model execution. Prefer network
   isolation during inference, with readiness/query traffic inside the test
   boundary; trusted orchestration uploads the resulting artifacts afterward.
@@ -322,7 +344,7 @@ a partial-coverage warning remains an explicit policy decision.
 | Phase | Behavior | Recorded outcome |
 |---|---|---|
 | Resolve | Resolve immutable publications/runtime/test profiles, consult the size index and confirm runner capacity | Frozen inputs, expected jobs, assignments and explicit eligibility exclusions |
-| Prefetch | Acquire missing files and verify the complete selected closure, using persistent caches | Available inputs or a model-specific acquisition failure |
+| Acquire and verify | Download fresh pipeline/SDK; verify the selected model closure through read-only cache mounts | Available inputs or a reported cache miss/compatibility failure; no CI asset repair |
 | Execute | Start the service, wait for actual model readiness, run bounded checks and shut down owned processes | Test outcomes, diagnostics and timings |
 | Collect | Assemble model, runtime, hardware and test provenance with responses/logs | A durable local result bundle |
 | Publish | Upload results and produce an aggregate coverage summary | Published evidence or a retained pending upload |
@@ -331,19 +353,16 @@ Resolve inputs once for the run. Publication changes during acquisition or testi
 must not mix revisions within that run. Whether resolution follows the latest
 published revision nightly or uses a reviewed pinned set remains a policy decision.
 
-Prefetch is a separate caching run that can warm a host before the nightly.
-The nightly completes or verifies that acquisition phase before execution so
-large transfers and hashing do not unnecessarily interfere with test timing.
-A failed acquisition produces a visible outcome for that model; remaining models
-with complete inputs can still run.
+Manual seeding warms the host before CI. CI never downloads missing model
+assets into the cache in v1: it reports the missing identities for an operator
+to seed, while remaining models with complete inputs can continue. Automated
+CI seeding is future scope.
 
-Prefetch coverage and execution eligibility are separate. A storage host can
-cache the whole catalog even when its accelerator cannot execute every model.
-By default, each hardware runner's caching run acquires the planned selections
-assigned to that worker. A whole-catalog warmup is a distinct explicit scope;
-it does not require every cached model to fit that worker's GPU. Temporary GPU
-occupancy need not prevent caching an assigned model. The acquisition report
-must identify the requested scope and which selections are complete.
+Acquisition proof and execution eligibility are separate. An operator can name
+one download-only probe to establish cache reuse before its GPU/memory profile
+is qualified. Report that probe as unqualified for execution. Normal automatic
+selection still requires the four suitability checks. Temporary GPU occupancy
+need not prevent seeding an otherwise suitable model.
 
 ## Persistent cache and storage
 
@@ -360,8 +379,9 @@ another GGUF downloader or weight store.
 `HF_HUB_CACHE` controls the HF cache. `--cache` or `LOOM_CACHE_HOME` controls Loom
 acquisition state. Persistent payload storage must remain outside disposable run
 directories. The acquisition configuration must keep fresh pipeline downloads
-separate from reusable asset storage; the exact SDK/cache arrangement is an
-integration check, not a settled command-line recipe.
+separate from reusable asset storage. Download the selected HRX release and its
+pinned dependencies into disposable per-attempt storage; install them in a fresh
+container venv. SDK payloads are not retained across attempts.
 
 The persistent-cache policy applies to assets: model weights, tokenizers and
 other declared reusable model inputs. The pipeline candidate consists of its
@@ -402,31 +422,32 @@ design. Docker supports [read-only bind mounts](https://docs.docker.com/engine/s
 
 | Phase | Persistent model-store access | Other writable storage |
 |---|---|---|
-| Acquisition/prefetch | Read/write to designated reusable-asset caches | Fresh pipeline staging, acquisition scratch and logs |
-| Test | Read-only access to referenced cached assets | Per-attempt runtime state, scratch and results; staged pipeline mounted read-only |
+| Manual seeding | Read/write to designated reusable-asset caches | Seed staging, scratch and logs |
+| CI acquisition/verification | Read-only model assets; no repair writes | Fresh pipeline, candidate SDK/venv, scratch and logs |
+| CI test | Read-only model assets and staged pipeline | Per-attempt runtime state, scratch and results |
 | Maintenance | Controlled access for quota management and eviction | Maintenance records |
 
-Acquisition downloads the selected pipeline into fresh run staging. Prefetch
-uses that pipeline's frozen card/lock selection, acquires missing reusable assets
-and verifies the complete closure before marking the run's installation ready.
-Reuse verified assets across nights and container-image updates, while refreshing
-the pipeline candidate for each nightly. Interrupted
-downloads or staging directories are not runnable installations. Define a
-publication/locking protocol around staging and readiness, while retaining the
-SDK's own download/cache coordination rather than inventing a new blob store.
+The operator-run seed script uses a frozen card/lock selection to acquire and
+verify reusable assets. CI downloads its selected pipeline into fresh staging,
+then verifies the selected closure against the read-only cache. A missing asset
+is a cache-miss result requiring manual reseeding, not an implicit download.
+Reuse verified assets across nights and base-image updates while refreshing the
+pipeline and candidate SDK each run. Partial downloads are not ready inputs;
+retain the SDK's own cache coordination rather than inventing a new blob store.
 
 The acquisition unit is the complete asset set selected by a pinned model card
 and preset, not a clone of every file in its repositories. Include the selected
 programs into per-run staging, and tokenizer/model assets, all required GGUF
-shards, and vision, draft or other companion assets into reusable storage when
-that selection requires them. Do not acquire unused
+shards, and required vision/draft companions into reusable storage during manual
+seeding. CI only reads those assets. Do not acquire unused
 quantizations, alternate presets, unrelated repository files or historical
 revisions merely because they are published alongside the selected assets.
 Retained assets from previous runs may remain under the retention policy.
 
 Resolve the selection using `loom-fetch` and its card/lock semantics; do not
-approximate it with a filename glob for GGUF files. Download missing required
-assets and reuse already verified cached assets, including shared companions.
+approximate it with a filename glob for GGUF files. Manual seeding downloads
+missing assets and reuses verified content, including shared companions. CI
+performs read-only verification and reports missing content without repair.
 Do not let an existing pipeline installation or SDK document/program cache
 silently substitute for the fresh pipeline download required for this run.
 The caching result identifies the pinned selection, required assets and whether
@@ -445,10 +466,10 @@ is an explicit integration check; any required writes belong in per-run state.
 Read-only mounts prevent writes through the test container, but do not freeze
 files that another host process can change. Keep published installations and
 their referenced blobs immutable while in use, record active references, and
-prevent concurrent prefetch or eviction from replacing/removing them. New
+prevent concurrent manual seeding or eviction from replacing/removing them. New
 nightly runs get distinct pipeline installations; cleanup of one run must not
 remove shared assets. Configure compatible UID/GID ownership so non-root
-prefetch and test users can share inputs without broad host permissions.
+seeding and test users can share inputs without broad host permissions.
 
 This favors persistent storage on a dedicated self-hosted worker for v1. An
 ephemeral worker would need a separately attached persistent store or explicit
@@ -460,8 +481,8 @@ Cache loss affects acquisition time, not the frozen identity of the intended tes
 
 ## Worker and test execution
 
-For v1, execute one model at a time on the accelerator. Prefetch may have bounded
-parallelism. Model attempts have isolated state and owned service processes;
+For v1, execute one model at a time on the accelerator. Manual seeding may have
+bounded download parallelism. Model attempts have isolated state and owned service processes;
 cleanup must not stop unrelated services.
 
 The worker receives a frozen job description and produces a result bundle. It
@@ -567,7 +588,8 @@ GitHub Actions can remain the nightly trigger while this coordinator is introduc
 The desired model-by-hardware matrix is explicit; adding a worker does
 not automatically require every model to run on every device.
 
-Workers prefetch their assigned closures locally. The head node does not need to
+Initially operators seed each worker's assigned closures locally. Automated
+worker prefetch is a later extension. The head node does not need to
 stream hundreds of gigabytes of checkpoint data for each job. A shared storage
 layer could be evaluated later if deployment topology makes it useful.
 
@@ -580,7 +602,7 @@ need refinement for distribution. They do not require deploying a head node in v
 |---|---|
 | Catalog scope | Confirm the initial 60 entries and selected presets/quantizations |
 | Publication updates | Nightly latest-published resolution versus reviewed pinned revisions |
-| Runtime under test | Select a release, candidate artifact or another explicit runtime policy |
+| Runtime under test | First epic pins a known compatible release; future candidate-build policies are separate |
 | Pass criteria | Proposed load/readiness/bounded inference/shutdown; determine stronger correctness requirements |
 | Feature coverage | Decide which components and behaviors are required initially |
 | GitHub workflow | Local repository is `hrx-systems-test`; choose nightly time/timezone, manual inputs and runner labels/groups |
