@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import pwd
 import shutil
 import signal
 import subprocess
@@ -29,6 +30,16 @@ def run(args):
     root = Path(args.root or os.environ.get('HRX_SYSTEMS_ROOT', Path.home() / '.local/share/hrx-systems-test')).expanduser()
     if not root.is_absolute() or root == Path('/'):
         raise ValueError('root must be an absolute directory other than /')
+    reader_user = getattr(args, 'reader_user', None)
+    uid, setfacl = None, None
+    if reader_user:
+        try:
+            uid = pwd.getpwnam(reader_user).pw_uid
+        except KeyError as error:
+            raise ValueError(f'unknown reader account: {reader_user}') from error
+        setfacl = shutil.which('setfacl')
+        if not setfacl:
+            raise ValueError('--reader-user requires setfacl; ask the machine owner to install it')
     print(f'{len(entries)} publications; {sum(e["gguf_bytes"] for e in entries) / 1e9:.1f} GB before deduplication/cache reuse', flush=True)
     print(f'Cache: {root / "cache"}', flush=True)
     if args.dry_run:
@@ -43,7 +54,8 @@ def run(args):
     template = json.loads((REPO / 'config/single-model-e2e.json').read_text())
     lock = template['sdk']['dependency_lock']
     shutil.copyfile(REPO / 'config' / lock, config / lock)
-    report = {'schema_version': 1, 'status': 'running', 'root': str(root), 'entries': []}
+    report = {'schema_version': 1, 'status': 'running', 'root': str(root),
+              'reader_user': reader_user, 'entries': []}
     for entry in entries:
         report['entries'].append({**entry, 'status': 'not_run'})
     receipt = output / 'progress.json'
@@ -77,12 +89,25 @@ def run(args):
                 raise
             entry.update(status='passed' if code == 0 else 'failed', exit_code=code,
                          elapsed_seconds=round(time.monotonic() - started, 2))
+            if code == 0 and uid is not None:
+                entry['status'] = 'running'
+                try:
+                    SUITE.grant_read(manifest, uid, setfacl)
+                    entry['reader_acl'] = {'status': 'passed', 'uid': uid, 'permissions': 'r--'}
+                    entry['status'] = 'passed'
+                except (OSError, ValueError, subprocess.SubprocessError) as error:
+                    reason = f'{type(error).__name__}: {error}'
+                    entry['reader_acl'] = {'status': 'failed', 'uid': uid, 'reason': reason}
+                    entry.update(status='failed', error=f'reader ACL failed: {reason}')
             SUITE.SEED.write_json(receipt, report)
             print(f'  {entry["status"]}: {entry["elapsed_seconds"]:.1f}s; log: {entry["log"]}', flush=True)
         report['status'] = 'passed' if all(e['status'] == 'passed' for e in report['entries']) else 'failed'
         return 0 if report['status'] == 'passed' else 1
     except KeyboardInterrupt:
         report['status'] = 'interrupted'
+        for entry in report['entries']:
+            if entry['status'] == 'running':
+                entry['status'] = 'interrupted'
         return 130
     except Exception as error:
         report.update(status='failed', error=f'{type(error).__name__}: {error}')
@@ -104,6 +129,7 @@ if __name__ == '__main__':
     parser.add_argument('--dry-run', action='store_true', help='list selection without downloading or writing files')
     parser.add_argument('--model', action='append', help='restrict to a listed publication repository; repeatable')
     parser.add_argument('--asset-network', choices=('online', 'offline'), default='online')
+    parser.add_argument('--reader-user', help='grant an existing runner account read access after each successful publication')
     try:
         sys.exit(run(parser.parse_args()))
     except (OSError, ValueError, subprocess.SubprocessError) as error:

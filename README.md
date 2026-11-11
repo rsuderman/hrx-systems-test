@@ -10,6 +10,8 @@ workflow use the same stages, with one server hot-loading/unloading models.
 To download the 45 publications with selected GGUF assets under 20 GB each,
 see [bulk cache downloads](docs/download-models.md). This uses the existing
 native seeder and does not expand the regression suite.
+For a shared cache, pass `--reader-user` with the dedicated runner account so
+new and reseeded inventory manifests remain readable by CI.
 
 To test every hosted selection seeded on this runner, use
 `bash scripts/run-cached-models.sh --selection cached` with the configured cache

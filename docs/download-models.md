@@ -3,7 +3,7 @@
 From the repository, run this as the cache writer, without sudo:
 
 ```bash
-bash scripts/download-models.sh --root /srv/loom-models
+bash scripts/download-models.sh --root /srv/loom-models --reader-user hrx-runner
 ```
 
 This sequentially seeds the 45 pinned publications whose selected GGUF assets
@@ -19,10 +19,19 @@ are required. No host packages are installed. Run only when regression tests,
 other seeders and cache maintenance are idle. The native seeder serializes writes
 per model and fails a competing writer rather than running concurrently.
 
+For a shared cache, `--reader-user` names the existing runner account. The command
+requires `setfacl` and reapplies that account's narrow read ACL to every successfully
+published manifest, including replacements made while reseeding. An unknown
+account or missing `setfacl` fails before downloads. Failed ACL publication marks
+that model and the overall run failed, while retaining the successful seed exit
+code and attempting later models. Directory traversal and asset read access must
+already be configured. No sudo or recursive permission changes are performed.
+Omit `--reader-user` for a cache used only by the seeding account.
+
 Preview without writing or downloading:
 
 ```bash
-bash scripts/download-models.sh --root /srv/loom-models --dry-run
+bash scripts/download-models.sh --root /srv/loom-models --reader-user hrx-runner --dry-run
 ```
 
 The terminal prints each model, completion time and log path. The printed run
@@ -36,7 +45,7 @@ To run independently of a terminal session:
 
 ```bash
 mkdir -p "$HOME/.local/state/hrx-systems-test"
-nohup bash scripts/download-models.sh --root /srv/loom-models \
+nohup bash scripts/download-models.sh --root /srv/loom-models --reader-user hrx-runner \
   > "$HOME/.local/state/hrx-systems-test/download-models.log" 2>&1 < /dev/null &
 echo "Download PID: $!"
 ```
