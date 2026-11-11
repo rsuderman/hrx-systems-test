@@ -117,6 +117,7 @@ def copy_evidence(prepared, output, suite, result):
 class Api:
     def __init__(self, address, process, http_timeout=5):
         self.address, self.process, self.http_timeout = address, process, http_timeout
+        self.deadline = None
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def request(self, route, payload=None, timeout=None, accepted=(200,)):
@@ -125,8 +126,14 @@ class Api:
         data = None if payload is None else json.dumps(payload).encode()
         request = urllib.request.Request(self.address + route, data=data,
             headers={'Content-Type': 'application/json'} if data is not None else {})
+        timeout = timeout or self.http_timeout
+        if self.deadline is not None:
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('model cleanup deadline exceeded')
+            timeout = min(timeout, remaining)
         try:
-            response = self.opener.open(request, timeout=timeout or self.http_timeout)
+            response = self.opener.open(request, timeout=timeout)
         except urllib.error.HTTPError as error:
             detail = error.read(8192).decode('utf-8', errors='replace')
             raise HttpFailure(error.code, detail) from error
@@ -220,6 +227,59 @@ def unregister(api, name, cycle, timeout, abort_timeout):
     return phase('passed', None, started, forced=forced)
 
 
+def idle_pool_snapshot(api):
+    status = api.request('/v1/status')
+    if status['data'] != []:
+        raise RuntimeError('idle pool reclamation requires zero registrations')
+    pools = status['server']['resources']['pools']
+    if not isinstance(pools, list) or not pools:
+        raise ValueError('server does not publish owned serving pools')
+    keys = [pool['key'] for pool in pools]
+    if any(not isinstance(key, str) or not key for key in keys) or len(set(keys)) != len(keys):
+        raise ValueError('server pool keys must be nonempty and unique')
+    quiet = True
+    for pool in pools:
+        memory = pool['memory']
+        retained = memory['retained']
+        if memory['backing'] not in ('fixed', 'elastic') or (retained is None) != (memory['backing'] == 'fixed'):
+            raise ValueError('unsupported pool backing accounting')
+        pending = [memory['workspace']['quarantined_bytes']]
+        if retained is not None:
+            pending += [retained['pending_bytes'], retained['releasing_bytes']]
+        if any(type(value) is not int or value < 0 for value in pending):
+            raise ValueError('pool retirement counters must be nonnegative integers')
+        quiet &= not any(pending)
+    return {'registration_count': 0, 'pools': pools}, quiet
+
+
+def reclaim_idle_pools(api, output_path):
+    evidence = {'before': None, 'trims': [], 'after': None}
+    try:
+        evidence['before'], _ = idle_pool_snapshot(api)
+        keys = {pool['key'] for pool in evidence['before']['pools']}
+        for key in sorted(keys):
+            response = api.request('/v1/pools/trim', {'pool': key, 'target_bytes': 0})
+            evidence['trims'].append(response)
+            if type(response['target_bytes']) is not int or response['target_bytes'] != 0 or response['pool']['key'] != key:
+                raise ValueError('unsupported pool reclamation response')
+
+        def quiescent():
+            evidence['after'], quiet = idle_pool_snapshot(api)
+            if {pool['key'] for pool in evidence['after']['pools']} != keys:
+                raise RuntimeError('owned serving pools changed during reclamation')
+            return quiet
+
+        poll(quiescent, max(0, api.deadline - time.monotonic()), api.process)
+    except Exception as error:
+        evidence['error'] = f'{type(error).__name__}: {error}'
+        raise
+    finally:
+        if len(json.dumps(evidence, indent=2).encode()) + 1 > MAX_EVIDENCE_BYTES // 2:
+            write_json(output_path, {'error': 'pool reclamation evidence exceeded its size limit'})
+            raise ValueError('pool reclamation evidence exceeded its size limit')
+        write_json(output_path, evidence)
+
+
 def run_cycle(api, entry, model, output, cycle_number, limits):
     name = entry['selection']['model_id']
     prefix = f"models/{entry['id']}/cycle-{cycle_number}"
@@ -265,10 +325,19 @@ def run_cycle(api, entry, model, output, cycle_number, limits):
     finally:
         if accepted:
             started = time.monotonic()
+            previous_deadline = api.deadline
+            api.deadline = started + limits.unload_timeout + limits.abort_timeout
+            reclamation_path = prefix + '/pool-reclamation.json'
             try:
                 cycle['unload'] = unregister(api, name, cycle, limits.unload_timeout, limits.abort_timeout)
+                reclaim_idle_pools(api, output / reclamation_path)
+                cycle['unload'].update(elapsed_seconds=time.monotonic() - started, evidence=[reclamation_path])
             except Exception as error:
                 cycle['unload'] = phase('failed', f'{type(error).__name__}: {error}', started)
+                if (output / reclamation_path).is_file():
+                    cycle['unload']['evidence'] = [reclamation_path]
+            finally:
+                api.deadline = previous_deadline
     passed = all(cycle[key]['status'] == 'passed' for key in PHASES)
     model['status'] = 'passed' if passed and model['status'] != 'failed' else 'failed'
     model['reason'] = None if model['status'] == 'passed' else next(
@@ -442,8 +511,10 @@ def verify_prepared(prepared, suite, inside=False):
         if (entry_identity['baseline_sha256'] != entry['baseline_sha256'] or
                 entry_identity['dependency_lock_sha256'] != entry['dependency_lock_sha256']):
             raise ValueError('frozen model baseline/dependency identity changed')
-        if (runtime_identity(manifest['sdk_identity']) != runtime_identity(identity) or
-                manifest['sdk_identity'] != entry_identity or manifest['selection'] != entry['selection']):
+        # Model configs differ; their manifests record the shared SDK bootstrap.
+        if (manifest['sdk_identity'] != identity or
+                runtime_identity(entry_identity) != runtime_identity(identity) or
+                manifest['selection'] != entry['selection']):
             raise ValueError('prepared model identity changed')
         if manifest['model_card_path'] != f"/inputs/{entry['id']}/model/model.json":
             raise ValueError('prepared model path does not match serving mount')

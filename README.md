@@ -7,13 +7,21 @@ workflow use the same stages, with one server hot-loading/unloading models.
 
 ## Run locally
 
+The default sample contains eight model IDs across seven architecture labels,
+from Qwen2.5 0.5B through GPT-OSS 20B. Its pinned selected assets total about
+18.30 GB; see [the model sample and rationale](docs/model-sample.md). The
+[suite seeder](docs/seed-cached-models.md) caches all registered entries through
+the existing native acquisition system; `seed-models.sh` remains available for
+one model. Use `--reader-user ACCOUNT` when published seed indices need read-only
+access from a separate runner account.
+
 Docker access, the selected GPU and a seeded compatible model are required.
 `HRX_SYSTEMS_ROOT` selects the external model-cache root (default
 `$HOME/.local/share/hrx-systems-test`). Keep generated output in a writable location,
 which may differ from a cache owned by another account.
 
 ```sh
-bash scripts/seed-models.sh
+bash scripts/seed-cached-models.sh
 
 attempt="$HOME/.local/share/hrx-systems-test/runs/manual-$(date -u +%Y%m%dT%H%M%S)-$$"
 bash scripts/prepare-cached-models.sh --output "$attempt/prepared"

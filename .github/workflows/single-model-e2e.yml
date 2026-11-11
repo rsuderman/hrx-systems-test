@@ -18,7 +18,7 @@ concurrency:
 jobs:
   verify:
     runs-on: [self-hosted, linux, hrx-systems-test-bootstrap]
-    # Covers the current one-model suite and artifact/cleanup time. Review as the suite grows.
+    # Includes the eight-model smoke suite plus preparation, reporting and cleanup.
     timeout-minutes: 60
     env:
       CONFIGURED_CACHE_ROOT: ${{ vars.HRX_SYSTEMS_ROOT }}
@@ -135,6 +135,7 @@ jobs:
             ${{ env.E2E_OUTPUT }}/results/models/*/sdk-offline/sdk.json
             ${{ env.E2E_OUTPUT }}/results/models/*/cycle-*/request.json
             ${{ env.E2E_OUTPUT }}/results/models/*/cycle-*/response.json
+            ${{ env.E2E_OUTPUT }}/results/models/*/cycle-*/pool-reclamation.json
           if-no-files-found: error
           retention-days: 7
       - name: Publish readable summary and report download

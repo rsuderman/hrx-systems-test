@@ -20,19 +20,38 @@ SPEC.loader.exec_module(RUN)
 
 SERVER = r'''
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
-import json,sys
+import json,sys,time
 mode=sys.argv[2]
 rows={}
 counter=0
+pending_reads=0
+pool_dirty=False
+pool_key='owned-fixture-pool'
+def pool_record():
+ retained={'pending_bytes':1 if pending_reads else 0,'releasing_bytes':128 if pending_reads else 0,
+  'reserved_bytes':4096,'committed_bytes':8192,'released_bytes':99999}
+ if mode=='quarantined':retained.update(pending_bytes=0,releasing_bytes=0)
+ return {'key':pool_key,'devices':[0],'memory':{'backing':'elastic','retained':retained,
+  'storage':{'reserved_bytes':0,'committed_bytes':256},
+  'workspace':{'quarantined_bytes':32 if pending_reads else 0,'committed_bytes':1024,'reserve_count':25}}}
+def pool_records():
+ pools=[pool_record()]
+ if mode=='multiple_pools':
+  other=pool_record();other['key']='second-owned-pool';pools.append(other)
+ return pools
 class Handler(BaseHTTPRequestHandler):
  def log_message(self,*args): pass
  def reply(self,status,data):
   encoded=json.dumps(data).encode();self.send_response(status)
   self.send_header('Content-Length',str(len(encoded)));self.end_headers();self.wfile.write(encoded)
  def do_GET(self):
+  global pending_reads,pool_dirty
   if self.path=='/readyz':
    if mode=='final_unhealthy' and counter==2:return self.reply(503,{'status':'failed'})
    return self.reply(200,{'status':'ready'})
+  if self.path=='/v1/status' and pending_reads:
+   if mode not in ('trim_pending','quarantined'):pending_reads-=1
+   if not pending_reads:pool_dirty=False
   for name in list(rows):
    row=rows[name];row['ticks']+=1
    if row.get('removing') and mode not in ('stuck','release_failed') and row['ticks']>=2:
@@ -45,20 +64,38 @@ class Handler(BaseHTTPRequestHandler):
    loom={'incarnation':row['incarnation'],'registration':state,'status':{'admission':'open'}}
    if state=='failed':loom['error']='fixture preparation failure'
    data.append({'id':name,'loom':loom})
-  if self.path=='/v1/status':return self.reply(200,{'data':data})
+  if mode=='foreign_registration' and counter and not rows:
+   data.append({'id':'foreign','loom':{'incarnation':99,'registration':'ready','status':{'admission':'open'}}})
+  if self.path=='/v1/status':
+   if mode=='missing_resources':return self.reply(200,{'data':data})
+   return self.reply(200,{'data':data,'server':{'resources':{'pools':pool_records()}}})
   if self.path=='/v1/models':return self.reply(200,{'data':[x for x in data if x['loom']['registration']=='ready']})
   self.reply(404,{})
  def do_POST(self):
-  global counter
+  global counter,pending_reads,pool_dirty
   payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
   if self.path.endswith('/register'):
+   if pool_dirty:return self.reply(409,{'error':'pool still needs reclamation'})
    counter+=1;rows[payload['name']]={'incarnation':counter,'ticks':0}
+   print('REGISTER '+payload['name'],flush=True)
    if mode=='lost' and payload['name']=='first':
     self.close_connection=True;return
    return self.reply(202,{})
   if self.path.endswith('/unregister'):
    if payload['model'] in rows:rows[payload['model']].update(removing=True,ticks=0)
+   pool_dirty=True
    return self.reply(202,{})
+  if self.path=='/v1/pools/trim':
+   if rows:return self.reply(409,{'error':'registrations remain'})
+   if payload.get('pool') not in {p['key'] for p in pool_records()} or payload.get('target_bytes')!=0:
+    return self.reply(400,{'error':'wrong pool selector'})
+   print('TRIM '+payload['pool'],flush=True)
+   if mode=='trim_failure':return self.reply(500,{'error':'fixture trim failed'})
+   if mode=='slow_trim':time.sleep(1)
+   pending_reads=3
+   reply_pool=pool_record();reply_pool['key']=payload['pool']
+   if mode=='bad_trim_response':reply_pool['key']='unexpected-pool'
+   return self.reply(200,{'target_bytes':0,'pool':reply_pool})
   if self.path=='/v1/chat/completions':
    if mode=='malformed':return self.reply(200,{})
    answer='wrong' if mode=='wrong' and payload['model']=='first' else '4'
@@ -66,6 +103,151 @@ class Handler(BaseHTTPRequestHandler):
   self.reply(404,{})
 ThreadingHTTPServer(('127.0.0.1',int(sys.argv[1])),Handler).serve_forever()
 '''
+
+
+class PreparedHandoffTests(unittest.TestCase):
+    """Exercise real SDK identity parsing with distinct model config snapshots."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.sdk = RUN.sdk_helper()
+        self.payloads = self.root / 'sdk-payloads'
+        wheel = self.payloads / 'hrx/fixture-sdk.whl'
+        wheel.parent.mkdir(parents=True)
+        wheel.write_bytes(b'tiny verified SDK payload')
+        self.suite = {'schema_version': 1, 'entries': [], 'cache_roots': {}}
+        for name in ('huggingface', 'loom-assets'):
+            cache = self.root / 'cache' / name
+            cache.mkdir(parents=True)
+            self.suite['cache_roots'][name] = {
+                'host_path': str(cache), 'container_path': '/model-cache/' + name}
+        sdk_config = {'name': 'hrx-loom', 'version': 'fixture', 'repository': 'fixture/sdk',
+            'release': 'fixture', 'source_commit': 'b' * 40, 'asset_id': 1,
+            'dependency_lock': 'dependencies.json', 'wheel': {
+                'filename': wheel.name, 'url': 'https://example.invalid/fixture-sdk.whl',
+                'sha256': RUN.digest(wheel), 'size_bytes': wheel.stat().st_size}}
+        for name in ('first', 'second'):
+            selection = {'model_id': 'fixture/' + name, 'repository': 'fixture/' + name,
+                'publication_revision': 'c' * 40, 'preset': 'chat', 'variant': 'gguf', 'programs': 'source'}
+            baseline = {'schema_version': 1, **selection,
+                'container': {'image': 'example.invalid/python@sha256:' + 'a' * 64},
+                'sdk': copy.deepcopy(sdk_config),
+                'smoke_request': {'messages': [{'role': 'user', 'content': 'two plus two'}]},
+                'smoke_expected_text': '4', 'published_execution': {'rows': 1}}
+            config_dir = self.root / 'config' / name
+            RUN.write_json(config_dir / 'baseline.json', baseline)
+            RUN.write_json(config_dir / 'dependencies.json', {'schema_version': 1, 'wheels': []})
+            _, _, _, entry_identity = self.sdk.load_baseline(config_dir / 'baseline.json')
+            if name == 'first':
+                common = self.root / 'config/runtime'
+                RUN.write_json(common / 'baseline.json', baseline)
+                RUN.write_json(common / 'dependencies.json', {'schema_version': 1, 'wheels': []})
+                _, _, _, common_identity = self.sdk.load_baseline(common / 'baseline.json')
+                self.suite['runtime'] = {'image': baseline['container']['image'],
+                    'sdk_baseline': 'config/runtime/baseline.json', 'sdk_payloads': 'sdk-payloads',
+                    'sdk_identity': common_identity}
+            model_root = self.root / 'models' / name / 'model'
+            model_root.mkdir(parents=True)
+            RUN.write_json(model_root / 'model.json', {'fixture': name})
+            (model_root / 'control.loom').write_text('fixture program for ' + name)
+            asset = self.root / 'cache/huggingface' / (name + '.gguf')
+            asset.write_bytes(('fixture weight bytes for ' + name).encode())
+            manifest = {'sdk_identity': copy.deepcopy(self.suite['runtime']['sdk_identity']),
+                'selection': selection, 'model_card_path': '/inputs/' + name + '/model/model.json',
+                'installed_card_sha256': RUN.digest(model_root / 'model.json'),
+                'smoke_request': baseline['smoke_request'], 'smoke_expected_text': '4',
+                'effective_execution': baseline['published_execution'],
+                'programs': [{'path': 'control.loom', 'sha256': RUN.digest(model_root / 'control.loom')}],
+                'assets': [{'cache_root': 'huggingface', 'cache_path': asset.name,
+                    'installation_path': 'model.gguf', 'size': asset.stat().st_size, 'sha256': RUN.digest(asset)}]}
+            manifest_path = self.root / 'models' / name / 'prepared-inputs.json'
+            RUN.write_json(manifest_path, manifest)
+            self.suite['entries'].append({'id': name, 'preparation': {'status': 'ready'},
+                'inputs_manifest': str(manifest_path.relative_to(self.root)),
+                'inputs_manifest_sha256': RUN.digest(manifest_path),
+                'baseline': str((config_dir / 'baseline.json').relative_to(self.root)),
+                'baseline_sha256': entry_identity['baseline_sha256'],
+                'dependency_lock_sha256': entry_identity['dependency_lock_sha256'],
+                'selection': selection, 'smoke_request': baseline['smoke_request'], 'smoke_expected_text': '4'})
+
+    def verify(self):
+        return RUN.verify_prepared(self.root, self.suite)
+
+    def rewrite_manifest(self, entry, change):
+        path = self.root / entry['inputs_manifest']
+        manifest = RUN.read_json(path)
+        change(manifest)
+        RUN.write_json(path, manifest)
+        entry['inputs_manifest_sha256'] = RUN.digest(path)
+
+    def test_distinct_model_configs_share_one_exact_runtime_receipt(self):
+        first, second = self.suite['entries']
+        common_identity = self.suite['runtime']['sdk_identity']
+        self.assertNotEqual(first['baseline_sha256'], second['baseline_sha256'])
+        self.assertEqual(first['baseline_sha256'], common_identity['baseline_sha256'])
+        self.assertNotEqual(second['baseline_sha256'], common_identity['baseline_sha256'])
+        self.assertEqual(self.verify(), (self.root / 'config/runtime/baseline.json', self.payloads))
+
+    def test_per_model_baseline_hash_cannot_replace_common_sdk_receipt(self):
+        second = self.suite['entries'][1]
+        self.rewrite_manifest(second, lambda manifest: manifest['sdk_identity'].update(
+            baseline_sha256=second['baseline_sha256']))
+        with self.assertRaisesRegex(ValueError, 'prepared model identity changed'):
+            self.verify()
+
+    def test_distinct_entry_runtime_is_rejected_even_with_valid_model_config_hash(self):
+        second = self.suite['entries'][1]
+        path = self.root / second['baseline']
+        baseline = RUN.read_json(path)
+        baseline['sdk']['source_commit'] = 'd' * 40
+        RUN.write_json(path, baseline)
+        second['baseline_sha256'] = RUN.digest(path)
+        with self.assertRaisesRegex(ValueError, 'prepared model identity changed'):
+            self.verify()
+
+    def test_changed_frozen_model_config_is_rejected(self):
+        path = self.root / self.suite['entries'][1]['baseline']
+        baseline = RUN.read_json(path)
+        baseline['published_execution']['rows'] = 2
+        RUN.write_json(path, baseline)
+        with self.assertRaisesRegex(ValueError, 'frozen model baseline/dependency identity changed'):
+            self.verify()
+
+    def test_changed_model_card_and_program_bytes_are_rejected(self):
+        card = self.root / 'models/second/model/model.json'
+        original = card.read_bytes()
+        card.write_bytes(b'changed card')
+        with self.assertRaisesRegex(ValueError, 'prepared installed card changed'):
+            self.verify()
+        card.write_bytes(original)
+        (self.root / 'models/second/model/control.loom').write_text('changed program')
+        with self.assertRaisesRegex(ValueError, 'prepared program bytes changed'):
+            self.verify()
+
+    def test_changed_cache_bytes_and_manifest_digests_are_rejected(self):
+        asset = self.root / 'cache/huggingface/second.gguf'
+        original = asset.read_bytes()
+        asset.write_bytes(b'changed weights')
+        with self.assertRaisesRegex(ValueError, 'cached asset changed'):
+            self.verify()
+        asset.write_bytes(original)
+        manifest = self.root / self.suite['entries'][1]['inputs_manifest']
+        manifest.write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'prepared input manifest digest changed'):
+            self.verify()
+
+    def test_changed_selection_and_request_remain_rejected(self):
+        second = self.suite['entries'][1]
+        selection = copy.deepcopy(second['selection'])
+        second['selection'] = {**selection, 'model_id': 'fixture/changed'}
+        with self.assertRaisesRegex(ValueError, 'prepared model identity changed'):
+            self.verify()
+        second['selection'] = selection
+        second['smoke_expected_text'] = 'wrong'
+        with self.assertRaisesRegex(ValueError, 'prepared request/assertion changed'):
+            self.verify()
 
 
 class LifecycleTests(unittest.TestCase):
@@ -112,7 +294,90 @@ class LifecycleTests(unittest.TestCase):
             for cycle in model['cycles']:
                 self.assertTrue(all(cycle[key]['status'] == 'passed' for key in RUN.PHASES))
                 self.assertEqual(json.loads((output / cycle['response_path']).read_text())['choices'][0]['message']['content'], '4')
+                reclamation = RUN.read_json(output / cycle['unload']['evidence'][0])
+                self.assertEqual(reclamation['trims'][0]['pool']['key'], 'owned-fixture-pool')
+                self.assertGreater(reclamation['trims'][0]['pool']['memory']['retained']['pending_bytes'], 0)
+                memory = reclamation['after']['pools'][0]['memory']
+                self.assertEqual(memory['retained']['pending_bytes'], 0)
+                self.assertEqual(memory['retained']['releasing_bytes'], 0)
+                self.assertEqual(memory['workspace']['quarantined_bytes'], 0)
+                self.assertGreater(memory['retained']['reserved_bytes'], 0)
+                self.assertGreater(memory['retained']['committed_bytes'], 0)
+                self.assertGreater(memory['workspace']['committed_bytes'], 0)
         self.assertEqual(result['server']['shutdown']['status'], 'passed')
+
+    def test_every_published_owned_pool_is_trimmed_before_next_registration(self):
+        code, result, output = self.run_fixture('multiple_pools')
+        self.assertEqual(code, 0)
+        for model in result['models']:
+            evidence = RUN.read_json(output / model['cycles'][0]['unload']['evidence'][0])
+            self.assertEqual({item['pool']['key'] for item in evidence['trims']},
+                             {'owned-fixture-pool', 'second-owned-pool'})
+        self.assertEqual((output / 'server.log').read_text().splitlines(), [
+            'REGISTER first', 'TRIM owned-fixture-pool', 'TRIM second-owned-pool',
+            'REGISTER second', 'TRIM owned-fixture-pool', 'TRIM second-owned-pool'])
+
+    def test_pool_trim_failure_stops_before_next_registration_and_keeps_evidence(self):
+        code, result, output = self.run_fixture('trim_failure')
+        self.assertEqual(code, 1)
+        unload = result['models'][0]['cycles'][0]['unload']
+        self.assertEqual(unload['status'], 'failed')
+        evidence = RUN.read_json(output / unload['evidence'][0])
+        self.assertIn('HTTP 500', evidence['error'])
+        self.assertEqual(result['models'][1]['status'], 'not_run')
+        self.assertNotIn('REGISTER second', (output / 'server.log').read_text())
+
+    def test_missing_pool_accounting_is_failed_cleanup(self):
+        code, result, output = self.run_fixture('missing_resources')
+        self.assertEqual(code, 1)
+        unload = result['models'][0]['cycles'][0]['unload']
+        self.assertEqual(unload['status'], 'failed')
+        self.assertIn('error', RUN.read_json(output / unload['evidence'][0]))
+        self.assertEqual(result['models'][1]['status'], 'not_run')
+
+    def test_pending_pool_release_uses_remaining_unload_budget_and_stops_loop(self):
+        code, result, output = self.run_fixture('trim_pending')
+        self.assertEqual(code, 1)
+        unload = result['models'][0]['cycles'][0]['unload']
+        self.assertEqual(unload['status'], 'failed')
+        self.assertLess(unload['elapsed_seconds'], self.limits.unload_timeout + self.limits.abort_timeout + 0.25)
+        evidence = RUN.read_json(output / unload['evidence'][0])
+        self.assertGreater(evidence['after']['pools'][0]['memory']['retained']['releasing_bytes'], 0)
+        self.assertEqual(result['models'][1]['status'], 'not_run')
+
+    def test_workspace_quarantine_blocks_next_model_even_with_retained_quiescent(self):
+        code, result, output = self.run_fixture('quarantined')
+        self.assertEqual(code, 1)
+        unload = result['models'][0]['cycles'][0]['unload']
+        memory = RUN.read_json(output / unload['evidence'][0])['after']['pools'][0]['memory']
+        self.assertEqual(memory['retained']['pending_bytes'], 0)
+        self.assertEqual(memory['retained']['releasing_bytes'], 0)
+        self.assertGreater(memory['workspace']['quarantined_bytes'], 0)
+        self.assertEqual(result['models'][1]['status'], 'not_run')
+
+    def test_unsupported_trim_response_cannot_be_cleanup_success(self):
+        code, result, output = self.run_fixture('bad_trim_response')
+        self.assertEqual(code, 1)
+        unload = result['models'][0]['cycles'][0]['unload']
+        self.assertIn('unsupported pool reclamation response', unload['reason'])
+        self.assertEqual(result['models'][1]['status'], 'not_run')
+
+    def test_slow_trim_http_request_cannot_exceed_cleanup_budget(self):
+        self.limits.unload_timeout = self.limits.abort_timeout = 0.1
+        code, result, _ = self.run_fixture('slow_trim')
+        self.assertEqual(code, 1)
+        unload = result['models'][0]['cycles'][0]['unload']
+        self.assertEqual(unload['status'], 'failed')
+        self.assertLess(unload['elapsed_seconds'], 0.45)
+        self.assertEqual(result['models'][1]['status'], 'not_run')
+
+    def test_pool_reclamation_refuses_nonempty_registration_inventory(self):
+        code, result, output = self.run_fixture('foreign_registration')
+        self.assertEqual(code, 1)
+        unload = result['models'][0]['cycles'][0]['unload']
+        self.assertIn('requires zero registrations', unload['reason'])
+        self.assertNotIn('TRIM', (output / 'server.log').read_text())
+        self.assertEqual(result['models'][1]['status'], 'not_run')
 
     def test_wrong_answer_fails_but_unloads_and_continues(self):
         code, result, _ = self.run_fixture('wrong')

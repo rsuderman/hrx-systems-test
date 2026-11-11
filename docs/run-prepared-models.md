@@ -25,7 +25,24 @@ failures. Each ready entry receives one load/query/unload cycle. `--cycles 2`
 repeats that same lifecycle in one server for validation; repetitions do not add
 distinct model coverage. Assertions use the exact prepared baseline request and
 expected text. A failed model may be followed by another only after confirmed
-removal and a healthy server. Uncertain cleanup stops the suite.
+removal, explicit idle-pool reclamation and a healthy server. Uncertain cleanup
+stops the suite.
+
+After each confirmed unregistration, the harness requires an empty registration
+inventory, discovers the server's published serving-pool keys and requests
+`/v1/pools/trim` with `target_bytes: 0` for each. It waits for retained pending/
+releasing bytes and quarantined workspace bytes to become quiescent before the
+next model case. This isolates model cases using the supported serving-pool
+controls while keeping the same server and compiled-code caches. It does not
+reset devices or claim to fix an underlying HRX issue. Committed/reserved bytes
+and cumulative counters need not reach zero.
+
+Unregistration and reclamation share the existing unload-plus-abort deadline;
+there is no additional unbounded wait. Missing/unsupported pool accounting,
+trim errors or timeout fail the unload/cleanup phase and prevent the next model
+from registering. Bounded before/trim/after accounting is linked from each cycle's
+`unload.evidence` as `pool-reclamation.json`, including failed reclamation when
+evidence could be captured.
 
 The output directory must be new. It contains raw `suite-result.json`, bounded
 shared server/container logs, offline SDK identity and per-model preparation,

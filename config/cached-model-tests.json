@@ -5,6 +5,41 @@
       "id": "qwen35-08b",
       "baseline": "config/single-model-e2e.json",
       "seed_manifest": "seed-manifest.json"
+    },
+    {
+      "id": "qwen25-05b",
+      "baseline": "config/qwen25-05b.json",
+      "seed_manifest": "models/qwen25-05b/seed-manifest.json"
+    },
+    {
+      "id": "qwen3-06b",
+      "baseline": "config/qwen3-06b.json",
+      "seed_manifest": "models/qwen3-06b/seed-manifest.json"
+    },
+    {
+      "id": "gemma3-1b",
+      "baseline": "config/gemma3-1b.json",
+      "seed_manifest": "models/gemma3-1b/seed-manifest.json"
+    },
+    {
+      "id": "llama32-3b",
+      "baseline": "config/llama32-3b.json",
+      "seed_manifest": "models/llama32-3b/seed-manifest.json"
+    },
+    {
+      "id": "lfm3-17b",
+      "baseline": "config/lfm3-17b.json",
+      "seed_manifest": "models/lfm3-17b/seed-manifest.json"
+    },
+    {
+      "id": "hyperclovax-15b",
+      "baseline": "config/hyperclovax-15b.json",
+      "seed_manifest": "models/hyperclovax-15b/seed-manifest.json"
+    },
+    {
+      "id": "gpt-oss-20b",
+      "baseline": "config/gpt-oss-20b.json",
+      "seed_manifest": "models/gpt-oss-20b/seed-manifest.json"
     }
   ]
 }
