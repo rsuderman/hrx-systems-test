@@ -1,90 +1,68 @@
-# CI inputs — hst-utq.3
+# hst-utq.3 — prepare cached-model test inputs
 
-Prepare the selected baseline for `hst-40e` without writing model caches. This
-implements the input stage of [the basic E2E contract](basic-e2e.md), not serving
-or automatic hardware qualification. The known host/model pair is an input.
+## Outcome and ownership
 
-## Boundary and inputs
+Provide `scripts/prepare-cached-models.sh` and its Python implementation. Starting
+from the repo-authored suite and manually seeded assets, produce an independently
+consumable prepared suite. Downloading/verifying inputs happens here; never start
+a GPU server or generate presentation reports. Depends on completed `.1/.2`.
 
-Task .4's public `scripts/run-single-model.sh` invokes a private .3 preparation
-helper with the single `config/single-model-e2e.json` baseline, seed index, SDK
-context and new attempt directory. Helper spelling/flags are stage-owned, not
-an additional public command or a new `loom-fetch` flag. Dependencies are
-`hst-utq.1` and `hst-utq.2`. The seed index defaults to
-`$HRX_SYSTEMS_ROOT/cache/seed-manifest.json`; the public wrapper may accept an
-explicit `--seed-manifest` for isolated validation. CI receives that index read-only.
+```sh
+bash scripts/prepare-cached-models.sh --output "$attempt/prepared"
+```
 
-- The SDK producer supplies `sdk.json`: pinned base-image/release/wheel/dependency
-  identities and verified explicit `/run/venv` tool paths for the current
-  bootstrapped container. Each container recreates its own venv from that attempt's downloaded pinned
-  payloads; a venv is not relocated or shared between containers. Preserve each
-  container's `sdk.json` under its stage-specific artifact directory and compare
-  immutable image/release/dependency identities, not the physical venv instance.
-- The manual seed producer supplies `seed-manifest.json`: selection identity and
-  reusable `files[]` with `installation_path`, native `roles`, immutable source
-  revision/origin, size/SHA256, `cache_root` (`huggingface` or `loom-assets`),
-  relative `cache_path` and verification state. This wrapper manifest is not an
-  assumed SDK receipt format. Programs/auxiliary files are fresh code inputs;
-  code role wins when roles overlap.
-- The single baseline config supplies the exact repository/publication/preset/variant/program set,
-  model ID, effective execution settings and bounded request/assertion. Workflow
-  owns the selected device URI, container lifecycle and mount permissions.
+## Inputs
 
-## Preparation
+Default to `config/cached-model-tests.json` (authored by this task), with one entry
+for the existing baseline. Each unique entry supplies `id`, repository-relative
+`baseline` and cache-root-relative `seed_manifest`. Baselines retain publication,
+preset/variant/programs, SDK/image pins and bounded request/assertion. Additional
+seeded selections reference their own configs/indices; do not duplicate asset
+lists or scan arbitrary HF blobs. Freeze all expected entries before acquisition.
 
-1. In online acquisition staging, parse the pinned card/lock and select its file
-   closure using the installed SDK. Download card, lock and selected
-   program/auxiliary bytes afresh from pinned sources into this attempt, bypassing
-   persistent program payload caches. Record source identities and content hashes.
-   Do not download tokenizer/parameters/companions through this fresh-code path.
-2. In a separate **network-disabled** container with model caches read-only,
-   match every selected asset against the seed manifest and lock, verify its
-   actual bytes, and assemble the selected model tree. Resolve references through
-   native selection/relocation semantics; use links into consistently mounted
-   cache roots rather than copying weights into a new store. Missing assets,
-   digest disagreement or escaping/dangling links fail; no repair/download path.
-3. Verify that the selected local card and every required file can be consumed
-   through the final mount layout. Publish the handoff manifest only after all
-   checks succeed. Retain stage failure details for the caller's report.
+Use `HRX_SYSTEMS_ROOT` with its existing HOME fallback and explicit `--suite`,
+`--root` and `--output` overrides. Seed files and model caches are read-only.
+Entries share one selected runtime/image/device contract; report conflicting
+runtime pins instead of choosing silently. See [stage contracts](pipeline-stages.md).
 
-Use one container-visible layout throughout: cache roots at
-`/model-cache/huggingface` and `/model-cache/loom-assets`, selected model tree at
-`/inputs/model` and manifest at `/inputs/prepared-inputs.json`. The serving
-consumer receives these read-only with separate writable state/results. The
-operator does not reseed/evict referenced assets during the baseline run.
+## Flow and outputs
 
-## Handoff to serving
+1. Validate suite/config paths and pins, snapshot inputs and initialize per-entry
+   outcomes. Pull the pinned image and acquire/verify SDK/dependency payloads into
+   per-attempt staging using the existing SDK helper. No host SDK or venv reuse.
+2. In online acquisition containers, fetch each hosted card/lock and selected
+   program/auxiliary inputs from the pinned publication into fresh staging.
+   Resolve native relative sources against their remote document location.
+   Preserve native card/lock/role/relocation semantics; code wins mixed roles.
+3. In a separate network-disabled phase, match every selected asset to the seed
+   manifest and lock, verify its bytes and assemble a model tree referencing
+   read-only native caches. Reject missing/corrupt/escaping paths; no download or
+   writable-cache fallback. Use immutable links/references rather than another
+   persistent weight store. Prove all links resolve at final serving mounts.
+4. Publish a ready `models/<entry-id>/prepared-inputs.json` only after that model's
+   verification succeeds. Publish top-level `prepared-suite.json` containing every
+   expected entry with ready/failed preparation status and reason, tree/evidence
+   references and runtime/cache contract. Include SDK payloads and config/lock
+   snapshots for offline execution. Follow the shared schema in the stage spec.
 
-Proposed `prepared-inputs.json` contains `schema_version`, `selection`, `model_id`,
-`model_card_path` (`/inputs/model/model.json`), card/lock/program hashes, verified
-asset identities/paths, immutable image/release/dependency identity from `sdk.json`,
-`effective_execution`,
-`smoke_request`, `smoke_expected_text`, and `asset_phase_network: "disabled"`.
-A successful manifest means inputs are ready, not that inference passed. The
-serving container bootstraps the same pinned SDK independently and verifies its
-immutable identities match this handoff before loading. Its explicit device URI
-remains a workflow input. Filenames/mounts follow the cross-resolved epic contract.
-Serving owns `serve-result.json`; this helper does not write the workflow-owned
-aggregate `report.json` or represent ready inputs as a completed real test.
+Keep failures per entry and continue preparing other entries where possible.
+Exit nonzero for any preparation failure, while retaining a usable partial suite
+manifest. Invalid top-level input may prevent a usable manifest; retain diagnostic
+failure evidence. Never mark incomplete inputs ready. Clean owned acquisition
+containers/venvs/scratch; retain prepared trees and per-attempt SDK payloads until
+execution finishes. Preparation does not mount GPU devices or require GPU access.
 
-## Acceptance and implementation seam
+## Acceptance and source-backed check
 
-Tiny fixtures demonstrate fresh code acquisition on two attempts; warmed assets
-resolve successfully offline; corrupt/missing assets fail with their identity;
-cache and input writes fail while scratch writes succeed; and all links resolve
-inside the verification/serving mounts. Native selection/schema failures retain
-the selected SDK/pipeline pair. Successful offline/read-only preparation proves
-CI can consume the seeded inputs without asset transfer or writes. It does not
-prove the manual seeder reuses assets: that requires a second actual seeder
-invocation exercising its same resolution/materialization path offline, where
-manual cache metadata may be writable. CI model mounts remain read-only.
-Verified file size is not a claim about measured network bytes.
+Fixtures prove fresh program acquisition across attempts, exact native selected
+asset closure, missing/corrupt/path-escape rejection, partial-suite accounting,
+read-only cache enforcement and final-mount link resolution. Verify attempts can
+stage the same pipeline while reusing asset bytes. A real prepared Qwen bundle
+must be independently consumed by execution without new acquisition. Closing
+this task proves prepared inputs, not successful inference.
 
-Source basis: native `ModelCard.select`/`Selection.files.roles`, lock coverage and
-`plan_fetch` facts in `loom/py/loom/model/{manifest,fetch,lock}.py`;
-`fetch.install()` acquires/publishes and `--materialize=auto` does not force a
-fresh download. Pinned-release API availability is owned by `hst-utq.1`. The
-role-aware fresh-code/read-only-asset adapter and faithful selected-card
-relocation must be proved against that exact release with fixtures; they are
-not existing CLI guarantees. Do not call native acquisition with a writable
-model cache and present it as read-only verification.
+Native `ModelCard.select`, roles, lock coverage, `plan_fetch` and provider/cache
+surfaces were checked on the pinned release. `install` writes acquisition state
+and stock cache flags do not guarantee read-only consumption or fresh code.
+Prove the small adapter against installed-release fixtures; report a precise
+unsupported seam rather than weakening read-only or selection behavior.

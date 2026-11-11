@@ -1,0 +1,12 @@
+{
+  "model": "Qwen/Qwen3.5-0.8B",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is two plus two? Reply with the digit only."
+    }
+  ],
+  "max_tokens": 8,
+  "temperature": 0,
+  "stream": false
+}

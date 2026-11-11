@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "qwen35-08b",
+      "baseline": "config/single-model-e2e.json",
+      "seed_manifest": "seed-manifest.json"
+    }
+  ]
+}

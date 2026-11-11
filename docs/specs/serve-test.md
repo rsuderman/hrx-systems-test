@@ -1,101 +1,115 @@
-# hst-40e: one real serving test
+# hst-40e — one server, sequential model validation
 
-Consume prepared inputs from `hst-utq.3`, run the selected native model, assert
-one answer, and stop everything this attempt started. The operator-selected
-host/model is assumed compatible; automatic hardware/memory qualification is
-not a prerequisite. This is a proposed wrapper contract, not implemented code.
+## Outcome and ownership
 
-## Inputs and boundary
+Start one empty pinned-release `loom-serve`, hot-load/test/unload each prepared
+model sequentially, and stop the server once at suite completion. A one-entry
+suite is the first real validation checkpoint. This supersedes the earlier
+per-model server process design. See [suite contract](cached-model-e2e.md).
 
-The producer supplies `/inputs/prepared-inputs.json` and the read-only model
-tree at `/inputs/model/model.json`. The manifest carries model ID, pinned
-publication/preset/asset identities, effective execution settings and SDK identity.
-The selected request/assertion comes from `config/single-model-e2e.json`. The
-workflow supplies attempt/source identity, explicit device URI and mounts.
-Follow the [cross-resolved epic contract](basic-e2e.md) for shared fields/paths.
+This task owns the execution Bash wrapper and Python host/container orchestration,
+one non-root GPU container, device/group access, cancellation cleanup and raw
+execution results. Task .4 composes this command without duplicating its logic. One private in-container
+client owns the native server process group and the sequential lifecycle. Model
+inputs and caches are read-only; SDK/compilation/state/results are writable
+per-attempt storage. Execution has no external networking, credentials, Docker
+socket or published host port. Install the selected pinned SDK once in this
+container's fresh `/run/venv`; compare its identity with prepared inputs.
 
-Task .4 owns one named non-root test container, assigned GPU device access,
-required numeric supplementary groups and cancellation cleanup. This client
-does not alter host groups or device permissions. Inside it, the client owns its server subprocess group.
-Run the client and server on container loopback with external networking disabled;
-no published host port, host network, Docker socket or model-source credentials.
-Model/pipeline and cache mounts are read-only. This test container recreates
-its own `/run/venv` from pinned read-only SDK/dependency payloads and checks its
-`sdk.json` identity matches prepared inputs; no relocated/shared venv. Install
-completes before the serving lifecycle; scratch/state/logs/results are separate
-writable paths. Preserve this container's `sdk.json` in a stage-specific result
-subdirectory; compare immutable SDK/image/dependency identity, not venv instances.
+## Public execution stage
 
-Private in-container helper boundary (owned here; public host wrapper is .4):
+`bash scripts/run-prepared-models.sh --prepared "$attempt/prepared"
+--output "$attempt/results"` is the public Bash entry point, backed by Python.
+Consume `prepared-suite.json` and staged payloads only; pull no image/pipeline/SDK
+or assets. Require the prepared image locally and install SDK wheels offline.
+Save self-contained raw `suite-result.json`, model evidence and logs after cleanup.
+The separate report stage consumes those files; this stage does not render HTML,
+Markdown or the final `report.json`. See [stage contract](pipeline-stages.md).
+
+## Inputs and server start
+
+Use the frozen suite list and successfully prepared entries from `hst-utq.3`.
+Each `/inputs/<entry-id>/prepared-inputs.json` points to the local selected card
+under `/inputs/<entry-id>/model` and carries source/asset/SDK identities, effective
+workload, request and assertion. All entries share the suite SDK/image and device.
+Record preparation failures rather than omitting them from suite coverage.
+
+Start with no `--model` argument:
 
 ```sh
-/run/venv/bin/python scripts/serve-model-test.py \
-  --inputs /inputs/prepared-inputs.json --output /run/results \
-  --device-uri amdgpu://0
+/run/venv/bin/loom-serve --device=amdgpu://0 --listen=127.0.0.1:18080
 ```
 
-This wrapper name and its flags are new testing-repository interfaces. It invokes
-the pinned native binary, not a host or image-baked tool:
+Wait for server `/readyz`, check empty `/v1/status` registrations and record the
+owned server identity. Server readiness is not model readiness. Refuse an existing
+listener and never attach to an unrelated server.
 
-```sh
-/run/venv/bin/loom-serve --device=amdgpu://0 \
-  --model=/inputs/model/model.json --preset=chat \
-  --listen=127.0.0.1:18080
-```
+## Per-model loop
 
-The fixed port is private to this one owned container. Refuse an existing
-listener/process rather than querying a server left by another attempt. Preserve
-recorded workload settings; changes require an explicit operator baseline update.
+1. Register with `POST /v1/models/register` using a deployment document that
+   references the local selected card. It has `name` equal to the expected served
+   model ID, an absolute server-visible `base_directory` of
+   `/inputs/<entry-id>/model`, and `model: {path: "model.json", preset: ...,
+   programs: ...}` from the baseline, plus required `definition: {kind: "text"}`
+   for the initial text service. The installed HTTP parser requires kind even for
+   a card-reference deployment. Preserve published execution settings and
+   record any explicit baseline overrides. HTTP 202 accepts intent only.
+2. Poll `/v1/status` for that registration/incarnation: require registration
+   `ready`, open admission and no model error, plus the expected prepared entry
+   in `/v1/models`. Fail promptly on terminal preparation/server errors. Once
+   identified, track the incarnation so an unrelated registration cannot satisfy
+   readiness or removal. A single shared server exposes no external admin access.
+3. Send the baseline's nonstreaming `/v1/chat/completions` request with that model
+   ID. Capture the actual request/response and check the configured assertion.
+   The first baseline asks two plus two with max_tokens8/temperature0 and expects
+   stripped content `4`. No automatic assertion weakening or fixture substitution.
+4. In a per-model finally path, `POST /v1/models/unregister` with
+   `{model: <served-name>, mode: "drain"}` whenever registration may have been
+   accepted, including failed/uncertain registration requests. Poll `/v1/status`
+   until that owned registration is absent. Disappearance from `/v1/models` or
+   HTTP 202 alone does not prove removal. On timeout, allow one bounded abort
+   removal attempt and verify absence. Record forced removal. Drain or deactivate
+   alone is insufficient: both can retain the registration/model resources.
 
-## Lifecycle and result
+Continue after a model-local failure only when removal is confirmed and the
+server remains healthy. Unknown removal, `release_failed`, server failure or a
+changed incarnation is a suite failure: stop the loop, mark later entries not
+run and shut down the owned server/container. Do not restart between entries or
+continue accumulating model registrations.
 
-1. Record input identities and a started result before launching the subprocess.
-   Refuse missing prepared inputs without downloading or modifying model assets.
-2. Capture stdout/stderr to bounded owned logs. Fail promptly if the process exits.
-   Poll `GET /v1/models` until its `data` contains the expected model `id`;
-   an open port, `/healthz` or `/readyz` alone does not establish model readiness.
-3. Submit the baseline's nonstreaming `POST /v1/chat/completions` request with the
-   exact model ID. Initial request asks two plus two, uses `max_tokens=8` and
-   `temperature=0`; stripped `choices[0].message.content` must equal `4`.
-   Record the actual request/response. Do not replace a failed model response
-   with a fixture or weaken the assertion automatically.
-4. Always terminate the owned server group, wait, then kill remaining owned
-   descendants if necessary. The outer workflow/container owner handles a client
-   crash or cancellation. Record forced termination when needed; cleanup passes
-   only after all owned processes are confirmed stopped. Cleanup failure prevents
-   a passing result.
+Use bounded HTTP calls and monotonic deadlines: initially180s server startup,
+180s model readiness,60s query,30s graceful removal and10s abort removal, then10s
+server shutdown before owned-process kill. These are wrapper limits. Account
+for all expected entries and acquisition in the outer job timeout; the old fixed
+15-minute budget is sufficient only when it exceeds the recorded suite budget.
 
-Proposed baseline limits are 180 seconds for readiness, 60 seconds for the query
-and 10 seconds for graceful shutdown before forced termination. They are wrapper
-limits, not invented native SDK flags. Use bounded per-request timeouts and a
-monotonic overall deadline. Any operator adjustment is pinned/recorded, not an
-unbounded retry. The workflow budget must exceed these limits plus acquisition.
+## Results, shutdown and acceptance
 
-Cross-resolved stage files are `serve-result.json`, `request.json`, `response.json`
-and bounded `server.log` under the results mount. Task 4 owns the host wrapper
-and aggregate `report.json`; this client never overwrites that aggregate.
-The stage report echoes attempt/source and prepared-input identities, states
-that execution was real, and records readiness/request/assertion/cleanup status,
-actual response evidence, elapsed times, process exit and log references. Distinguish
-an attempted real query from a passing assertion. Overall success/exit 0 requires
-expected-model readiness, valid response/assertion and confirmed cleanup; all other
-outcomes exit nonzero with the failed stage/reason retained. Load/OOM, readiness
-or query timeout, malformed response, wrong answer and cleanup failure cannot pass.
-Task .4 aggregates these stage files under the agreed small-artifact allowlist;
-artifact publication and its failure status remain workflow responsibilities.
+Keep per-model `serve-result.json`, request/response and lifecycle observations
+under that entry's results directory; retain one bounded shared `server.log`
+and suite server-start/shutdown evidence. Record incarnation, failure stage,
+readiness, assertion and confirmed removal. The execution wrapper owns raw aggregate
+`suite-result.json`. Finish cleanup before finalizing its outcome. The separate
+report stage generates final `report.json` and all presentation artifacts.
+Always stop and join the owned server process group after the loop or failure;
+the execution wrapper owns outer container cleanup for client crash/cancellation.
 
-## Acceptance and source basis
+Pass requires a nonempty suite where every expected entry passes input
+preparation, readiness, assertion and model removal, and final server cleanup
+succeeds. Fixture coverage must include asynchronous registration/removal,
+model-local failure followed by a successful next model, uncertain-registration
+cleanup and removal/server failure stopping the loop. Actual proof must show two
+load/query/unload cycles in the same server process (the one available model may
+be registered again after confirmed removal), plus final process/container exit.
+This validates lifecycle reuse before a second distinct model is cached.
 
-Small process/HTTP fixtures prove preparation-aware readiness, deadlines, wrong
-answer/malformed response rejection and shutdown on every path. They do not close
-this task. A real GPU run must then produce prepared-model, actual response and
-owned-shutdown evidence with read-only model inputs. Text success is text smoke
-coverage only. The later validation task repeats this exact baseline through
-GitHub and checks warm asset reuse.
+## Verified source basis
 
-Native flags and HTTP distinctions were checked against HRX release source
-`d01d1c18b154189fd073777329052d23f6071f14`,
-`loom/docs/src/serving/index.md` and `http-profiles.md` (`--model`, `--preset`,
-`--device`, `--listen`, prepared `/v1/models`). The SDK task must still verify the
-actual installed released binary and pinned card pair before calling the baseline
-known compatible. No model payload was downloaded or executed to write this spec.
+Checked local HRX sources at release commit
+`d01d1c18b154189fd073777329052d23f6071f14`:
+`loom/docs/src/serving/workflows/serve-models.md` (empty startup, registration and
+server-visible base_directory), `operate-model-server.md` (asynchronous removal,
+incarnations and release failures), `model-documents.md` (card-reference deployment)
+and `http-profiles.md` (routes). Installed-release HTTP registration of the
+prepared published card remains an explicit implementation validation; SDK
+help/card parsing does not prove serving. No new native load/unload API is needed.

@@ -1,5 +1,10 @@
 # One published model, end to end
 
+This document describes the earlier synthetic/prerequisite skeleton. For the
+current real model path, use the [independent Bash stages](specs/pipeline-stages.md)
+and [local/GitHub command guide](run-cached-models.md). The manual workflow now
+invokes real preparation, shared-server execution and report generation.
+
 Status: **stage skeleton**, with a runnable synthetic fixture and manual GitHub
 hookup. Real acquisition, GPU admission and serving adapters are not implemented.
 This scopes the first model rather than implementing the full nightly catalog.

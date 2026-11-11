@@ -1,8 +1,37 @@
 # hrx-systems-test
 
-Design workspace for nightly validation of published Hugging Face Loom model
-packages, with an initial standalone-runner bootstrap. Model-test implementation
-remains in design; a single-model stage skeleton now supports fixture validation.
+Tools and design for validating published Hugging Face Loom model packages.
+Model assets are manually seeded and reused read-only; hosted pipelines and the
+pinned HRX release are prepared per attempt. Local commands and the manual GitHub
+workflow use the same stages, with one server hot-loading/unloading models.
+
+## Run locally
+
+Docker access, the selected GPU and a seeded compatible model are required.
+`HRX_SYSTEMS_ROOT` selects the external model-cache root (default
+`$HOME/.local/share/hrx-systems-test`). Keep generated output in a writable location,
+which may differ from a cache owned by another account.
+
+```sh
+bash scripts/seed-models.sh
+
+attempt="$HOME/.local/share/hrx-systems-test/runs/manual-$(date -u +%Y%m%dT%H%M%S)-$$"
+bash scripts/prepare-cached-models.sh --output "$attempt/prepared"
+bash scripts/run-prepared-models.sh --prepared "$attempt/prepared" --output "$attempt/results"
+bash scripts/generate-model-report.sh --results "$attempt/results" --output "$attempt/report"
+```
+
+Open `$attempt/report/index.html`. Report generation can run again from saved
+results without Docker, GPU or cache access. For the same stages in one command,
+use `bash scripts/run-cached-models.sh --output "$attempt"`; choose a fresh attempt
+directory rather than reusing one from the separate-stage example.
+
+- [Prepare inputs](docs/prepare-cached-models.md)
+- [Run the prepared suite](docs/run-prepared-models.md)
+- [Generate verification artifacts](docs/generate-model-report.md)
+- [Local/GitHub composition](docs/run-cached-models.md)
+
+## Design and supporting tools
 
 - [Working design](docs/design.md): nightly GitHub Actions execution, model-card
   prefetching and persistent caches, runner eligibility, test lifecycle, result
@@ -17,11 +46,10 @@ remains in design; a single-model stage skeleton now supports fixture validation
   small job to the registered runner and receive execution evidence, before
   testing Docker or GPUs.
 
-- [Single-model E2E skeleton](docs/single-model-e2e.md): one pinned published
-  selection, runnable fixture stage checks, manual GitHub hookup and explicit
-  prerequisites for real execution.
-- [Per-Bead specifications](docs/specs/basic-e2e.md#specification-index):
-  cross-resolved task boundaries, interfaces and acceptance checks.
+- [Legacy synthetic stage skeleton](docs/single-model-e2e.md): fixture-only
+  orchestration checks; the staged commands above perform real execution.
+- [Per-Bead specifications](docs/specs/basic-e2e.md#responsibilities):
+  current task boundaries, data contracts and acceptance checks.
 - [First end-to-end epic](docs/acquisition-spike.md): manual seeding and cache
   reuse, fresh pipeline/HRX inputs, and one real GitHub inference test on an
   operator-selected compatible host.
@@ -55,6 +83,6 @@ a fresh pipeline and installs the exact selected HRX SDK in a new venv inside a
 pinned base container. The first acquisition spike permits an explicit
 download-only probe without claiming GPU suitability or model execution.
 
-Next design topics include memory estimation and qualification, required test
-coverage, runner hardware, and the policy for models that cannot fit. Interfaces,
-schemas and tooling remain proposals until the design is ready for implementation.
+Automatic memory qualification, broader coverage policy, nightly scheduling and
+distributed hardware execution remain later work. The current suite assumes
+operator-selected compatible models/device and reports actual failures explicitly.

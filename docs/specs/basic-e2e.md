@@ -1,151 +1,78 @@
-# Basic end-to-end specification contracts
-
-Planning pass for epic `hst-utq`. Beads owns scope, dependencies and status;
-per-task specifications live alongside this document. Implementation is separate.
+# Cached-model verification — shared specification
 
 ## Agreed outcome
 
-One operator-selected compatible host/model runs a real GitHub test: manual
-asset seed, pinned pipeline and known HRX release, read-only model inputs,
-prepared-model readiness, bounded query/assertion, owned shutdown and artifacts.
-Synthetic or input-only checks do not complete the epic. Automatic hardware
-selection/qualification (`hst-otm`) and nightlies (`hst-qcw`) are later work.
+Validate every registered cached model using three locally runnable Bash stages:
+prepare inputs, execute real model tests through one hot-loading server, then
+generate polished verification artifacts from saved results. GitHub calls the
+same stages. Every expected entry is reported, including failures/not-run.
 
-## Shared constraints for task authors
+The current cache has one Qwen3.5 0.8B selection. SDK bootstrap and real cold/warm
+asset seeding are complete (`hst-utq.1/.2`). Current implementation gates now
+prove local read-only preparation, real shared-server inference and independent
+report generation; dedicated-account/GitHub delivery evidence is tracked separately. Source groundwork is committed locally as
+48bf73b on `single-model-e2e`, not integrated or pushed. Beads is the source of
+truth for current task status, ownership and blockers.
 
-- Use the pinned Qwen3.5 0.8B publication/preset in the existing selection config
-  as the initial baseline; keep the published workload unless an explicit
-  operator-selected override is recorded. Assume a compatible host/model. Do not
-  gate this epic on a future memory qualifier or automatic platform selector.
-- Use one known compatible released `hrx-loom` SDK with verified digest and one
-  digest-pinned OS/Python base. Verify the proposed release/card pair before
-  calling it known compatible. No latest-build tracking, implicit artifact/source
-  fallback, host SDK or image-baked SDK. Install the pinned SDK/dependencies in a
-  fresh venv from per-attempt downloads; no persistent SDK payload cache.
-- Operator-run seeding uses `loom-fetch`/native card-lock semantics and existing
-  HF/Loom asset caches. CI mounts model asset storage read-only, reports misses
-  for manual reseeding and never repairs it. Pipeline card/lock/programs are
-  downloaded into fresh per-attempt staging from their unchanged publication
-  pin. The pipeline/asset split must use real supported interfaces; do not assume
-  `--materialize=auto` or an ephemeral document cache forces program redownloads.
-- Retain existing external-root conventions: `$HRX_SYSTEMS_ROOT/cache/huggingface`,
-  `cache/loom-assets`, and `runs/<attempt>/...`. SDK/dependency payloads live
-  under the attempt, not the persistent model cache.
-  Preserve consistent container-visible shared-file paths and separate writable
-  runtime state/results from immutable inputs. Do not create a new weight store.
-- The parent/root plan owns shared filenames/manifest decisions and dependency
-  graph changes after cross-review. Initially propose the smallest contracts in
-  each task spec; resolve inconsistent assumptions with adjacent owners.
-- Workflow uses the existing dedicated self-hosted runner labels and is manual
-  only. Artifacts contain compact identities/results/logs, never weights/cache
-  payloads. Token/SDK/model-source access is acquisition-scoped. No sudo by agents.
-- Source CLI/data/API claims need local HRX/card evidence or primary references.
-  Clearly mark a proposed wrapper versus an existing SDK API. Passing parsing,
-  a helper script or fixture is not real inference proof.
+## Responsibilities
 
-## Authoring and cross-resolution
+| Bead | Deliverable | Specification |
+|---|---|---|
+| hst-utq.1 | Pinned release acquisition/offline SDK install (complete) | [SDK](sdk-release.md) |
+| hst-utq.2 | Manual model-asset seed/cache reuse (complete) | [Seed](manual-seed.md) |
+| hst-utq.3 | Prepare Bash stage, suite/config references and prepared bundle | [Preparation](ci-inputs.md) |
+| hst-40e | Execution Bash stage, GPU container and shared-server lifecycle | [Execution](serve-test.md) |
+| hst-utq.6 | Independent report Bash stage and artifact rendering | [Report](results-report.md) |
+| hst-utq.4 | Optional combined wrapper and GitHub stage composition/upload | [Integration](github-workflow.md) |
+| hst-utq.5 | Real local/GitHub validation and artifact proof | [Validation](validation.md) |
 
-Each non-epic Bead has one specification owner and one uniquely named spec file.
-Keep current-epic specs about one page each and later-work specs shorter. Include
-inputs/outputs, ownership, proposed command boundary, dependency contracts,
-meaningful acceptance checks and unresolved implementation facts. Avoid creating
-implementation, workflow code or a general scheduler/framework.
+[Stage commands and data contracts](pipeline-stages.md) define the shared
+interfaces; [the direct route](cached-model-e2e.md) explains the implementation
+checkpoints. Each implementation task owns its public Bash wrapper and private
+Python implementation. No separate implementation for CI, frontend build system
+or catalog/service framework.
 
-Authors attach their spec to their own Bead and report ready for cross-review.
-Then adjacent authors check producer/consumer contracts and correct their own
-files. The coordinator resolves shared decisions, checks the whole path still
-reaches actual inference and records consensus. Specs do not close the underlying
-implementation issues. No commits, publication, model downloads or runner changes
-are part of this planning pass.
+## Common constraints
 
-## Cross-resolved interfaces
+- Use known released HRX SDK/image pins and each baseline's fixed pipeline
+  publication. No latest-build fallback, source build or implicit pin changes.
+  Download SDK/dependencies per preparation attempt; no persistent SDK cache.
+  Containers install fresh isolated venvs; do not share or relocate venvs.
+- Pipeline card/lock/programs are fetched fresh during preparation. Model weights,
+  tokenizer and declared companion assets are reused from native HF/Loom caches.
+  Only manual seeding writes those caches. Preparation and execution mount model
+  caches read-only, report misses and never repair or silently reseed.
+- Assume operator-selected compatible models/device for this checkpoint. Record
+  actual hardware and workload; runtime compatibility/load/OOM failures remain
+  failures. Hardware qualification (`hst-otm`) and nightlies (`hst-qcw`) are later.
+- Preparation needs no GPU. Execution downloads nothing, starts one empty server,
+  register/tests/unregisters each ready entry sequentially, then stops once.
+  Confirm asynchronous removal through `/v1/status`; drain/deactivate or HTTP202
+  alone does not prove unload. Continue only after confirmed cleanup/healthy server.
+- Execution owns one named non-root GPU container, numeric device group access,
+  isolated runtime scratch and bounded cleanup. No network/source credentials,
+  published host port or Docker socket inside execution. Agents perform no sudo;
+  operator-owned account/permission changes remain explicit prerequisites.
+- `HRX_SYSTEMS_ROOT` falls back to `$HOME/.local/share/hrx-systems-test`; configure
+  the same root for the dedicated runner and prove read access. Preserve native
+  `cache/huggingface` and `cache/loom-assets`, mounted at `/model-cache/...`.
+  All prepared model trees are mounted together read-only at
+  `/inputs/<entry-id>/model`, with adjacent `prepared-inputs.json`.
+- A passing nonempty suite needs every expected selection's real assertion and
+  completed model removal plus final server/container shutdown. Missing evidence
+  cannot become success. Repeat cycles do not inflate distinct model coverage.
+  Text smoke success establishes only that tested path/preset/variant.
+- Report generation reads only saved raw results, producing HTML/Markdown/JSON
+  and compact linked evidence. It needs no model cache, GPU, Docker or network.
+  Artifacts contain no model/pipeline/SDK payload trees. Preserve failure evidence
+  and stage exits even if later rendering succeeds.
 
-These are proposed testing-repository interfaces to implement, not SDK commands.
-The existing `config/single-model-e2e.json` is the single baseline input: retain
-its selected model/request and extend it with known SDK release, dependency-lock
-and base-image pins. Do not create a competing model-selection config. Device
-URI is an explicit operator/host input, not automatic hardware qualification.
+## Validation and stopping boundary
 
-Two public host wrappers are sufficient:
-
-```sh
-bash scripts/seed-models.sh --baseline config/single-model-e2e.json \
-  --root "$root" --output "$seed_attempt"
-bash scripts/run-single-model.sh --baseline config/single-model-e2e.json \
-  --root "$root" --output "$attempt"
-```
-
-The test repository owns all seed configuration and tooling. The operator can
-run `bash scripts/seed-models.sh` with no arguments: use the checked-in baseline,
-`HRX_SYSTEMS_ROOT` (default `$HOME/.local/share/hrx-systems-test`) and an automatically
-created attempt output directory. The explicit options above are overrides.
-Configure the runner to use that same cache root, especially across accounts.
-Operators do not author model cards, asset lists or container invocations.
-
-Task .2 owns the seed wrapper. Task .4 owns the run wrapper, named outer
-containers, cancellation cleanup and aggregate result; it invokes .1/.3/40e
-helpers rather than duplicating their logic. Default seed index for this single
-baseline is `$root/cache/seed-manifest.json`, atomically published by .2 after
-successful verification. Both wrappers may accept an explicit `--seed-manifest`
-path for isolated validation. CI reads the index and model caches only. Private
-helper spellings are owned by their stage, not additional public APIs.
-
-| Producer | Output consumed by the next stage |
-|---|---|
-| SDK bootstrap (.1) | `sdk.json`: pinned image/release/dependency identity, observed installation/tool paths |
-| Manual seed (.2) | `seed-manifest.json`: selection identity plus reusable `files[]` role/origin/revision/size/digest and designated root-relative cache location; `seed-report.json` records this invocation |
-| CI preparation (.3) | `prepared-inputs.json`: selection/model/card/asset/program identities, effective workload/request/assertion and SDK identity |
-| Serving (40e) | `serve-result.json`, `request.json`, `response.json`, bounded `server.log`; never overwrites aggregate report |
-| Run/workflow (.4) | `plan.json`, aggregate `report.json`, `summary.md`, and `workflow.json` with GitHub/source/runner identity |
-| Validation (.5) | Small closure summary linking seed receipts and two real GitHub runs/artifacts |
-
-Preserve per-container SDK receipts under stage-specific artifact subdirectories;
-compare immutable release/dependency/image identities, not identical physical
-venv instances. Each container installs its own SDK at `/run/venv`; never share
-or relocate an installed venv between containers. SDK payloads are temporary per-attempt downloads,
-separate from persistent read-only model caches.
-
-The common container input layout is `/model-cache/huggingface`,
-`/model-cache/loom-assets`, `/inputs/model/model.json`, and
-`/inputs/prepared-inputs.json`. Serving mounts these read-only, creates its own
-writable `/run/venv` and scratch, and emits stage outputs to `/run/results`.
-The workflow owns device-node access and required numeric supplementary groups
-for the assigned non-root GPU container. The client owns only its native server
-process group. Execution uses container loopback with external network disabled.
-Proposed 180s readiness, 60s query and 10s graceful shutdown budgets fit beneath
-an explicit outer job budget (initially 15 minutes), which must leave cleanup and
-artifact time. Forced stop of owned processes is allowed; confirmed cleanup is
-required for pass. Use shared `hrx-single-model-hardware` workflow concurrency.
-
-### Warm seed proof versus read-only CI verification
-
-A second invocation of the **actual manual seeder** must exercise its real asset
-resolution/materialization path. Stage the pinned pipeline online first, then
-run the warm asset phase in a network-disabled container. A proposed wrapper
-option `--asset-network offline` selects that network policy only; it must not
-substitute a different verification-only algorithm for the seed path. Manual
-seed caches may remain writable for model-acquisition metadata/receipts; CI model caches are
-always read-only. The separate .3 offline/read-only check proves CI consumption,
-not by itself that the seeder avoids repeat downloads.
-
-Do not require nonexistent `loom-fetch --json` byte counters. Report measured
-transfer events only if supported; verified asset sizes are not wire bytes.
-Successful warm seeding with asset-phase networking disabled demonstrates zero
-asset payload transfer. Fresh pipeline acquisition remains online and is recorded
-separately. If this phased offline seed path cannot be implemented with the
-pinned SDK, report the exact seam; do not replace its proof with file mtimes or
-a synthetic fixture.
-
-## Specification index
-
-| Bead | Specification |
-|---|---|
-| hst-utq | This shared contract and [epic scope](../acquisition-spike.md) |
-| hst-utq.1 | [SDK release](sdk-release.md) |
-| hst-utq.2 | [Manual seed](manual-seed.md) |
-| hst-utq.3 | [CI inputs](ci-inputs.md) |
-| hst-40e | [Serving test](serve-test.md) |
-| hst-utq.4 | [GitHub hookup](github-workflow.md) |
-| hst-utq.5 | [Validation](validation.md) |
-| hst-otm | [Later hardware selection](later-hardware.md) |
-| hst-qcw | [Later nightly coverage](later-nightly.md) |
+Prove a real local prepared-model run first, including two load/query/unload cycles
+in the same server process (repeat the sole cached model if necessary). Then
+validate all registered entries through manual GitHub runs, repeat with fresh
+pipeline/SDK staging and unchanged cached assets, and inspect the rendered report.
+Synthetic fixtures, successful acquisition or input verification do not complete
+the epic. Implementation tasks stay open until their own evidence exists.
+This planning update authorizes no implementation, commits, pushes or publication.

@@ -1,0 +1,22 @@
+{
+  "selection": {
+    "model_id": "Qwen/Qwen3.5-0.8B",
+    "preset": "chat",
+    "variant": "gguf",
+    "programs": "source",
+    "repository": "loom-fun/unsloth-Qwen3.5-0.8B-loom",
+    "publication_revision": "f1ba2f23c44400bd0b1f88b406029daf41d7a143"
+  },
+  "effective_execution": {
+    "rows": 4
+  },
+  "smoke_expected_text": "4",
+  "asset_phase_network": "disabled",
+  "assets": [
+    {
+      "path": "model.gguf",
+      "size": 532517120,
+      "sha256": "fixture"
+    }
+  ]
+}

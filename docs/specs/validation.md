@@ -1,89 +1,61 @@
-# hst-utq.5 — Basic end-to-end and cache-reuse proof
+# hst-utq.5 — validate the staged real-model suite and artifacts
 
-Status: specification; proof has not run. Depends on manual seeding (`hst-utq.2`)
-and the actual-model workflow (`hst-utq.4`, including `hst-40e`). The baseline is
-one pinned pipeline/preset, known released SDK and base image on an
-operator-selected compatible host. Automatic hardware qualification is not a gate.
+## Outcome and scope
 
-## Inputs and evidence boundary
+Establish real support evidence for every registered cached selection through
+local preparation/execution/report commands and actual manual GitHub runs.
+Depends on completed seeding (.2), stage implementations (.3/40e/.6) and GitHub
+composition (.4). Fixtures do not replace real model readiness/query/unload proof.
+Follow [shared contract](basic-e2e.md) and [stage schema](pipeline-stages.md).
 
-Use `config/single-model-e2e.json` and the exact authorized source commit. An effective
-workload override must be explicit and identical across the comparison attempts.
-Use an isolated, operator-owned model-cache namespace for the cold proof; never
-clear a shared cache. Prepare the SDK/base before testing model-asset reuse.
+## Procedure
 
-Consume the seed receipt and prepared-input manifest from their owners, not a
-second model inventory. Each selected asset needs its role, immutable origin and
-revision, size/digest, cache-root kind/relative path and verification result.
-The seed receipt also identifies the pipeline staging and SDK used. Keep each
-container's `sdk.json` under a stage-specific artifact path; compare immutable
-release/dependency/image identities, not a shared or relocated venv. The workflow
-adds run/attempt, source/ref, runner identity and the assumed-compatible host.
-The [parent contract](basic-e2e.md#cross-resolved-interfaces) fixes the filenames; outputs
-are `workflow.json`, `plan.json`, `report.json`, `summary.md`, stage
-`serve-result.json`, `request.json`/`response.json` and bounded logs. Include the
-small `seed-manifest.json`/`seed-report.json`, `sdk.json` and
-`prepared-inputs.json` records needed to verify the input chain; these are
-receipts/manifests, not payload directories. Artifacts exclude weights, tokenizers and SDK payloads.
+1. Reuse the completed cold/warm seeding receipts rather than downloading the
+   model again. Verify the dedicated runner can read the configured manifest,
+   native cache files and pipeline inputs and access the selected GPU/Docker.
+   Operator owns any privileged permission repair; report the exact blocker.
+2. Prepare fresh pinned pipeline/SDK inputs and run a real local one-entry suite
+   offline with cache/input mounts read-only. Require real registration/readiness,
+   bounded recorded request/assertion, confirmed unregistration and final shutdown.
+   Demonstrate two load/query/unload cycles in the same server process; repeat
+   the existing model for that proof if necessary without claiming two models.
+3. Generate all final artifacts from those saved raw results with no Docker,
+   GPU, model cache or network access. Re-render into a fresh directory; model
+   execution does not recur and recorded execution facts/counts remain unchanged.
+   Inspect wide/narrow HTML, relative evidence links and readable GitHub Markdown.
+4. After separately authorized publication, dispatch the real suite on GitHub.
+   Record exact source/runtime/pipeline/asset/hardware/workload and every expected
+   entry. Verify input/model-cache mounts are read-only and serving has no external
+   network/source credentials. Require actual response assertion, removal and
+   final cleanup for every model plus successful compact artifact upload.
+5. Repeat GitHub dispatch with distinct attempt and fresh pipeline/SDK staging
+   but the same cached assets and pinned selections. Require equivalent real
+   coverage and cleanup. New paths alone are not proof of fresh program acquisition;
+   preserve acquisition provenance. Hash reads are not network transfer claims.
 
-## Smallest convincing procedure
+## Failure and presentation checks
 
-1. **Cold manual seed.** Invoke the actual `scripts/seed-models.sh` wrapper
-   with the checked-in baseline, owned root and new cold output directory. Fetch
-   the selected closure through `loom-fetch` into the empty owned namespace.
-   Verify all assets, including tokenizer and declared companions, and retain
-   `seed-report.json` and the published `seed-manifest.json`. Controlled native
-   role-resolution fixtures establish selected-only acquisition; the real asset
-   index must match the pinned selected closure.
-2. **Warm manual seed.** Invoke that same wrapper again with a distinct output
-   and `--asset-network offline`. It downloads the pinned pipeline online into
-   new staging, then executes the **same actual seed asset-resolution and
-   materialization path** in a network-disabled container. The option changes
-   network policy, not the algorithm. Manual caches may remain writable for model-acquisition
-   metadata/receipts. SDK/base inputs are prepared beforehand. Success against
-   the same verified asset identities proves no model-asset network transfer;
-   a separate CI read-only verification is not a substitute for this seed run.
-   Retain pinned-source acquisition provenance for fresh pipeline bytes; a new
-   pathname alone is insufficient. File mtimes and an invented `loom-fetch
-   --json` counter are not proof. Verified sizes are not measured wire bytes;
-   report counters only when backed by actual transfer events, otherwise mark
-   them unobserved.
-3. **Real GitHub attempt.** Manually dispatch the actual inference path against
-   those seeded inputs. Its separate CI preparation phase must verify/assemble
-   assets offline from read-only mounts and emit `prepared-inputs.json` before
-   serving. Require the expected prepared model in `/v1/models`,
-   the recorded bounded request, an actual response satisfying the explicit
-   assertion, and owned server/container shutdown. This is not the synthetic
-   fixture or an input-only check.
-4. **Repeat GitHub attempt.** Use a distinct run/attempt and fresh pipeline
-   staging, with unchanged baseline/workload pins and the same model assets.
-   Require the same real readiness/assertion/cleanup success. Check the reported
-   asset mount contract is read-only and the selected asset identities remain
-   unchanged. Do not equate cache verification/hash reads with downloads.
+Use controlled fixtures for missing/corrupt assets, asynchronous registration,
+wrong/malformed responses, timeouts, model-local failure followed by successful
+next entry after cleanup, and removal/server failure stopping the loop. Retain
+failed/not-run/incomplete entries and stage reasons; do not mutate shared weights.
+Exercise a representative failed composed run with an accurate generated report
+and failing overall status. A valid rendering of failure may exit0 for reporting
+without changing the original failure. Rendering/upload failures remain visible.
 
-## Required negative checks
+Check HTML/Markdown/JSON agree on denominator, unique model selections, repeated
+cycles and every phase/result. A verified selection needs real assertion and
+completed removal; overall success also needs final server/container shutdown.
+Text smoke results do not imply vision coverage. Fixture runs must be clearly
+labelled. Confirm the downloaded HTML bundle works offline and includes all
+referenced bounded evidence without model/pipeline/SDK payloads or credentials.
 
-Use small controlled fixtures for integrity/partial-file rejection and client
-readiness timeout, wrong answer and cleanup failure. Their outcomes must be
-failed with a preserved report, not `passed` or inferred model coverage. Exercise
-a missing-asset case through prepared-input verification using an owned cache
-view: report the exact missing identity for manual reseeding, leave the model
-cache untouched and do not launch inference. No destructive mutation of real
-shared weights or a runtime-version matrix is required for this epic.
+## Closure evidence
 
-## Closure criteria
-
-A compact validation summary links the cold/warm receipts and both actual GitHub
-run URLs/artifacts. It checks source commit, pipeline publication/preset/programs,
-asset manifest, SDK payload/dependency identity, base-image digest, effective
-workload and actual runner/device identity. Both real attempts must pass
-readiness, assertion and cleanup; their distinct run IDs establish separate
-attempts. Preserve the actual request/response and failure-stage/log evidence.
-Workflow artifact publication must also succeed; an upload failure may leave
-valid local stage evidence, but missing published evidence does not close this task. A fixture pass, successful parse/download, assumed host
-compatibility or an SDK version string alone is insufficient.
-
-No proof is executed during speccing. The implementation task stays open until
-this exact-source real evidence exists. The shared artifact/layout and ownership contracts are cross-resolved with the
-workflow, seed, input and serving owners; no separate proof-specific cache or
-model-selection schema is introduced.
+Retain a compact summary referencing completed seeding receipts, exact source
+identity, local stage commands/exits, real response/lifecycle evidence, offline
+report regeneration checks, controlled failure results and both GitHub run URLs
+and artifacts. Confirm owned processes/containers have exited and retain raw
+results for future re-rendering. State any missing real evidence explicitly;
+assumed compatibility, parsing/help checks or a fixture pass cannot close this task.
+No runtime-version matrix, automatic qualification or nightly schedule is needed.

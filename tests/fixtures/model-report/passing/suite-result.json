@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "attempt_id": "fixture-2026-11-11",
+  "mode": "fixture",
+  "source": {
+    "commit": "48bf73b",
+    "repository": "rsuderman/hrx-systems-test"
+  },
+  "runtime": {
+    "sdk": {
+      "repository": "ROCm/hrx-system",
+      "release": "v0.1.0"
+    },
+    "image": "python@sha256:fixture"
+  },
+  "hardware": {
+    "name": "Fixture GPU",
+    "device_uri": "amdgpu://0"
+  },
+  "expected_entries": [
+    {
+      "id": "qwen-08b",
+      "selection": {
+        "model_id": "Qwen/Qwen3.5-0.8B",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source",
+        "repository": "loom-fun/unsloth-Qwen3.5-0.8B-loom",
+        "publication_revision": "f1ba2f23c44400bd0b1f88b406029daf41d7a143"
+      },
+      "test_kind": "text smoke",
+      "expected_text": "4"
+    }
+  ],
+  "status": "passed",
+  "started_at": "2026-11-11T00:00:00Z",
+  "ended_at": "2026-11-11T00:00:08Z",
+  "elapsed_seconds": 8,
+  "execution_contract": {
+    "cache_read_only": true,
+    "pipeline_fresh": true,
+    "external_network": false
+  },
+  "server": {
+    "identity": {
+      "pid": 1234,
+      "container": "fixture-server"
+    },
+    "start": {
+      "status": "passed",
+      "elapsed_seconds": 1.1
+    },
+    "shutdown": {
+      "status": "passed",
+      "elapsed_seconds": 0.4
+    },
+    "cleanup": {
+      "status": "passed",
+      "elapsed_seconds": 0.1
+    }
+  },
+  "models": [
+    {
+      "id": "qwen-08b",
+      "selection": {
+        "model_id": "Qwen/Qwen3.5-0.8B",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source",
+        "repository": "loom-fun/unsloth-Qwen3.5-0.8B-loom",
+        "publication_revision": "f1ba2f23c44400bd0b1f88b406029daf41d7a143"
+      },
+      "preparation": {
+        "status": "ready"
+      },
+      "status": "passed",
+      "cycles": [
+        {
+          "model_id": "Qwen/Qwen3.5-0.8B",
+          "incarnation": 1,
+          "load": {
+            "status": "passed",
+            "elapsed_seconds": 0.1
+          },
+          "readiness": {
+            "status": "passed",
+            "elapsed_seconds": 4.2
+          },
+          "query": {
+            "status": "passed",
+            "elapsed_seconds": 0.8
+          },
+          "assertion": {
+            "status": "passed",
+            "elapsed_seconds": 0.001
+          },
+          "unload": {
+            "status": "passed",
+            "elapsed_seconds": 0.3
+          },
+          "request_path": "models/qwen-08b/request.json",
+          "response_path": "models/qwen-08b/response.json"
+        }
+      ],
+      "evidence": [
+        "models/qwen-08b/prepared-inputs.json"
+      ]
+    }
+  ],
+  "evidence": [
+    "server.log"
+  ]
+}
