@@ -6,6 +6,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -190,14 +191,95 @@ class StageCompositionTests(unittest.TestCase):
     def test_workflow_final_gate_rejects_upload_and_stage_failures(self):
         script = workflow_run_block('Require all stages and publication to pass')
         env = {**self.env, **{name + '_OUTCOME': 'success'
-               for name in ('INITIALIZE', 'PREPARE', 'RUN', 'CLEANUP', 'REPORT', 'UPLOAD')}}
+               for name in ('INITIALIZE', 'PREPARE', 'RUN', 'CLEANUP', 'REPORT', 'UPLOAD', 'SUMMARY')}}
         good = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
         self.assertEqual(good.returncode, 0, good.stderr)
-        for stage in ('PREPARE', 'RUN', 'CLEANUP', 'REPORT', 'UPLOAD'):
+        for stage in ('PREPARE', 'RUN', 'CLEANUP', 'REPORT', 'UPLOAD', 'SUMMARY'):
             with self.subTest(stage=stage):
                 bad = subprocess.run(['bash', '-c', script], env={**env, stage + '_OUTCOME': 'failure'},
                     capture_output=True, text=True)
                 self.assertNotEqual(bad.returncode, 0)
+
+    def publish_summary(self, *, upload='success', artifact_url=None, rendered=True, workflow_metadata=True):
+        # Recorded real run/artifact identity; this test performs no network calls.
+        self.artifact_url = 'https://github.com/rsuderman/hrx-systems-test/actions/runs/42933895801/artifacts/13816663497'
+        self.output.mkdir()
+        if rendered:
+            results = self.root / 'saved-results'
+            shutil.copytree(ROOT / 'tests/fixtures/model-report/passing', results)
+            raw_path = results / 'suite-result.json'
+            raw = json.loads(raw_path.read_text())
+            workflow_identity = {
+                'schema_version': 1, 'repository': 'rsuderman/hrx-systems-test',
+                'run_id': '42933895801', 'run_attempt': '1', 'ref': 'refs/heads/main',
+                'sha': 'faaa58382503bfa38b50e8c2a4c6d270f37e3bc6', 'runner': 'dogwood-hrx-account',
+                'run_url': 'https://github.com/rsuderman/hrx-systems-test/actions/runs/42933895801'}
+            if workflow_metadata:
+                raw['workflow'] = workflow_identity
+            raw_path.write_text(json.dumps(raw))
+            generated = subprocess.run([sys.executable, '-I', str(ROOT / 'scripts/generate-model-report.py'),
+                '--results', str(results), '--output', str(self.output / 'report')],
+                capture_output=True, text=True, timeout=10)
+            self.assertEqual(generated.returncode, 0, generated.stderr)
+        summary_path = self.root / 'github-summary.md'
+        env = {**self.env, 'E2E_OUTPUT': str(self.output), 'GITHUB_STEP_SUMMARY': str(summary_path),
+               'ARTIFACT_URL': self.artifact_url if artifact_url is None else artifact_url,
+               'UPLOAD_OUTCOME': upload, 'PREPARE_OUTCOME': 'success', 'RUN_OUTCOME': 'success',
+               'CLEANUP_OUTCOME': 'success', 'REPORT_OUTCOME': 'success' if rendered else 'failure'}
+        published = subprocess.run(['bash', '-c', workflow_run_block('Publish readable summary and report download')],
+            env=env, capture_output=True, text=True, timeout=10)
+        return published, summary_path.read_text()
+
+    def test_workflow_publishes_summary_after_upload_with_exact_artifact_url(self):
+        workflow = (ROOT / '.github/workflows/single-model-e2e.yml').read_text()
+        self.assertLess(workflow.index('      - name: Upload compact report'),
+                        workflow.index('      - name: Publish readable summary and report download'))
+        self.assertIn('ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}', workflow)
+        published, summary = self.publish_summary()
+        self.assertEqual(published.returncode, 0, published.stderr)
+        self.assertIn('[Download verification report bundle](' + self.artifact_url + ')', summary)
+        self.assertIn('open `report/index.html`', summary)
+        links = re.findall(r'\[[^\]]*\]\(([^)]+)\)', summary)
+        self.assertTrue(links)
+        self.assertTrue(all(link.startswith('https://') for link in links), links)
+        self.assertNotIn('](index.html)', summary)
+        self.assertNotIn('](report.json)', summary)
+        self.assertNotIn('](suite-result.json)', summary)
+
+    def test_workflow_rejects_local_summary_links_when_run_metadata_is_missing(self):
+        published, summary = self.publish_summary(workflow_metadata=False)
+        self.assertNotEqual(published.returncode, 0)
+        local_summary = (self.output / 'report/summary.md').read_text()
+        self.assertIn('](index.html)', local_summary)
+        self.assertIn('Verification summary unavailable', summary)
+        self.assertIn('[Download verification report bundle](' + self.artifact_url + ')', summary)
+        links = re.findall(r'\[[^\]]*\]\(([^)]+)\)', summary)
+        self.assertTrue(all(link.startswith('https://') for link in links), links)
+        self.assertNotIn('](index.html)', summary)
+
+    def test_workflow_upload_failure_keeps_summary_without_download_link(self):
+        published, summary = self.publish_summary(upload='failure')
+        self.assertEqual(published.returncode, 0, published.stderr)
+        self.assertIn('test entries passed', summary)
+        self.assertIn('artifact upload did not succeed', summary)
+        self.assertIn('| upload | failure |', summary)
+        self.assertNotIn('[Download verification report bundle]', summary)
+        self.assertNotIn(self.artifact_url, summary)
+        self.assertTrue(all(link.startswith('https://') for link in re.findall(r'\[[^\]]*\]\(([^)]+)\)', summary)))
+
+    def test_workflow_missing_upload_url_fails_publication_without_broken_link(self):
+        published, summary = self.publish_summary(artifact_url='')
+        self.assertNotEqual(published.returncode, 0)
+        self.assertIn('upload returned no usable HTTPS download URL', summary)
+        self.assertNotIn('[Download verification report bundle]', summary)
+
+    def test_workflow_without_rendered_report_links_only_available_diagnostics_bundle(self):
+        published, summary = self.publish_summary(rendered=False)
+        self.assertEqual(published.returncode, 0, published.stderr)
+        self.assertIn('Verification incomplete', summary)
+        self.assertIn('[Download verification report bundle](' + self.artifact_url + ')', summary)
+        self.assertIn('inspect the retained stage logs and raw results', summary)
+        self.assertNotIn('open `report/index.html`', summary)
 
     def test_workflow_cancellation_prevents_new_model_work_but_keeps_cleanup(self):
         workflow = (ROOT / '.github/workflows/single-model-e2e.yml').read_text()

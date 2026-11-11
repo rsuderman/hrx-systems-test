@@ -41,11 +41,16 @@ stages changes the frozen attempt; runtime downloads nothing.
   dispatch. Report permission failures; no sudo, silent device change or privilege
   escalation. Execution stage owns named-container cleanup; the always-run CI
   cleanup hook delegates to that ownership without killing unrelated processes.
-- Append rendered `summary.md` to the job summary. Upload an explicit allowlist
+- Save compact stage outcomes before upload. Upload an explicit allowlist
   for the generated report bundle and compact partial raw/diagnostic evidence
   with `always()`, initially retained seven days. Never recursively upload
   prepared input/weights/cache/SDK trees. HTML is downloadable, not assumed to
-  render inline in Actions. Upload/report failure cannot turn a run green.
+  render inline in Actions. After upload, append rendered human-readable
+  `summary.md` plus the actual `steps.upload.outputs.artifact-url` to the job
+  summary. Label download/open `report/index.html`; never link `index.html`,
+  `report.json` or `suite-result.json` as relative GitHub URLs. If upload fails,
+  retain a readable failure summary without a fictitious download link.
+  Upload/report failure cannot turn a run green.
 
 Clean per-attempt prepared SDK/model staging after execution/needed diagnostics;
 never remove the seeded model cache or raw results needed for report regeneration.

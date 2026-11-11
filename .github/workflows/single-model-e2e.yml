@@ -91,7 +91,7 @@ jobs:
             exit 1
           fi
           bash scripts/generate-model-report.sh --results "$E2E_OUTPUT/results" --output "$E2E_OUTPUT/report" >"$E2E_OUTPUT/report.log" 2>&1
-      - name: Save stage outcomes and publish readable summary
+      - name: Save stage outcomes
         if: ${{ always() && steps.initialize.outcome == 'success' }}
         shell: bash
         env:
@@ -107,16 +107,6 @@ jobs:
           statuses = {name: os.environ[name.upper() + '_OUTCOME'] for name in names}
           pathlib.Path(sys.argv[1]).write_text(json.dumps({'schema_version': 1, 'stages': statuses}, indent=2) + '\n')
           PY
-          if [[ -f "$E2E_OUTPUT/report/summary.md" ]]; then
-            cat "$E2E_OUTPUT/report/summary.md" >> "$GITHUB_STEP_SUMMARY"
-          else
-            printf '## Verification incomplete\n\nNo rendered report was produced. Inspect the uploaded stage diagnostics.\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
-          printf '\n| Stage | Outcome |\n|---|---|\n' >> "$GITHUB_STEP_SUMMARY"
-          for stage in prepare run cleanup report; do
-            variable="${stage^^}_OUTCOME"
-            printf '| %s | %s |\n' "$stage" "${!variable}" >> "$GITHUB_STEP_SUMMARY"
-          done
       - name: Upload compact report and available failure evidence
         id: upload
         if: ${{ always() && steps.initialize.outcome == 'success' }}
@@ -147,6 +137,58 @@ jobs:
             ${{ env.E2E_OUTPUT }}/results/models/*/cycle-*/response.json
           if-no-files-found: error
           retention-days: 7
+      - name: Publish readable summary and report download
+        id: summary
+        if: ${{ always() && steps.initialize.outcome == 'success' }}
+        shell: bash
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
+          RUN_OUTCOME: ${{ steps.run.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
+          REPORT_OUTCOME: ${{ steps.report.outcome }}
+        run: |
+          set -euo pipefail
+          publication_status=0
+          if [[ -f "$E2E_OUTPUT/report/summary.md" ]]; then
+            if python3 -I - "$E2E_OUTPUT/report/summary.md" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import pathlib, re, sys, urllib.parse
+          content = pathlib.Path(sys.argv[1]).read_text()
+          for target in re.findall(r'!?\[[^\]]*\]\(([^)]+)\)', content):
+              link = urllib.parse.urlsplit(target)
+              if link.scheme != 'https' or not link.netloc or any(ch.isspace() for ch in target):
+                  sys.exit('Generated summary contains a relative or non-HTTPS Markdown link')
+          print(content, end='')
+          PY
+            then
+              :
+            else
+              printf '## Verification summary unavailable\n\nThe generated summary contains links that cannot be published in GitHub. See the artifact publication outcome below for report access and diagnostics.\n' >> "$GITHUB_STEP_SUMMARY"
+              publication_status=1
+            fi
+          else
+            printf '## Verification incomplete\n\nNo rendered report was produced. Stage diagnostics are retained in the run artifacts when upload succeeds.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ "$UPLOAD_OUTCOME" = success && "$ARTIFACT_URL" =~ ^https://[^[:space:]]+$ ]]; then
+            printf '\n[Download verification report bundle](%s)\n\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+            if [[ -f "$E2E_OUTPUT/report/index.html" ]]; then
+              printf 'Unzip the downloaded bundle and open `report/index.html` to browse the report and linked evidence.\n' >> "$GITHUB_STEP_SUMMARY"
+            else
+              printf 'Unzip the bundle to inspect the retained stage logs and raw results; no rendered HTML report was produced.\n' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          elif [[ "$UPLOAD_OUTCOME" = success ]]; then
+            printf '\n**Report bundle unavailable:** upload returned no usable HTTPS download URL.\n' >> "$GITHUB_STEP_SUMMARY"
+            publication_status=1
+          else
+            printf '\n**Report bundle unavailable:** artifact upload did not succeed. Local results and diagnostics remain on the runner.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          printf '\n| Stage | Outcome |\n|---|---|\n' >> "$GITHUB_STEP_SUMMARY"
+          for stage in prepare run cleanup report upload; do
+            variable="${stage^^}_OUTCOME"
+            printf '| %s | %s |\n' "$stage" "${!variable}" >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit "$publication_status"
       - name: Remove disposable prepared inputs after confirmed cleanup
         if: ${{ always() && steps.initialize.outcome == 'success' && steps.cleanup.outcome == 'success' }}
         shell: bash
@@ -161,9 +203,10 @@ jobs:
           CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
           REPORT_OUTCOME: ${{ steps.report.outcome }}
           UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          SUMMARY_OUTCOME: ${{ steps.summary.outcome }}
         run: |
           set -euo pipefail
-          for stage in INITIALIZE PREPARE RUN CLEANUP REPORT UPLOAD; do
+          for stage in INITIALIZE PREPARE RUN CLEANUP REPORT UPLOAD SUMMARY; do
             variable="${stage}_OUTCOME"
             [[ "${!variable}" = success ]] || { echo "$stage did not pass: ${!variable}" >&2; exit 1; }
           done

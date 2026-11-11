@@ -32,7 +32,11 @@ of successful report generation.
 Optional saved `workflow` metadata adds GitHub run and workflow-source links in
 the HTML header and Markdown summary. Links are built from a validated repository,
 positive run identity and full commit SHA; supplied run URLs must match that
-GitHub repository/run (and optional attempt). Local results work without metadata.
+GitHub repository/run (and optional attempt). GitHub summaries use that validated
+run link for artifact access; local summaries retain relative links to bundled
+files. The summary shows concise coverage, model results, runtime/GPU, source/run
+and lifecycle sections. Full nested identities stay in downloadable JSON rather
+than being flattened into the job summary. Local results work without metadata or with local SHA-only metadata.
 
 The report displays expected test-entry counts, a separate distinct model-ID
 count and repeated lifecycle cycles and marks fixture evidence clearly. Text smoke success does not establish

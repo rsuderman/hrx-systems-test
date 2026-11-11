@@ -350,17 +350,19 @@ CSS = '''
 def render_markdown(report):
     counts = report["counts"]
     title = "Verified" if report["status"] == "passed" and report["mode"] == "real" else LABELS[report["status"]]
-    lines = [f'# Model verification: {title}', '', f'**Mode: {report["mode"].upper()}** · Attempt `{markdown(report["attempt_id"])}` · {duration(report["elapsed_seconds"])}', '',
-             f'**{counts["passed"]}/{counts["expected"]} test entries passed** · {counts["failed"]} failed · {counts["not_run"]} not run · {counts["incomplete"]} incomplete · {counts["cycles"]} lifecycle cycles · {counts["distinct_models"]} distinct model IDs', '',
-             'Rows represent configured test entries; distinct model IDs do not imply coverage of every variant. Repeated cycles increase neither count. Text smoke results cover only the tested text path.', '']
-    links = github_links(report)
-    if links:
-        lines += [" · ".join(f"[{label}]({url})" for label, url in links.items()), ""]
+    lines = [f'# Model verification: {title}', '',
+             f'**Mode: {report["mode"].upper()}** · Attempt `{markdown(report["attempt_id"])}` · {duration(report["elapsed_seconds"])}', '',
+             '## Coverage', '',
+             f'**{counts["passed"]}/{counts["expected"]} test entries passed** · {counts["failed"]} failed · {counts["not_run"]} not run · {counts["incomplete"]} incomplete',
+             f'{counts["distinct_models"]} distinct model IDs · {counts["cycles"]} lifecycle cycles', '',
+             'Rows represent configured test entries; repeated cycles do not increase model coverage. Text smoke results cover only the tested text path.', '']
     if report["mode"] == "fixture":
         lines += ['**Fixture results — not proof of real model support.**', '']
     if report.get("reason"):
         lines += [markdown(report["reason"]), '']
-    lines += ['| Model / preset / variant | Inputs | Load / ready | Query / assertion | Unloaded | Outcome |', '|---|---|---|---|---|---|']
+    lines += ['## Model results', '',
+              '| Model / preset / variant | Inputs | Load / ready | Query / assertion | Unloaded | Outcome |',
+              '|---|---|---|---|---|---|']
     reasons = []
     for model in report["models"]:
         sel = model["selection"]
@@ -370,9 +372,62 @@ def render_markdown(report):
         lines.append('| '+markdown(name)+' | '+' | '.join(LABELS[s] for s in statuses)+' |')
         if model["reason"]:
             reasons.append(f'- **{markdown(model["id"])}:** {markdown(model["reason"])}')
-    lines += ['', *reasons, '', '**Server:** ' + ' · '.join(f'{key}: {LABELS[report["server"][key]["status"]]}' for key in ("start","shutdown","cleanup")), '',
-              f'**Runtime:** {markdown(identity(report["runtime"]))}', '',f'**Hardware:** {markdown(identity(report["hardware"]))}', '',f'**Execution source:** {markdown(identity(report["source"]))}', '',
-              '[HTML report](index.html) · [Final JSON](report.json) · [Raw results](suite-result.json)', '']
+    lines += ['', *reasons, '', '## Runtime and hardware', '']
+
+    def scalar(obj, key):
+        value = obj.get(key) if isinstance(obj, dict) else None
+        return value if isinstance(value, (str, int, float)) and not isinstance(value, bool) else None
+
+    runtime, hardware, source = (report[key] for key in ("runtime", "hardware", "source"))
+    sdk = runtime.get("sdk")
+    if not isinstance(sdk, dict):
+        sdk_identity = runtime.get("sdk_identity", {})
+        sdk = sdk_identity.get("sdk", {}) if isinstance(sdk_identity, dict) else {}
+    package = ' '.join(str(value) for value in (scalar(sdk, "name"), scalar(sdk, "version")) if value is not None)
+    release = scalar(sdk, "release") or scalar(runtime, "release")
+    runtime_label = package or "HRX"
+    if release is not None:
+        runtime_label += f' (release {release})'
+    elif not package:
+        runtime_label = "Unavailable"
+    lines.append(f'- **HRX runtime:** {markdown(runtime_label)}')
+    gpu = scalar(hardware, "name") or scalar(hardware, "gpu") or "Unavailable"
+    device = scalar(hardware, "device_uri")
+    driver = scalar(hardware, "driver")
+    gpu_details = ' · '.join(str(value) for value in (device, driver) if value is not None)
+    lines.append(f'- **GPU:** {markdown(gpu)}' + (f' · {markdown(gpu_details)}' if gpu_details else ''))
+    lines.append(f'- **Container platform:** {markdown(scalar(runtime, "platform") or "Unavailable")}')
+    lines += ['', '## Source and run', '']
+    commit = scalar(source, "commit")
+    source_label = str(commit)[:12] if commit is not None else "Unavailable"
+    if source.get("dirty") is True:
+        source_label += ' · local changes'
+    elif source.get("dirty") is False:
+        source_label += ' · clean checkout'
+    lines.append(f'- **Execution source:** {markdown(source_label)}')
+    links = github_links(report)
+    for label, url in links.items():
+        lines.append(f'- [{label}]({url})')
+    workflow = report.get("workflow")
+    runner = scalar(workflow, "runner")
+    if runner is not None:
+        lines.append(f'- **Runner:** {markdown(runner)}')
+    lines += ['', '## Server lifecycle', '']
+    for key, label in (("start", "Server start"), ("shutdown", "Server shutdown"), ("cleanup", "Server cleanup")):
+        outcome = report["server"][key]
+        observed_time = outcome.get("elapsed_seconds")
+        detail = f' · {duration(observed_time)}' if observed_time is not None else ''
+        reason = f' · {markdown(outcome["reason"])}' if outcome.get("reason") else ''
+        lines.append(f'- **{label}: {LABELS[outcome["status"]]}**{detail}{reason}')
+    lines += ['', '## Artifacts', '']
+    run_url = next((url for label, url in links.items() if label.startswith('GitHub run #')), None)
+    if run_url:
+        lines.append(f'[Download the HTML report, JSON results and supporting evidence from this run’s artifacts]({run_url}).')
+    elif isinstance(workflow, dict) and any(key in workflow for key in ("run_id", "run_url")):
+        lines.append('Download the HTML report, JSON results and supporting evidence from the workflow’s artifact bundle.')
+    else:
+        lines.append('[HTML report](index.html) · [Final JSON](report.json) · [Raw results](suite-result.json)')
+    lines += ['', 'Full runtime, hardware and source identities are retained in the downloadable JSON results.', '']
     return '\n'.join(lines)
 
 

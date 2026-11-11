@@ -26,7 +26,17 @@ Each local run and GitHub artifact bundle contains:
 - `models/<entry-id>/`: bounded request/response and preparation/lifecycle results
   referenced by relative links, plus shared server/SDK/workflow evidence.
 
-GitHub receives the Markdown summary and a downloadable report bundle. Do not
+GitHub receives a human-readable Markdown summary and a downloadable report
+bundle. The summary uses compact labelled sections for coverage, model results,
+HRX release, GPU/device, execution source and server lifecycle; never dump the
+runtime/hardware/source JSON objects into that summary. Full structured identities
+remain in downloadable JSON and the HTML report's expandable details.
+
+The GitHub job summary must contain no local-file-relative report links. The
+workflow appends the real uploaded artifact URL after upload, labelled as a report
+bundle download with instructions to open `report/index.html`. Run/source links
+use actual validated GitHub identities. Standalone local Markdown may retain
+relative links to nearby report files. The uploaded artifact is not an HTML host. Do not
 assume Actions renders uploaded HTML inline. A hosted report site or historical
 coverage dashboard is later work; no publication step is needed for this version.
 

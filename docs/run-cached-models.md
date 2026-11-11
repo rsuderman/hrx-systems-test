@@ -53,8 +53,15 @@ be regenerated later into another new directory using only `$attempt/results`.
 The manual `single-model-e2e.yml` workflow now calls the three stage commands as
 separate steps. It uses a runner-owned `RUNNER_TEMP` attempt path, the same
 configured cache root and an explicit device. It always attempts cleanup and
-available reporting/compact artifact upload, appends the Markdown summary, and
-requires every stage plus artifact publication to pass. The current 60-minute
+available reporting and compact artifact upload. After upload, it publishes the
+readable GitHub summary with a direct **Download verification report bundle**
+link from the upload action. Unzip the bundle and open `report/index.html` to
+browse the report and its local evidence links. GitHub summaries link to the
+archive rather than treating files inside it as hosted pages. Upload failure
+still leaves a readable summary and stage outcomes, with no unavailable download
+link. The publisher rejects a generated summary containing relative or non-HTTPS
+Markdown links, emits a diagnostic and available bundle link, and fails summary
+publication rather than publishing broken links. Every stage, summary publication and artifact upload must pass. The current 60-minute
 outer limit covers the initial one-model/two-cycle suite; review that budget
 when the checked-in suite grows. The workflow does not seed or repair assets.
 

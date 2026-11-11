@@ -213,6 +213,56 @@ class ReportTests(unittest.TestCase):
         for link in links.links:
             if not urlsplit(link).scheme and not link.startswith('#'):
                 self.assertTrue((self.root/'report'/unquote(link)).is_file(),link)
+    def test_summary_is_readable_without_flattened_identity_json(self):
+        self.raw['runtime']={'platform':'linux/amd64','image':'python@sha256:full-image-digest',
+            'sdk':{'name':'hrx-loom','version':'0.1.0','release':'v0.1.0',
+                   'wheel':{'url':'full-identity-payload-url','sha256':'full-wheel-sha'}},
+            'sdk_identity':{'nested':'retained-runtime-identity'}}
+        self.raw['hardware']={'name':'AMD GPU (PCI 1002:1586)','device_uri':'amdgpu://0','driver':'amdgpu',
+                              'extra':{'nested':'retained-hardware-identity'}}
+        self.raw['source']={'commit':'faaa58382503bfa38b50e8c2a4c6d270f37e3bc6','dirty':False,
+                            'files_sha256':{'script.py':'retained-source-identity'}}
+        report,html,md=self.generate()
+        for heading in ('Coverage','Model results','Runtime and hardware','Source and run','Server lifecycle','Artifacts'):
+            self.assertIn('## '+heading,md)
+        self.assertIn('**HRX runtime:** hrx-loom 0.1.0',md)
+        self.assertIn('release v0.1.0',md)
+        self.assertIn('**GPU:** AMD GPU',md)
+        self.assertIn('amdgpu://0',md);self.assertIn('linux/amd64',md)
+        self.assertIn('faaa58382503 · clean checkout',md)
+        self.assertIn('Server cleanup: Passed',md)
+        for marker in ('full-image-digest','full-identity-payload-url','retained-runtime-identity',
+                       'retained-hardware-identity','retained-source-identity','"files_sha256"','"sdk_identity"'):
+            self.assertNotIn(marker,md)
+        self.assertLess(len(md),4000)
+        self.assertEqual(report['runtime'],self.raw['runtime'])
+        self.assertIn('retained-runtime-identity',html)
+    def test_github_summary_links_only_to_validated_run_and_source(self):
+        self.raw['workflow']=json.loads((ROOT/'tests/fixtures/model-report/workflow.json').read_text())
+        _,_,md=self.generate()
+        self.assertIn('from this run’s artifacts',md)
+        self.assertIn(self.raw['workflow']['run_url'],md)
+        for filename in ('index.html','report.json','suite-result.json'):
+            self.assertNotIn(']('+filename+')',md)
+        self.assertIn('Workflow source',md)
+    def test_local_summary_keeps_working_relative_artifact_links(self):
+        _,_,md=self.generate()
+        for filename in ('index.html','report.json','suite-result.json'):
+            self.assertIn(']('+filename+')',md)
+            self.assertTrue((self.root/'report'/filename).is_file())
+    def test_local_sha_only_workflow_metadata_keeps_relative_artifact_links(self):
+        self.raw['workflow']={'schema_version':1,'sha':'faaa58382503bfa38b50e8c2a4c6d270f37e3bc6'}
+        _,_,md=self.generate()
+        for filename in ('index.html','report.json','suite-result.json'):
+            self.assertIn(']('+filename+')',md)
+            self.assertTrue((self.root/'report'/filename).is_file())
+        self.assertNotIn('workflow’s artifact bundle',md)
+    def test_invalid_workflow_run_has_plain_artifact_instruction_not_broken_links(self):
+        self.raw['workflow']={'repository':'org/repo','run_id':'1','run_url':'javascript:unsafe'}
+        _,_,md=self.generate()
+        self.assertIn('workflow’s artifact bundle',md)
+        self.assertNotIn('javascript:',md)
+        self.assertNotIn('](index.html)',md)
     def test_malformed_schema_and_duplicate_entries_rejected(self):
         for edit in ['schema','duplicates']:
             self.raw=json.loads((FIXTURE/'suite-result.json').read_text())
