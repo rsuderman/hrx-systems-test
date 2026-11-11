@@ -26,6 +26,9 @@ import urllib.request
 SCRIPT_DIR = Path(__file__).resolve().parent
 PHASES = ('load', 'readiness', 'query', 'assertion', 'unload')
 MAX_EVIDENCE_BYTES = 4 * 1024 * 1024
+_ASSET_SPEC = importlib.util.spec_from_file_location('asset_verification', SCRIPT_DIR / 'asset-verification.py')
+ASSETS = importlib.util.module_from_spec(_ASSET_SPEC)
+_ASSET_SPEC.loader.exec_module(ASSETS)
 
 
 def read_json(path):
@@ -75,7 +78,7 @@ def phase(status='not_run', reason='not attempted', started=None, **observations
 def initial_results(suite, hardware, mode='real'):
     expected, models = [], []
     ids = [entry['id'] for entry in suite['entries']]
-    if not ids or len(set(ids)) != len(ids) or any(
+    if (not ids and not suite.get('inventory_errors')) or len(set(ids)) != len(ids) or any(
             not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', value) for value in ids):
         raise ValueError('prepared entries must have unique path-safe IDs and be nonempty')
     for entry in suite['entries']:
@@ -90,6 +93,10 @@ def initial_results(suite, hardware, mode='real'):
             'cycles': [], 'evidence': []})
     return {'schema_version': 1, 'attempt_id': suite['attempt_id'], 'mode': mode,
         'source': copy.deepcopy(suite.get('source', {})), 'runtime': copy.deepcopy(suite.get('runtime') or {}),
+        'selection_mode': suite.get('selection_mode', 'suite'),
+        'inventory_sha256': suite.get('inventory_sha256'),
+        'inventory_errors': copy.deepcopy(suite.get('inventory_errors', [])),
+        'asset_verification': {'preparation': copy.deepcopy(suite.get('asset_verification', {}))},
         'hardware': hardware, 'expected_entries': expected, 'status': 'incomplete',
         'reason': 'execution not complete', 'started_at': now(), 'ended_at': None,
         'elapsed_seconds': None, 'server': {'identity': {}, 'start': phase(),
@@ -98,6 +105,12 @@ def initial_results(suite, hardware, mode='real'):
 
 def copy_evidence(prepared, output, suite, result):
     """Copy only bounded files referenced by preparation, never payload trees."""
+    if suite.get('inventory_path'):
+        source = contained(prepared, suite['inventory_path'])
+        if source.stat().st_size > MAX_EVIDENCE_BYTES or digest(source) != suite['inventory_sha256']:
+            raise ValueError('frozen cache inventory changed')
+        shutil.copyfile(source, output / 'inventory.json')
+        result['evidence'].append('inventory.json')
     for entry, model in zip(suite['entries'], result['models']):
         references = list(entry.get('evidence', []))
         if entry.get('inputs_manifest'):
@@ -280,6 +293,29 @@ def reclaim_idle_pools(api, output_path):
         write_json(output_path, evidence)
 
 
+def assert_response(entry, response):
+    kind = entry.get('test_kind', 'text_smoke')
+    if kind == 'text_smoke':
+        actual = response['choices'][0]['message']['content']
+        if not isinstance(actual, str) or actual.strip() != entry['smoke_expected_text']:
+            raise ValueError('model response did not satisfy configured exact-text assertion')
+    elif kind == 'decision_smoke':
+        answer = response['answers']['route']
+        expected = entry['smoke_expected_text']
+        probabilities = answer['probabilities']
+        def one(value):
+            return type(value) in (int, float) and math.isfinite(value) and abs(value - 1) <= 1e-6
+        usage = response['usage']
+        if (response.get('model') != entry['selection']['model_id'] or answer.get('type') != 'choice' or
+                answer.get('choice') != expected or set(probabilities) != {expected} or
+                not one(probabilities[expected]) or not one(answer.get('confidence')) or
+                type(usage.get('input_tokens')) is not int or usage['input_tokens'] <= 0 or
+                type(usage.get('output_tokens')) is not int or usage['output_tokens'] != 0):
+            raise ValueError('decision response did not satisfy configured single-choice service smoke assertion')
+    else:
+        raise ValueError(f'unsupported_test_kind: {kind}')
+
+
 def run_cycle(api, entry, model, output, cycle_number, limits):
     name = entry['selection']['model_id']
     prefix = f"models/{entry['id']}/cycle-{cycle_number}"
@@ -291,9 +327,13 @@ def run_cycle(api, entry, model, output, cycle_number, limits):
     try:
         if api.status(name) is not None:
             raise RuntimeError('model name already registered before this cycle')
+        test_kind = entry.get('test_kind', 'text_smoke')
+        if test_kind not in ('text_smoke', 'decision_smoke'):
+            raise ValueError(f'unsupported_test_kind: {test_kind}')
         deployment = {'name': name, 'base_directory': f"/inputs/{entry['id']}/model",
             'model': {'path': 'model.json', 'preset': entry['selection']['preset'],
-                      'programs': entry['selection']['programs']}, 'definition': {'kind': 'text'}}
+                      'programs': entry['selection']['programs']},
+            'definition': {'kind': 'decision' if test_kind == 'decision_smoke' else 'text'}}
         # Registration can be accepted even if the client loses its response.
         accepted = True
         api.request('/v1/models/register', deployment, accepted=(202,))
@@ -305,14 +345,13 @@ def run_cycle(api, entry, model, output, cycle_number, limits):
         request = {**entry['smoke_request'], 'model': name}
         cycle['request_path'] = prefix + '/request.json'
         write_json(output / cycle['request_path'], request)
-        response = api.request('/v1/chat/completions', request, timeout=limits.query_timeout)
+        response = api.request('/v1/systemone' if test_kind == 'decision_smoke' else '/v1/chat/completions',
+                               request, timeout=limits.query_timeout)
         cycle['response_path'] = prefix + '/response.json'
         write_json(output / cycle['response_path'], response)
         cycle['query'] = phase('passed', None, started)
         stage, started = 'assertion', time.monotonic()
-        actual = response['choices'][0]['message']['content']
-        if not isinstance(actual, str) or actual.strip() != entry['smoke_expected_text']:
-            raise ValueError('model response did not satisfy configured exact-text assertion')
+        assert_response(entry, response)
         cycle['assertion'] = phase('passed', None, started)
     except Exception as error:
         cycle[stage] = phase('failed', f'{type(error).__name__}: {error}', started)
@@ -440,7 +479,8 @@ def execute_lifecycle(suite, result, output, command, address, limits):
         else:
             server['shutdown'] = phase('not_run', 'server was not started')
             server['cleanup'] = phase('passed', None)
-        passed = (not lifecycle_failed and all(model['status'] == 'passed' for model in result['models']) and
+        passed = (not lifecycle_failed and not result.get('inventory_errors') and
+                  all(model['status'] == 'passed' for model in result['models']) and
                   all(server[key]['status'] == 'passed' for key in ('start', 'shutdown', 'cleanup')))
         result.update(status='passed' if passed else 'failed', ended_at=now(), elapsed_seconds=time.monotonic() - began)
         if passed:
@@ -472,7 +512,7 @@ def input_manifest(prepared, entry):
     return read_json(path)
 
 
-def verify_asset_reference(model_root, relative, cache_path, identity):
+def verify_asset_reference(model_root, relative, cache_path, identity, verifier=None):
     relative = Path(relative)
     if relative.is_absolute() or '..' in relative.parts:
         raise ValueError('invalid installed asset path')
@@ -482,8 +522,8 @@ def verify_asset_reference(model_root, relative, cache_path, identity):
         return
     if not resolved.is_relative_to(model_root.resolve(strict=True)):
         raise ValueError('served asset reference escapes the verified model/cache target')
-    if resolved.stat().st_size != identity['size'] or digest(resolved) != identity['sha256']:
-        raise ValueError('served asset bytes differ from indexed cache identity')
+    (verifier or ASSETS.Verifier()).unchanged(resolved, identity['size'], identity['sha256'],
+                                             identity.get('installed_verification'))
 
 
 def verify_prepared(prepared, suite, inside=False):
@@ -496,6 +536,8 @@ def verify_prepared(prepared, suite, inside=False):
         raise ValueError('prepared runtime identity changed')
     payload_root = contained(prepared, runtime['sdk_payloads'])
     helper = sdk_helper()
+    verifier = ASSETS.Verifier()
+    suite['asset_preflight_verification'] = verifier.stats
     for kind, payload in payloads:
         helper.verify(helper.payload_path(payload_root, kind, payload), payload)
     for name in ('huggingface', 'loom-assets'):
@@ -508,6 +550,11 @@ def verify_prepared(prepared, suite, inside=False):
             continue
         manifest = input_manifest(prepared, entry)
         entry_baseline, _, _, entry_identity = helper.load_baseline(contained(prepared, entry['baseline']))
+        test_kind = entry.get('test_kind', 'text_smoke')
+        if (test_kind not in ('text_smoke', 'decision_smoke') or
+                manifest.get('test_kind', 'text_smoke') != test_kind or
+                entry_baseline.get('test_kind', 'text_smoke') != test_kind):
+            raise ValueError('prepared service/test kind changed or unsupported')
         if (entry_identity['baseline_sha256'] != entry['baseline_sha256'] or
                 entry_identity['dependency_lock_sha256'] != entry['dependency_lock_sha256']):
             raise ValueError('frozen model baseline/dependency identity changed')
@@ -535,10 +582,9 @@ def verify_prepared(prepared, suite, inside=False):
             cache = suite['cache_roots'][asset['cache_root']]
             root = Path(cache['container_path'] if inside else cache['host_path'])
             path = contained(root, asset['cache_path'])
-            if path.stat().st_size != asset['size'] or digest(path) != asset['sha256']:
-                raise ValueError(f"cached asset changed: {asset['installation_path']}")
+            verifier.unchanged(path, asset['size'], asset['sha256'], asset.get('verification'))
             if inside:
-                verify_asset_reference(Path(f"/inputs/{entry['id']}/model"), asset['installation_path'], path, asset)
+                verify_asset_reference(Path(f"/inputs/{entry['id']}/model"), asset['installation_path'], path, asset, verifier)
     return baseline_path, payload_root
 
 
@@ -640,6 +686,7 @@ def run_host(args):
             result['server']['cleanup'] = phase('passed', None)
             return 1
         baseline, payloads = verify_prepared(prepared, suite)
+        result['asset_verification']['host_preflight'] = dict(suite.get('asset_preflight_verification', {}))
         device_options, hardware = gpu_options(args.device_uri)
         result['hardware'].update(hardware)
         subprocess.run(['docker', 'image', 'inspect', suite['runtime']['image']],
@@ -709,6 +756,7 @@ def inside_container(args):
     result = read_json(output / 'suite-result.json')
     try:
         baseline, payloads = verify_prepared(prepared, suite, inside=True)
+        result['asset_verification']['container_preflight'] = dict(suite.get('asset_preflight_verification', {}))
         for path in (Path('/inputs'), Path('/prepared'), Path('/model-cache/huggingface'), Path('/model-cache/loom-assets')):
             if not os.statvfs(path).f_flag & os.ST_RDONLY:
                 raise ValueError('immutable execution input mount is writable')

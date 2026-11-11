@@ -249,8 +249,20 @@ def run_host(args):
                         subprocess.run(["docker", "rm", "-f", container_name],
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     shutil.rmtree(work / "venv")
-                stage = "publish"
-                write_json(manifest_path, read_json(output / "seed-manifest.json"))
+            # Staging hardlinks are gone before stat-bound writer receipts are
+            # published, so removing staging cannot invalidate their ctime.
+            stage = "publish"
+            asset_spec = importlib.util.spec_from_file_location('asset_verification', repo / 'scripts/asset-verification.py')
+            asset_helper = importlib.util.module_from_spec(asset_spec)
+            asset_spec.loader.exec_module(asset_helper)
+            manifest = read_json(output / 'seed-manifest.json')
+            verifier = asset_helper.Verifier(full=True)
+            receipts = asset_helper.load_index(cache_root / asset_helper.INDEX_NAME)
+            for item in manifest['files']:
+                receipt = verifier.verify(asset_helper.asset_path(cache_root, item), item['size'], item['sha256'])
+                receipts[asset_helper.key(receipt)] = receipt
+            asset_helper.write_index(cache_root / asset_helper.INDEX_NAME, receipts)
+            write_json(manifest_path, manifest)
         print(f"Seed ready. Index: {manifest_path}\nReport: {output / 'seed-report.json'}")
         return 0
     except (Exception, KeyboardInterrupt) as error:

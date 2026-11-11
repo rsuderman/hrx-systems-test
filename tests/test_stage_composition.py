@@ -22,8 +22,8 @@ output=""
 while (($#)); do
   case "$1" in
     --output) output="$2"; shift 2;;
-    --root|--suite|--prepared|--results|--workflow|--device-uri|--cycles) shift 2;;
-    --cleanup) shift;;
+    --root|--suite|--selection|--runtime-baseline|--prepared|--results|--workflow|--device-uri|--cycles) shift 2;;
+    --cleanup|--full-integrity) shift;;
     *) exit 99;;
   esac
 done
@@ -107,6 +107,21 @@ class StageCompositionTests(unittest.TestCase):
         arguments = (self.arguments / 'run').read_bytes().decode().split('\0')
         self.assertEqual(arguments[arguments.index('--workflow') + 1], str(self.output / 'workflow.json'))
         self.assertEqual(self.status('report')['exit_code'], 0)
+
+    def test_cached_selection_and_runtime_override_are_forwarded(self):
+        self.command += ['--selection', 'cached', '--runtime-baseline', '/explicit/runtime.json', '--full-integrity']
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        arguments = (self.arguments / 'prepare').read_bytes().decode().split('\0')
+        self.assertEqual(arguments[arguments.index('--selection') + 1], 'cached')
+        self.assertIn('--full-integrity', arguments)
+        self.assertEqual(arguments[arguments.index('--runtime-baseline') + 1], '/explicit/runtime.json')
+
+    def test_cached_selection_and_explicit_suite_conflict_before_work(self):
+        self.command += ['--selection', 'cached', '--suite', '/explicit/suite.json']
+        result = self.invoke()
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.order(), [])
 
     def test_partial_preparation_failure_runs_and_reports_but_still_fails(self):
         result = self.invoke(TEST_PREPARE_EXIT='7')

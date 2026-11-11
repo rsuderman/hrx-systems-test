@@ -17,6 +17,16 @@ except ImportError:
 
 
 class HostContractTests(unittest.TestCase):
+    def test_batch_stages_install_sdk_once_and_share_the_environment(self):
+        with patch.object(PREP.subprocess, 'run') as child:
+            child.return_value.returncode = 0
+            for operation in ('batch-online', 'batch-offline'):
+                self.assertEqual(PREP.stage(type('Args', (), {'stage': operation})()), 0)
+        commands = [call.args[0] for call in child.call_args_list]
+        self.assertEqual(sum('install' in command for command in commands), 1)
+        self.assertEqual([command[-1] for command in commands if '--native-batch' in command], ['online', 'offline'])
+        self.assertTrue(all(command[0] == '/run/venv/bin/python' for command in commands if '--native-batch' in command))
+
     def test_path_rejects_parent_and_symlink_escape(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'root'
@@ -149,6 +159,40 @@ class NativePreparationTests(unittest.TestCase):
         self.seed['files'][0]['sha256'] = '0' * 64
         with self.assertRaisesRegex(ValueError, 'identity/revision'):
             self.prepare()
+
+    def test_cached_text_derives_published_execution_and_reuses_assets(self):
+        card = json.loads((self.fixture.remote / 'model.json').read_text())
+        card['presets']['chat']['execution'] = {'rows': 2, 'context_capacity': 128}
+        (self.fixture.remote / 'model.json').write_text(json.dumps(card))
+        _, _, seed = self.fixture.attempt('cached-seed')
+        baseline = {k: v for k, v in self.baseline.items()
+                    if k not in ('published_execution', 'smoke_request', 'smoke_expected_text')}
+        baseline['selection_mode'] = 'cached'
+        work, output = self.root / 'cached-work', self.root / 'cached-output'
+        work.mkdir(); output.mkdir()
+        count = len(self.fixture.requests)
+        normalized = PREP.online(baseline, seed, self.cache, work, location=self.fixture.url)
+        manifest = PREP.offline(normalized, seed, self.cache, work, output, 'cached-fixture', {'fixture': True})
+        self.assertEqual(manifest['effective_execution'], card['presets']['chat']['execution'])
+        self.assertEqual(manifest['test_kind'], 'text_smoke')
+        self.assertNotIn('/model.gguf', self.fixture.requests[count:])
+
+    def test_cached_decision_uses_native_card_selection_and_offline_asset_path(self):
+        card = json.loads((self.fixture.remote / 'model.json').read_text())
+        card['services']['chat']['kind'] = 'decision'
+        card['presets']['chat']['execution'] = {'pending_requests': 64}
+        (self.fixture.remote / 'model.json').write_text(json.dumps(card))
+        _, _, seed = self.fixture.attempt('decision-seed')
+        baseline = {k: v for k, v in self.baseline.items()
+                    if k not in ('published_execution', 'smoke_request', 'smoke_expected_text')}
+        baseline['selection_mode'] = 'cached'
+        work, output = self.root / 'decision-work', self.root / 'decision-output'
+        work.mkdir(); output.mkdir()
+        normalized = PREP.online(baseline, seed, self.cache, work, location=self.fixture.url)
+        manifest = PREP.offline(normalized, seed, self.cache, work, output, 'decision-fixture', {'fixture': True})
+        self.assertEqual(manifest['test_kind'], 'decision_smoke')
+        self.assertEqual(manifest['effective_execution'], {'pending_requests': 64})
+        self.assertEqual(manifest['smoke_expected_text'], 'support')
 
 
 if __name__ == '__main__':

@@ -5,12 +5,16 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 root="${HRX_SYSTEMS_ROOT:-$HOME/.local/share/hrx-systems-test}"
 output=""
 suite=""
+selection=""
+runtime_baseline=""
 device_uri="amdgpu://0"
 cycles=1
 keep_prepared=false
+full_integrity=false
 usage() {
   cat <<'HELP'
-Usage: bash scripts/run-cached-models.sh [--root CACHE_ROOT] [--suite SUITE_JSON]
+Usage: bash scripts/run-cached-models.sh [--root CACHE_ROOT] [--suite SUITE_JSON | --selection cached]
+       [--runtime-baseline SDK_CONFIG] [--full-integrity]
        [--output NEW_ATTEMPT] [--device-uri URI] [--cycles COUNT] [--keep-prepared]
 Runs the same Prepare, Run and Report Bash commands used by GitHub Actions.
 --output should be runner-owned when the model cache belongs to another account.
@@ -18,20 +22,25 @@ HELP
 }
 while (($#)); do
   case "$1" in
-    --root|--suite|--output|--device-uri|--cycles)
+    --root|--suite|--selection|--runtime-baseline|--output|--device-uri|--cycles)
       (($# >= 2)) || { usage >&2; exit 2; }
       case "$1" in
         --root) root="$2";; --suite) suite="$2";; --output) output="$2";;
+        --selection) selection="$2";; --runtime-baseline) runtime_baseline="$2";;
         --device-uri) device_uri="$2";; --cycles) cycles="$2";;
       esac
       shift 2;;
     --keep-prepared) keep_prepared=true; shift;;
+    --full-integrity) full_integrity=true; shift;;
     -h|--help) usage; exit 0;;
     *) usage >&2; exit 2;;
   esac
 done
 [[ "$root" = /* && "$root" != / ]] || { echo 'Cache root must be an absolute directory other than /' >&2; exit 2; }
 [[ "$cycles" =~ ^[1-9][0-9]*$ ]] || { echo '--cycles must be positive' >&2; exit 2; }
+[[ -z "$selection" || "$selection" = cached ]] || { echo '--selection must be cached' >&2; exit 2; }
+[[ -z "$selection" || -z "$suite" ]] || { echo '--selection and --suite are mutually exclusive' >&2; exit 2; }
+[[ -z "$runtime_baseline" || "$selection" = cached ]] || { echo '--runtime-baseline requires --selection cached' >&2; exit 2; }
 output="${output:-$root/runs/suite-$(date -u +%Y%m%dT%H%M%S)-$$}"
 [[ "$output" = /* && "$output" != / ]] || { echo '--output must be an absolute new directory' >&2; exit 2; }
 mkdir -p -- "$(dirname -- "$output")"
@@ -118,6 +127,9 @@ PY
 write_status
 prepare_args=(--root "$root" --output "$output/prepared")
 [[ -z "$suite" ]] || prepare_args+=(--suite "$suite")
+[[ -z "$selection" ]] || prepare_args+=(--selection "$selection")
+[[ -z "$runtime_baseline" ]] || prepare_args+=(--runtime-baseline "$runtime_baseline")
+[[ "$full_integrity" = false ]] || prepare_args+=(--full-integrity)
 run_stage prepare bash "$script_dir/prepare-cached-models.sh" "${prepare_args[@]}"
 if [[ -f "$output/prepared/prepared-suite.json" ]]; then
   run_stage run bash "$script_dir/run-prepared-models.sh" --prepared "$output/prepared" \

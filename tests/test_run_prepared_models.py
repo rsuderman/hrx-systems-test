@@ -100,6 +100,10 @@ class Handler(BaseHTTPRequestHandler):
    if mode=='malformed':return self.reply(200,{})
    answer='wrong' if mode=='wrong' and payload['model']=='first' else '4'
    return self.reply(200,{'choices':[{'message':{'content':answer}}]})
+  if self.path=='/v1/systemone':
+   return self.reply(200,{'model':payload['model'],'answers':{'route':{'type':'choice',
+    'choice':'support','confidence':1,'probabilities':{'support':1}}},
+    'usage':{'input_tokens':8,'output_tokens':0}})
   self.reply(404,{})
 ThreadingHTTPServer(('127.0.0.1',int(sys.argv[1])),Handler).serve_forever()
 '''
@@ -161,7 +165,8 @@ class PreparedHandoffTests(unittest.TestCase):
                 'effective_execution': baseline['published_execution'],
                 'programs': [{'path': 'control.loom', 'sha256': RUN.digest(model_root / 'control.loom')}],
                 'assets': [{'cache_root': 'huggingface', 'cache_path': asset.name,
-                    'installation_path': 'model.gguf', 'size': asset.stat().st_size, 'sha256': RUN.digest(asset)}]}
+                    'installation_path': 'model.gguf', 'size': asset.stat().st_size, 'sha256': RUN.digest(asset),
+                    'verification': RUN.ASSETS.Verifier().verify(asset, asset.stat().st_size, RUN.digest(asset))}]}
             manifest_path = self.root / 'models' / name / 'prepared-inputs.json'
             RUN.write_json(manifest_path, manifest)
             self.suite['entries'].append({'id': name, 'preparation': {'status': 'ready'},
@@ -196,6 +201,17 @@ class PreparedHandoffTests(unittest.TestCase):
             baseline_sha256=second['baseline_sha256']))
         with self.assertRaisesRegex(ValueError, 'prepared model identity changed'):
             self.verify()
+
+    def test_prepared_receipts_avoid_all_weight_reads_in_preflight(self):
+        actual = RUN.ASSETS.hashlib.file_digest
+        def no_weights(stream, algorithm):
+            if str(stream.name).endswith('.gguf'):
+                raise AssertionError('preflight tried to read weights again')
+            return actual(stream, algorithm)
+        with mock.patch.object(RUN.ASSETS.hashlib, 'file_digest', no_weights):
+            self.verify()
+        self.assertEqual(self.suite['asset_preflight_verification']['sha256_bytes'], 0)
+        self.assertEqual(self.suite['asset_preflight_verification']['receipt_hits'], 2)
 
     def test_distinct_entry_runtime_is_rejected_even_with_valid_model_config_hash(self):
         second = self.suite['entries'][1]
@@ -271,6 +287,28 @@ class LifecycleTests(unittest.TestCase):
                 'test_kind': 'text_smoke', 'smoke_request': {'messages': [{'role': 'user', 'content': '2+2?'}],
                 'max_tokens': 8, 'temperature': 0, 'stream': False}, 'smoke_expected_text': '4',
                 'preparation': {'status': 'ready'}, 'evidence': []})
+
+    def test_decision_and_text_share_one_server_and_cleanup(self):
+        first = self.suite['entries'][0]
+        first.update(test_kind='decision_smoke', smoke_expected_text='support', smoke_request={
+            'state': 'A support request.', 'questions': {'route': {'type': 'choice',
+                'instructions': 'Select the available route.', 'criteria': {'support': 'Support'}}}})
+        code, result, output = self.run_fixture()
+        self.assertEqual(code, 0)
+        response = json.loads((self.root / 'results/models/first/cycle-1/response.json').read_text())
+        self.assertEqual(response['answers']['route']['choice'], 'support')
+        malformed = copy.deepcopy(response)
+        malformed['answers']['route']['probabilities']['support'] = float('nan')
+        with self.assertRaises(ValueError):
+            RUN.assert_response(first, malformed)
+        self.assertEqual(result['models'][1]['status'], 'passed')
+
+    def test_inventory_errors_cannot_pass_with_successful_model_cycles(self):
+        self.suite['inventory_errors'] = [{'path': 'models/bad/seed-manifest.json', 'reason': 'bad JSON'}]
+        code, result, output = self.run_fixture()
+        self.assertEqual(code, 1)
+        self.assertTrue(all(m['status'] == 'passed' for m in result['models']))
+        self.assertEqual(result['status'], 'failed')
 
     def run_fixture(self, mode='normal', command=None):
         output = self.root / 'results'
@@ -485,9 +523,10 @@ class LifecycleTests(unittest.TestCase):
         RUN.verify_asset_reference(model, 'asset.gguf', cache, identity)
         installed.unlink()
         installed.write_bytes(cache.read_bytes())
+        identity['installed_verification'] = RUN.ASSETS.Verifier().verify(installed, identity['size'], identity['sha256'])
         RUN.verify_asset_reference(model, 'asset.gguf', cache, identity)
         installed.write_bytes(b'wrong')
-        with self.assertRaisesRegex(ValueError, 'bytes differ'):
+        with self.assertRaisesRegex(ValueError, 'cached asset changed'):
             RUN.verify_asset_reference(model, 'asset.gguf', cache, identity)
         installed.unlink()
         outside = self.root / 'outside.gguf'

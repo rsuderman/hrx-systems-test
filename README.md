@@ -7,6 +7,15 @@ workflow use the same stages, with one server hot-loading/unloading models.
 
 ## Run locally
 
+To download the 45 publications with selected GGUF assets under 20 GB each,
+see [bulk cache downloads](docs/download-models.md). This uses the existing
+native seeder and does not expand the regression suite.
+
+To test every hosted selection seeded on this runner, use
+`bash scripts/run-cached-models.sh --selection cached` with the configured cache
+root. See [runner-cache inventory selection](docs/cached-inventory.md) for
+discovery, deduplication, test profiles and incomplete-coverage handling.
+
 The default sample contains eight model IDs across seven architecture labels,
 from Qwen2.5 0.5B through GPT-OSS 20B. Its pinned selected assets total about
 18.30 GB; see [the model sample and rationale](docs/model-sample.md). The

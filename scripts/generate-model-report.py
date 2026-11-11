@@ -201,6 +201,8 @@ def normalize(root):
     require(len(references) <= MAX_FILES, "Too many evidence files")
     require(sum(evidence_path(root, p).stat().st_size for p in references) <= MAX_BUNDLE, "Evidence bundle is oversized")
     statuses = [m["status"] for m in report["models"]]
+    if report.get('inventory_errors'):
+        statuses.append('failed')
     statuses += [report["server"][key]["status"] for key in ("start", "shutdown", "cleanup")]
     raw_status = original.get("status", "incomplete")
     require(raw_status in STATUSES, "Invalid suite status")
@@ -327,9 +329,13 @@ def render_html(report, root):
               (str(counts['not_run'] + counts['incomplete']), 'Not run / incomplete'), (str(counts['cycles']), 'Lifecycle cycles')]
     tiles = ''.join(f'<div class="tile"><strong>{value}</strong><span>{label}</span></div>' for value, label in totals)
     files = ''.join(f'<li>{local_link(path)}</li>' for path in report['evidence_files'])
+    inventory_errors = ''.join(f'<li>{escaped(e.get("path"))}: {escaped(e.get("reason"))}</li>'
+                               for e in report.get('inventory_errors', []))
+    inventory_html = (f'<section><h2>Cache inventory errors</h2><ul>{inventory_errors}</ul></section>'
+                      if inventory_errors else '')
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'">
-<title>HRX model verification · {escaped(report['attempt_id'])}</title><style>{CSS}</style></head><body><main>
+<title>HRX model verification · {escaped(report['attempt_id'])}</title><style>{CSS}</style></head><body><main>{inventory_html}
 <header><div class="eyebrow">HRX SYSTEMS / MODEL COVERAGE</div><div class="heading"><div><h1>Model verification</h1><p>Execution results and supporting evidence.</p></div>{badge(status,title)}</div>
 <div class="run-meta"><span>{escaped(report['attempt_id'])}</span><span>{escaped(report.get('started_at'))}</span><span>{duration(report['elapsed_seconds'])}</span><span class="mode">{escaped(mode.upper())}</span>{header_links}</div></header>
 <section class="notice {status}"><strong>{escaped(title)}</strong><span>{escaped(report.get('reason') or ('Every expected selection and server cleanup passed.' if mode=='real' else 'Synthetic fixture results; this is not proof of real model support.'))}</span></section>
@@ -360,6 +366,13 @@ def render_markdown(report):
         lines += ['**Fixture results — not proof of real model support.**', '']
     if report.get("reason"):
         lines += [markdown(report["reason"]), '']
+    if report.get('selection_mode') == 'cached':
+        lines += ['Selection: all published runner-cache selections, deduplicated and frozen before preparation.',
+                  'Decision smoke checks the single-choice service contract, not learned decision quality.', '']
+    if report.get('inventory_errors'):
+        lines += ['## Cache inventory errors', '']
+        lines += [f'- {markdown(e.get("path"))}: {markdown(e.get("reason"))}' for e in report['inventory_errors']]
+        lines.append('')
     lines += ['## Model results', '',
               '| Model / preset / variant | Inputs | Load / ready | Query / assertion | Unloaded | Outcome |',
               '|---|---|---|---|---|---|']

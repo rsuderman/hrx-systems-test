@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prepare fresh pipelines and verified read-only model assets for offline tests."""
 import argparse
+import contextlib
 from dataclasses import asdict, replace
 import importlib.util
 import json
@@ -30,6 +31,8 @@ def helper(name):
 
 SEED = helper('seed-models')
 SDK = helper('sdk-environment')
+INVENTORY = helper('cached-inventory')
+ASSETS = helper('asset-verification')
 read_json, write_json, digest = SEED.read_json, SEED.write_json, SEED.digest
 
 
@@ -52,10 +55,10 @@ def source_identity(repo):
     return {'commit': commit, 'dirty': bool(subprocess.check_output(
         ['git', '-C', str(repo), 'status', '--porcelain'], text=True).strip()),
         'files_sha256': {f'scripts/{name}': digest(repo / 'scripts' / name) for name in
-                         ('prepare-cached-models.py', 'seed-models.py', 'sdk-environment.py')}}
+                         ('prepare-cached-models.py', 'seed-models.py', 'sdk-environment.py', 'cached-inventory.py', 'asset-verification.py')}}
 
 
-def indexed_cache(selection, seed, cache_root, work):
+def indexed_cache(selection, seed, cache_root, work, verifier=None):
     """Native cache for fresh code; immutable indexed files for selected assets."""
     from loom.model.fetch_storage import AcquiredFile, ContentCache
     from loom.model.lock import file_key
@@ -81,10 +84,12 @@ def indexed_cache(selection, seed, cache_root, work):
         if previous['sha256'] != item['sha256'] or previous['size'] != item['size']:
             raise ValueError('conflicting indexed identities for one asset source')
     code = SEED.native_cache(work / 'pipeline-cache', work / 'pipeline-hf', threading.Event())
+    verifier = verifier or ASSETS.Verifier()
 
     class IndexedCache(ContentCache):
         def __init__(self):
             super().__init__(code.root, huggingface=code.huggingface)
+            self.verifier = verifier
 
         def indexed(self, source, identity):
             item = by_origin.get(file_key(source.origin))
@@ -110,7 +115,7 @@ def indexed_cache(selection, seed, cache_root, work):
             path = self.indexed(source, identity)
             if path is None:
                 return code.acquire(source, identity, offline=offline, progress=progress)
-            identity.verify(path)
+            self.verifier.verify(path, identity.size, identity.sha256)
             return AcquiredFile(path, identity)
 
     return IndexedCache()
@@ -133,6 +138,8 @@ def online(baseline, seed, cache_root, work, *, location=None):
     if digest(work / 'model.json') != seed['card_sha256'] or digest(work / 'model.json.lock') != seed['lock_sha256']:
         raise ValueError('published card/lock disagree with seeded selection')
     selection = SEED.selection_for(baseline, document.text)
+    if baseline.get('selection_mode') == 'cached':
+        baseline.update(INVENTORY.workload(baseline, selection))
     cache = indexed_cache(selection, seed, cache_root, work)
     plan = plan_fetch(Document(location, document.text), selection, cache,
                       lock_location=str(work / 'model.json.lock'))
@@ -147,16 +154,17 @@ def online(baseline, seed, cache_root, work, *, location=None):
         'sources': {name: asdict(source) for name, source in plan.sources.items()},
         'identities': {name: asdict(identity) for name, identity in plan.identities.items()},
         'origins': plan.origins, 'lock_mode': plan.lock_mode, 'lock_scope': plan.lock_scope})
+    return baseline
 
 
-def offline(baseline, seed, cache_root, work, destination, entry_id, sdk_identity):
+def offline(baseline, seed, cache_root, work, destination, entry_id, sdk_identity, verifier=None):
     from loom.model.fetch import FetchPlan, install
     from loom.model.fetch_source import Document, Source
     from loom.model.lock import FileIdentity
     saved = read_json(work / 'sources.json')
     document = Document(**saved['document'])
     selection = SEED.selection_for(baseline, document.text)
-    cache = indexed_cache(selection, seed, cache_root, work)
+    cache = indexed_cache(selection, seed, cache_root, work, verifier)
     plan = FetchPlan(document, selection,
         {name: Source(**source) for name, source in saved['sources'].items()},
         {name: FileIdentity(**identity) for name, identity in saved['identities'].items()},
@@ -177,8 +185,12 @@ def offline(baseline, seed, cache_root, work, destination, entry_id, sdk_identit
         if SEED.code_file(file):
             programs.append({'path': name, 'sha256': digest(installed)})
         else:
-            plan.identities[name].verify(installed)
-            assets.append(index[name])
+            item = index[name]
+            path = ASSETS.asset_path(cache_root, item)
+            receipt = cache.verifier.verify(path, item['size'], item['sha256'])
+            installed_receipt = (receipt if installed.samefile(path) else
+                                 cache.verifier.verify(installed, item['size'], item['sha256']))
+            assets.append({**item, 'verification': receipt, 'installed_verification': installed_receipt})
     manifest = {'schema_version': 1, 'selection': selection_identity(baseline),
         'model_id': baseline['model_id'], 'model_card_path': f'/inputs/{entry_id}/model/model.json',
         'card_sha256': seed['card_sha256'], 'lock_sha256': seed['lock_sha256'],
@@ -186,12 +198,23 @@ def offline(baseline, seed, cache_root, work, destination, entry_id, sdk_identit
         'programs': programs, 'assets': assets, 'sdk_identity': sdk_identity,
         'effective_execution': baseline['published_execution'],
         'smoke_request': baseline['smoke_request'], 'smoke_expected_text': baseline['smoke_expected_text'],
-        'test_kind': 'text_smoke', 'asset_phase_network': 'disabled', 'model_executed': False}
+        'test_kind': baseline.get('test_kind', 'text_smoke'),
+        'profile_identity': baseline.get('profile_identity', 'explicit-baseline'),
+        'service_kind': baseline.get('service_kind', 'text'),
+        'asset_phase_network': 'disabled', 'asset_verification': dict(cache.verifier.stats), 'model_executed': False}
     write_json(destination / 'prepared-inputs.json', manifest)
     return manifest
 
 
 def stage(args):
+    if args.stage.startswith('batch-'):
+        operation = args.stage.removeprefix('batch-')
+        if operation == 'online':
+            subprocess.run([sys.executable, '-I', '/source/scripts/sdk-environment.py', 'install',
+                '--baseline', '/prepared/config/runtime/baseline.json', '--payload-root', '/prepared/sdk-payloads',
+                '--output', '/prepared/sdk-prepare'], check=True)
+        return subprocess.run(['/run/venv/bin/python', '-I', '/source/scripts/prepare-cached-models.py',
+                               '--native-batch', operation]).returncode
     entry = read_json(Path('/prepared/config') / args.entry_id / 'baseline.json')
     seed = read_json(Path('/prepared/models') / args.entry_id / 'seed-manifest.json')
     sdk_output = Path('/prepared/models') / args.entry_id / ('sdk-' + args.stage)
@@ -202,18 +225,64 @@ def stage(args):
                            '--native', args.stage, args.entry_id]).returncode
 
 
-def native(operation, entry_id):
+def native(operation, entry_id, work=None, verifier=None):
+    work = work or Path('/run')
     baseline = read_json(Path('/prepared/config') / entry_id / 'baseline.json')
     seed = read_json(Path('/prepared/models') / entry_id / 'seed-manifest.json')
     if operation == 'online':
-        online(baseline, seed, Path('/model-cache'), Path('/run'))
+        baseline = online(baseline, seed, Path('/model-cache'), work)
+        write_json(Path('/prepared/config') / entry_id / 'baseline.json', baseline)
     else:
         for name in ('huggingface', 'loom-assets'):
             if not os.statvfs(Path('/model-cache') / name).f_flag & os.ST_RDONLY:
                 raise ValueError('model cache mount is not read-only')
-        offline(baseline, seed, Path('/model-cache'), Path('/run'),
+        offline(baseline, seed, Path('/model-cache'), work,
                 Path('/prepared/models') / entry_id, entry_id,
-                read_json(Path('/prepared/models') / entry_id / 'sdk-offline/sdk.json')['identity'])
+                read_json(Path('/prepared/models') / entry_id / 'sdk-offline/sdk.json')['identity'], verifier)
+
+
+def native_batch(operation):
+    """One installed SDK for the full batch; model working files stay separate."""
+    suite_path = Path('/prepared/prepared-suite.json')
+    suite = read_json(suite_path)
+    verifier = ASSETS.Verifier(ASSETS.load_index('/prepared/asset-verification.json'),
+                              full=suite.get('full_integrity', False))
+    ids = set(read_json('/prepared/batch-entry-ids.json'))
+    for record in suite['entries']:
+        if record['id'] not in ids:
+            continue
+        model_dir = Path('/prepared/models') / record['id']
+        if operation == 'offline' and not (model_dir / 'online-complete.json').is_file():
+            continue
+        work = Path('/run/models') / record['id']
+        work.mkdir(parents=True, exist_ok=True)
+        log_path = model_dir / (operation + '.log')
+        record['evidence'].append(f"models/{record['id']}/{operation}.log")
+        try:
+            sdk_dir = model_dir / ('sdk-' + operation)
+            sdk_dir.mkdir(exist_ok=True)
+            shutil.copyfile('/prepared/sdk-prepare/sdk.json', sdk_dir / 'sdk.json')
+            record['evidence'].append(f"models/{record['id']}/sdk-{operation}/sdk.json")
+            with log_path.open('w') as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+                native(operation, record['id'], work, verifier)
+            if operation == 'online':
+                baseline, _, _, identity = SDK.load_baseline(Path('/prepared') / record['baseline'])
+                record.update(baseline_sha256=identity['baseline_sha256'],
+                    smoke_request=baseline['smoke_request'], smoke_expected_text=baseline['smoke_expected_text'],
+                    effective_execution=baseline['published_execution'], test_kind=baseline.get('test_kind', 'text_smoke'),
+                    service_kind=baseline.get('service_kind', 'text'), profile_identity=baseline.get('profile_identity', 'explicit-baseline'))
+                write_json(model_dir / 'online-complete.json', {'status': 'passed'})
+            else:
+                record['preparation'] = {'status': 'ready', 'reason': None}
+                record['inputs_manifest'] = f"models/{record['id']}/prepared-inputs.json"
+                record['inputs_manifest_sha256'] = digest(model_dir / 'prepared-inputs.json')
+        except Exception as error:
+            record['preparation'] = {'status': 'failed', 'reason': f'{operation}: {type(error).__name__}: {error}'}
+        finally:
+            if operation == 'offline':
+                suite['asset_verification'] = dict(verifier.stats)
+            write_json(suite_path, suite)
+            print(f"{operation}: {record['selection']['model_id']}: {record['preparation']['reason'] or 'ready'}", flush=True)
 
 
 def run_host(args):
@@ -222,9 +291,15 @@ def run_host(args):
         raise ValueError('root must be an absolute directory other than /')
     root = root.resolve(strict=True)
     cache_root = root / 'cache'
-    suite_path = (args.suite or REPO / 'config/cached-model-tests.json').resolve(strict=True)
-    suite = read_json(suite_path)
-    if suite.get('schema_version') != 1 or not suite.get('entries'):
+    cached = getattr(args, 'selection', None) == 'cached'
+    if getattr(args, 'runtime_baseline', None) and not cached:
+        raise ValueError('--runtime-baseline requires --selection cached')
+    if cached and args.suite:
+        raise ValueError('--selection cached and --suite are mutually exclusive')
+    suite_path = None if cached else (args.suite or REPO / 'config/cached-model-tests.json').resolve(strict=True)
+    inventory, candidates = INVENTORY.discover(cache_root) if cached else (None, [])
+    suite = {'schema_version': 1, 'entries': candidates} if cached else read_json(suite_path)
+    if suite.get('schema_version') != 1 or (not suite.get('entries') and not (cached and inventory['errors'])):
         raise ValueError('suite must have schema_version1 and nonempty entries')
     ids = [entry['id'] for entry in suite['entries']]
     if 'runtime' in ids or len(set(ids)) != len(ids) or any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', value) for value in ids):
@@ -232,14 +307,35 @@ def run_host(args):
     subprocess.run(['docker', 'info'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     output = (args.output or root / 'runs' / ('prepared-' + uuid.uuid4().hex)).absolute()
     output.mkdir(parents=True, exist_ok=False)
+    ASSETS.write_index(output / ASSETS.INDEX_NAME, ASSETS.load_index(cache_root / ASSETS.INDEX_NAME))
+    if cached:
+        write_json(output / 'inventory.json', inventory)
+        template_path = (getattr(args, 'runtime_baseline', None) or REPO / 'config/single-model-e2e.json').resolve(strict=True)
+        template, _, _, _ = SDK.load_baseline(template_path)
+        generated = output / 'selection-config'
+        generated.mkdir()
+        shutil.copyfile(template_path.parent / template['sdk']['dependency_lock'], generated / template['sdk']['dependency_lock'])
+        for candidate in candidates:
+            baseline = {k: template[k] for k in ('schema_version', 'sdk', 'container')}
+            baseline.update(candidate['selection'], selection_mode='cached',
+                            test_override=INVENTORY.override_for(REPO, candidate['selection']))
+            baseline_path = generated / (candidate['id'] + '.json')
+            write_json(baseline_path, baseline)
+            candidate['_baseline'] = baseline_path
     attempt = {'schema_version': 1, 'attempt_id': output.name, 'source': source_identity(REPO),
-        'suite_sha256': digest(suite_path), 'runtime': None,
+        'suite_sha256': None if cached else digest(suite_path), 'runtime': None,
+        'selection_mode': 'cached' if cached else 'suite',
+        'inventory_errors': inventory['errors'] if cached else [],
+        'full_integrity': getattr(args, 'full_integrity', False),
         'cache_roots': {name: {'host_path': str((cache_root / name).resolve(strict=True)),
                              'container_path': '/model-cache/' + name}
                         for name in ('huggingface', 'loom-assets')},
-        'entries': [{'id': entry['id'], 'test_kind': 'text_smoke',
+        'entries': [{'id': entry['id'], 'test_kind': 'unresolved' if cached else 'text_smoke',
                      'preparation': {'status': 'failed', 'reason': 'preparation not reached'},
                      'inputs_manifest': None, 'evidence': []} for entry in suite['entries']]}
+    if cached:
+        attempt['inventory_sha256'] = digest(output / 'inventory.json')
+        attempt['inventory_path'] = 'inventory.json'
     container_name = 'hrx-prepare-' + uuid.uuid4().hex
     def interrupted(signum, frame):
         raise KeyboardInterrupt
@@ -250,12 +346,16 @@ def run_host(args):
         for config, record in zip(suite['entries'], attempt['entries']):
             entry_id = config['id']
             try:
-                baseline_path = contained(REPO, config['baseline'])
+                if cached:
+                    record['selection'] = config['selection']
+                    if config['conflict']:
+                        raise ValueError('conflicting_seed_manifests: aliases disagree on immutable asset identities')
+                baseline_path = config['_baseline'] if cached else contained(REPO, config['baseline'])
                 baseline, lock, _, identity = SDK.load_baseline(baseline_path)
                 record.update(baseline_sha256=identity['baseline_sha256'],
                     dependency_lock_sha256=identity['dependency_lock_sha256'],
-                    selection=selection_identity(baseline), smoke_request=baseline['smoke_request'],
-                    smoke_expected_text=baseline['smoke_expected_text'], effective_execution=baseline['published_execution'])
+                    selection=selection_identity(baseline), smoke_request=baseline.get('smoke_request'),
+                    smoke_expected_text=baseline.get('smoke_expected_text'), effective_execution=baseline.get('published_execution'))
                 runtime_key = {'image': baseline['container']['image'], 'platform': baseline['container']['platform'],
                                'sdk': baseline['sdk'], 'dependency_lock_sha256': identity['dependency_lock_sha256']}
                 config_dir = output / 'config' / entry_id
@@ -265,8 +365,11 @@ def run_host(args):
                                 config_dir / baseline['sdk']['dependency_lock'])
                 model_dir = output / 'models' / entry_id
                 model_dir.mkdir(parents=True)
-                seed_path = contained(cache_root, config['seed_manifest'])
-                shutil.copyfile(seed_path, model_dir / 'seed-manifest.json')
+                if cached:
+                    (model_dir / 'seed-manifest.json').write_bytes(config['_raw'])
+                else:
+                    seed_path = contained(cache_root, config['seed_manifest'])
+                    shutil.copyfile(seed_path, model_dir / 'seed-manifest.json')
                 record['baseline'] = f'config/{entry_id}/baseline.json'
                 record['evidence'] = [f'models/{entry_id}/seed-manifest.json']
                 if attempt['runtime'] is None:
@@ -295,44 +398,42 @@ def run_host(args):
                     record['preparation'] = {'status': 'failed', 'reason': f'common runtime: {type(error).__name__}: {error}'}
                 write_json(output / 'prepared-suite.json', attempt)
                 return 1
-        for record, runtime_key, model_dir in contexts:
-            entry_id = record['id']
-            try:
-                with tempfile.TemporaryDirectory(prefix='.prepare-work-', dir=output) as temporary:
-                    work = Path(temporary)
-                    common = ['docker', 'run', '--rm', '--pull=never', '--name', container_name, '--read-only',
-                        '--platform', runtime_key['platform'], '--user', f'{os.getuid()}:{os.getgid()}',
-                        '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-                        '--tmpfs', '/tmp:rw,size=128m,mode=1777', '--env', 'HOME=/tmp', '--env', 'PYTHONNOUSERSITE=1',
-                        '--mount', f'type=bind,src={SCRIPT_DIR},dst=/source/scripts,readonly',
-                        '--mount', f'type=bind,src={output},dst=/prepared',
-                        '--mount', f'type=bind,src={work},dst=/run']
-                    for name in ('huggingface', 'loom-assets'):
-                        common += ['--mount', f'type=bind,src={cache_root / name},dst=/model-cache/{name},readonly']
+        if contexts:
+            write_json(output / 'batch-entry-ids.json', [record['id'] for record, _, _ in contexts])
+            with tempfile.TemporaryDirectory(prefix='.prepare-work-', dir=output) as temporary:
+                common = ['docker', 'run', '--rm', '--pull=never', '--name', container_name, '--read-only',
+                    '--platform', runtime['platform'], '--user', f'{os.getuid()}:{os.getgid()}',
+                    '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+                    '--tmpfs', '/tmp:rw,size=128m,mode=1777', '--env', 'HOME=/tmp', '--env', 'PYTHONNOUSERSITE=1',
+                    '--mount', f'type=bind,src={SCRIPT_DIR},dst=/source/scripts,readonly',
+                    '--mount', f'type=bind,src={output},dst=/prepared',
+                    '--mount', f'type=bind,src={temporary},dst=/run']
+                for name in ('huggingface', 'loom-assets'):
+                    common += ['--mount', f'type=bind,src={cache_root / name},dst=/model-cache/{name},readonly']
+                for operation in ('online', 'offline'):
+                    command = common + ['--network', 'bridge' if operation == 'online' else 'none']
+                    if operation == 'online' and os.environ.get('HF_TOKEN'):
+                        command += ['--env', 'HF_TOKEN']
+                    command += [runtime['image'], 'python', '-I', '/source/scripts/prepare-cached-models.py',
+                                '--stage', 'batch-' + operation]
                     try:
-                        for operation in ('online', 'offline'):
-                            command = common + ['--network', 'bridge' if operation == 'online' else 'none']
-                            if operation == 'online' and os.environ.get('HF_TOKEN'):
-                                command += ['--env', 'HF_TOKEN']
-                            command += [runtime_key['image'], 'python', '-I', '/source/scripts/prepare-cached-models.py',
-                                        '--stage', operation, '--entry-id', entry_id]
-                            record['evidence'].append(f'models/{entry_id}/{operation}.log')
-                            with (model_dir / (operation + '.log')).open('w') as log:
-                                subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT, timeout=600)
-                            shutil.rmtree(work / 'venv')
-                            record['evidence'].append(f'models/{entry_id}/sdk-{operation}/sdk.json')
+                        with (output / ('batch-' + operation + '.log')).open('w') as log:
+                            subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT,
+                                           timeout=600 * len(contexts))
+                    except Exception as error:
+                        attempt = read_json(output / 'prepared-suite.json')
+                        for record in attempt['entries']:
+                            if record['preparation']['reason'] == 'preparation not reached':
+                                record['preparation'] = {'status': 'failed', 'reason': f'batch {operation}: {error}'}
+                        write_json(output / 'prepared-suite.json', attempt)
+                        return 1
                     finally:
                         subprocess.run(['docker', 'rm', '-f', container_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                record['preparation'] = {'status': 'ready', 'reason': None}
-                record['inputs_manifest'] = f'models/{entry_id}/prepared-inputs.json'
-                record['inputs_manifest_sha256'] = digest(model_dir / 'prepared-inputs.json')
-            except Exception as error:
-                record['preparation'] = {'status': 'failed', 'reason': f'{type(error).__name__}: {error}'}
-            finally:
-                write_json(output / 'prepared-suite.json', attempt)
+                attempt = read_json(output / 'prepared-suite.json')
         print(f'Prepared suite: {output / "prepared-suite.json"}', flush=True)
-        return int(any(item['preparation']['status'] != 'ready' for item in attempt['entries']))
+        return int(bool(attempt['inventory_errors']) or any(item['preparation']['status'] != 'ready' for item in attempt['entries']))
     except KeyboardInterrupt:
+        attempt = read_json(output / 'prepared-suite.json')
         for record in attempt['entries']:
             if record['preparation']['reason'] == 'preparation not reached':
                 record['preparation'] = {'status': 'failed', 'reason': 'preparation interrupted'}
@@ -347,9 +448,12 @@ def run_host(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--suite', type=Path)
+    parser.add_argument('--selection', choices=('cached',), help='derive the suite from this runner’s published seed manifests')
+    parser.add_argument('--runtime-baseline', type=Path, help='shared SDK/image baseline for cached selection')
+    parser.add_argument('--full-integrity', action='store_true', help='hash every distinct physical asset once instead of trusting unchanged seed receipts')
     parser.add_argument('--root', type=Path)
     parser.add_argument('--output', type=Path)
-    parser.add_argument('--stage', choices=('online', 'offline'), help=argparse.SUPPRESS)
+    parser.add_argument('--stage', choices=('online', 'offline', 'batch-online', 'batch-offline'), help=argparse.SUPPRESS)
     parser.add_argument('--entry-id', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.stage:
@@ -362,7 +466,9 @@ def main():
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 4 and sys.argv[1] == '--native':
+    if len(sys.argv) == 3 and sys.argv[1] == '--native-batch':
+        native_batch(sys.argv[2])
+    elif len(sys.argv) == 4 and sys.argv[1] == '--native':
         native(sys.argv[2], sys.argv[3])
     else:
         raise SystemExit(main())

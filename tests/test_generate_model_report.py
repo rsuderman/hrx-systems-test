@@ -60,6 +60,15 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report['counts']['cycles'],2)
         self.assertIn('Cycle 2',html)
         self.assertIn('2 lifecycle cycles',md)
+
+    def test_cache_inventory_errors_remain_failed_and_human_readable(self):
+        self.raw['selection_mode'] = 'cached'
+        self.raw['inventory_errors'] = [{'path': 'models/private', 'reason': 'Permission denied'}]
+        report, html, md = self.generate()
+        self.assertEqual(report['status'], 'failed')
+        self.assertIn('Cache inventory errors', md)
+        self.assertIn('Permission denied', html)
+        self.assertIn('all published runner-cache selections', md)
     def test_mixed_failure_and_not_run_keep_all_expected_entries(self):
         for identifier,status in [('failed-model','failed'),('unreached','not_run')]:
             expected=copy.deepcopy(self.raw['expected_entries'][0]);expected['id']=identifier

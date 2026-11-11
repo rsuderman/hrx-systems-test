@@ -2,6 +2,15 @@ name: Cached-model verification
 on:
   workflow_dispatch:
     inputs:
+      full_integrity:
+        description: Rehash each distinct cached asset once instead of trusting unchanged writer receipts
+        type: boolean
+        default: false
+      selection:
+        description: Explicit proven suite or all selections seeded on this runner
+        type: choice
+        options: [suite, cached]
+        default: suite
       device_uri:
         description: Explicit device for the operator-selected compatible suite
         type: string
@@ -24,6 +33,8 @@ jobs:
       CONFIGURED_CACHE_ROOT: ${{ vars.HRX_SYSTEMS_ROOT }}
       DEVICE_URI: ${{ inputs.device_uri }}
       TEST_CYCLES: ${{ inputs.cycles }}
+      MODEL_SELECTION: ${{ inputs.selection }}
+      FULL_INTEGRITY: ${{ inputs.full_integrity }}
       PYTHONNOUSERSITE: '1'
       PYTHONPATH: ''
     steps:
@@ -56,7 +67,15 @@ jobs:
         run: |
           set -euo pipefail
           root="${CONFIGURED_CACHE_ROOT:-${HRX_SYSTEMS_ROOT:-$HOME/.local/share/hrx-systems-test}}"
-          bash scripts/prepare-cached-models.sh --root "$root" --output "$E2E_OUTPUT/prepared" >"$E2E_OUTPUT/prepare.log" 2>&1
+          selection_args=()
+          [[ "${FULL_INTEGRITY:-false}" != true ]] || selection_args+=(--full-integrity)
+          if [[ "${MODEL_SELECTION:-suite}" = cached ]]; then
+            selection_args+=(--selection cached)
+          elif [[ "${MODEL_SELECTION:-suite}" != suite ]]; then
+            echo 'Unknown model selection mode' >&2
+            exit 1
+          fi
+          bash scripts/prepare-cached-models.sh --root "$root" --output "$E2E_OUTPUT/prepared" "${selection_args[@]}" >"$E2E_OUTPUT/prepare.log" 2>&1
       - name: Run the prepared suite offline through one server
         id: run
         if: ${{ !cancelled() && steps.initialize.outcome == 'success' }}
@@ -122,6 +141,7 @@ jobs:
             ${{ env.E2E_OUTPUT }}/report.log
             ${{ env.E2E_OUTPUT }}/report/
             ${{ env.E2E_OUTPUT }}/results/suite-result.json
+            ${{ env.E2E_OUTPUT }}/results/inventory.json
             ${{ env.E2E_OUTPUT }}/results/server.log
             ${{ env.E2E_OUTPUT }}/results/container.log
             ${{ env.E2E_OUTPUT }}/results/workflow.json
