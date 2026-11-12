@@ -35,7 +35,23 @@ positive run identity and full commit SHA; supplied run URLs must match that
 GitHub repository/run (and optional attempt). GitHub summaries use that validated
 run link for artifact access; local summaries retain relative links to bundled
 files. The summary shows concise coverage, model results, runtime/GPU, source/run
-and lifecycle sections. Full nested identities stay in downloadable JSON rather
+and lifecycle sections. Failures appear first with readable publication names,
+actual failed operations and concise observed details. Passing selections have a
+separate collapsible table; not-run/incomplete selections remain visible in their
+own section. Infrastructure, inventory and cleanup errors also appear under
+Failures. Selection counts and failure-case counts are distinct when cycles fail.
+
+The renderer uses the same version1 failure records as the failure bundle. After
+collecting failures, pass `--failures "$attempt/failures/failures.json"`; without
+that argument the shared collector derives records from the saved results alone.
+Supplied records must match the attempt, selection identities and coverage counts.
+Full diagnostics remain in HTML/JSON and the failure bundle; Markdown limits table
+rows and diagnostic excerpts explicitly so large failing runs do not overwhelm
+the job summary. Renderer output never links to a sibling failure directory that
+will be absent from the independent report archive. The workflow adds actual
+failure/full-report artifact URLs only after upload; download and unzip the full
+report artifact, then open `report/index.html`. Failed uploads must be described
+as unavailable rather than advertised with guessed links. Full nested identities stay in downloadable JSON rather
 than being flattened into the job summary. Local results work without metadata or with local SHA-only metadata.
 
 The report displays expected test-entry counts, a separate distinct model-ID
@@ -43,7 +59,8 @@ count and repeated lifecycle cycles and marks fixture evidence clearly. Text smo
 vision or untested preset support. Only a nonempty real suite with successful
 assertions, model removal and final server cleanup receives the Verified banner.
 
-Compact files are bounded to2MiB each and128MiB total, at most4096 referenced files.
+Compact files are bounded to2MiB each (referenced `.log` files may be4MiB),
+and128MiB total, at most4096 referenced files.
 Weights, tokenizer/model cards and SDK/code payloads are excluded. The renderer
 copies only referenced evidence plus raw results; it never scans or recursively
 exports a model/cache directory. HTML uses inline CSS/system fonts and no scripts,

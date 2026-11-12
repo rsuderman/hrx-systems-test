@@ -1,5 +1,7 @@
 """Read-only native preparation fixtures plus small host contract checks."""
+from contextlib import redirect_stdout
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -26,6 +28,45 @@ class HostContractTests(unittest.TestCase):
         self.assertEqual(sum('install' in command for command in commands), 1)
         self.assertEqual([command[-1] for command in commands if '--native-batch' in command], ['online', 'offline'])
         self.assertTrue(all(command[0] == '/run/venv/bin/python' for command in commands if '--native-batch' in command))
+
+    def test_batch_online_progress_reports_actual_success_and_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_root = Path(directory)
+            prepared = fixture_root / 'prepared'
+            model_dir = prepared / 'models/example'
+            model_dir.mkdir(parents=True)
+            (prepared / 'sdk-prepare').mkdir()
+            (prepared / 'sdk-prepare/sdk.json').write_text('{}')
+            real_copy = PREP.shutil.copyfile
+            def mapped_path(value):
+                value = str(value)
+                return fixture_root / value.lstrip('/') if value.startswith(('/prepared', '/run')) else Path(value)
+            def copy(source, destination):
+                return real_copy(mapped_path(source), destination)
+            def batch(reason=None):
+                suite = {'schema_version': 1, 'entries': [{'id': 'example',
+                    'baseline': 'config/example/baseline.json',
+                    'selection': {'model_id': 'Example'}, 'evidence': [],
+                    'preparation': {'status': 'failed', 'reason': 'preparation not reached'}}]}
+                output = io.StringIO()
+                def read(path):
+                    return ['example'] if str(path).endswith('batch-entry-ids.json') else suite
+                with patch.object(PREP, 'Path', side_effect=mapped_path), \
+                        patch.object(PREP, 'read_json', side_effect=read), \
+                        patch.object(PREP.ASSETS, 'load_index', return_value={}), \
+                        patch.object(PREP.shutil, 'copyfile', side_effect=copy), \
+                        patch.object(PREP.SDK, 'load_baseline', return_value=({'smoke_request': {},
+                            'smoke_expected_text': '4', 'published_execution': {}}, None, None, {'baseline_sha256': 'fixture'})), \
+                        patch.object(PREP, 'native', side_effect=reason), redirect_stdout(output):
+                    PREP.native_batch('online')
+                return output.getvalue()
+            good = batch()
+            self.assertIn('prepare 1/1 online: Example: pipeline fetched; assets available', good)
+            self.assertNotIn('preparation not reached', good)
+            # The batch uses an existing per-operation SDK directory on a repeat.
+            bad = batch(RuntimeError('fixture fetch failed'))
+            self.assertIn('FAIL online: RuntimeError: fixture fetch failed', bad)
+            self.assertNotIn('pipeline fetched; assets available', bad)
 
     def test_path_rejects_parent_and_symlink_escape(self):
         with tempfile.TemporaryDirectory() as directory:

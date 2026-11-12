@@ -50,6 +50,7 @@ prepare_status=null
 run_status=null
 cleanup_status=null
 report_status=null
+package_status=0
 child_pid=""
 current_stage=""
 interrupted=0
@@ -71,7 +72,7 @@ run_stage() {
   current_stage="$name"
   shift
   echo "Starting $name; log: $output/$name.log"
-  "$@" >"$output/$name.log" 2>&1 &
+  python3 -u -I "$script_dir/ci-progress.py" --label "$name" --log "$output/$name.log" -- "$@" &
   child_pid=$!
   local result=0
   wait "$child_pid" || result=$?
@@ -80,6 +81,14 @@ run_stage() {
   current_stage=""
   write_status
   echo "$name exited $result"
+}
+package_failures() {
+  local result=0
+  bash "$script_dir/package-model-failures.sh" --attempt "$output" --output "$output/failures" --zip "$output/model-failures.zip" >>"$output/package.log" 2>&1 || result=$?
+  if ((result != 0)); then
+    package_status="$result"
+    echo "Failure packaging exited $result; see $output/package.log" >&2
+  fi
 }
 on_signal() {
   local code="$1"
@@ -100,10 +109,13 @@ on_signal() {
   if [[ -d "$output/results" ]]; then
     run_stage cleanup bash "$script_dir/run-prepared-models.sh" --cleanup --output "$output/results"
   fi
+  write_status
+  package_failures
   if [[ -f "$output/results/suite-result.json" ]]; then
-    run_stage report bash "$script_dir/generate-model-report.sh" --results "$output/results" --output "$output/report"
+    run_stage report bash "$script_dir/generate-model-report.sh" --results "$output/results" --output "$output/report" --failures "$output/failures/failures.json"
   fi
   write_status
+  package_failures
   echo "Interrupted; retained attempt evidence: $output" >&2
   exit "$code"
 }
@@ -138,17 +150,27 @@ if [[ -f "$output/prepared/prepared-suite.json" ]]; then
 else
   echo "No prepared suite; execution not run. See $output/prepare.log" >&2
 fi
+write_status
+package_failures
 if [[ -f "$output/results/suite-result.json" ]]; then
-  run_stage report bash "$script_dir/generate-model-report.sh" --results "$output/results" --output "$output/report"
+  run_stage report bash "$script_dir/generate-model-report.sh" --results "$output/results" --output "$output/report" --failures "$output/failures/failures.json"
 else
   echo "No raw results; report not generated. Stage diagnostics retained in $output" >&2
 fi
-if [[ "$keep_prepared" = false && "$cleanup_status" = 0 ]]; then
+write_status
+package_failures
+if [[ "$keep_prepared" = false && "$cleanup_status" = 0 && "$package_status" = 0 ]]; then
   rm -rf -- "$output/prepared"
 fi
 write_status
-printf 'Attempt: %s\nReport: %s\n' "$output" "$output/report/index.html"
-for result in "$prepare_status" "$run_status" "$cleanup_status" "$report_status"; do
+printf 'Attempt: %s\n' "$output"
+if [[ -f "$output/report/index.html" ]]; then
+  printf 'Report: %s\n' "$output/report/index.html"
+elif [[ -f "$output/failures/summary.md" ]]; then
+  cat "$output/failures/summary.md"
+fi
+[[ ! -f "$output/model-failures.zip" ]] || printf 'Failures: %s\n' "$output/model-failures.zip"
+for result in "$prepare_status" "$run_status" "$cleanup_status" "$report_status" "$package_status"; do
   [[ "$result" != null ]] || exit 1
   ((result == 0)) || exit "$result"
 done

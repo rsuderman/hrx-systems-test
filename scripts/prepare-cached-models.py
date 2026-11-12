@@ -33,6 +33,8 @@ SEED = helper('seed-models')
 SDK = helper('sdk-environment')
 INVENTORY = helper('cached-inventory')
 ASSETS = helper('asset-verification')
+PROGRESS = helper('ci-progress')
+CAPTURE = helper('evidence-capture')
 read_json, write_json, digest = SEED.read_json, SEED.write_json, SEED.digest
 
 
@@ -55,7 +57,7 @@ def source_identity(repo):
     return {'commit': commit, 'dirty': bool(subprocess.check_output(
         ['git', '-C', str(repo), 'status', '--porcelain'], text=True).strip()),
         'files_sha256': {f'scripts/{name}': digest(repo / 'scripts' / name) for name in
-                         ('prepare-cached-models.py', 'seed-models.py', 'sdk-environment.py', 'cached-inventory.py', 'asset-verification.py')}}
+                         ('prepare-cached-models.py', 'seed-models.py', 'sdk-environment.py', 'cached-inventory.py', 'asset-verification.py', 'ci-progress.py', 'evidence-capture.py', 'failure-records.py')}}
 
 
 def indexed_cache(selection, seed, cache_root, work, verifier=None):
@@ -210,10 +212,11 @@ def stage(args):
     if args.stage.startswith('batch-'):
         operation = args.stage.removeprefix('batch-')
         if operation == 'online':
-            subprocess.run([sys.executable, '-I', '/source/scripts/sdk-environment.py', 'install',
-                '--baseline', '/prepared/config/runtime/baseline.json', '--payload-root', '/prepared/sdk-payloads',
-                '--output', '/prepared/sdk-prepare'], check=True)
-        return subprocess.run(['/run/venv/bin/python', '-I', '/source/scripts/prepare-cached-models.py',
+            with PROGRESS.operation('prepare SDK installation'):
+                subprocess.run([sys.executable, '-u', '-I', '/source/scripts/sdk-environment.py', 'install',
+                    '--baseline', '/prepared/config/runtime/baseline.json', '--payload-root', '/prepared/sdk-payloads',
+                    '--output', '/prepared/sdk-prepare'], check=True)
+        return subprocess.run(['/run/venv/bin/python', '-u', '-I', '/source/scripts/prepare-cached-models.py',
                                '--native-batch', operation]).returncode
     entry = read_json(Path('/prepared/config') / args.entry_id / 'baseline.json')
     seed = read_json(Path('/prepared/models') / args.entry_id / 'seed-manifest.json')
@@ -221,7 +224,7 @@ def stage(args):
     subprocess.run([sys.executable, '-I', '/source/scripts/sdk-environment.py', 'install',
         '--baseline', '/prepared/config/runtime/baseline.json', '--payload-root', '/prepared/sdk-payloads',
         '--output', str(sdk_output)], check=True)
-    return subprocess.run(['/run/venv/bin/python', '-I', '/source/scripts/prepare-cached-models.py',
+    return subprocess.run(['/run/venv/bin/python', '-u', '-I', '/source/scripts/prepare-cached-models.py',
                            '--native', args.stage, args.entry_id]).returncode
 
 
@@ -248,7 +251,7 @@ def native_batch(operation):
     verifier = ASSETS.Verifier(ASSETS.load_index('/prepared/asset-verification.json'),
                               full=suite.get('full_integrity', False))
     ids = set(read_json('/prepared/batch-entry-ids.json'))
-    for record in suite['entries']:
+    for position, record in enumerate(suite['entries'], 1):
         if record['id'] not in ids:
             continue
         model_dir = Path('/prepared/models') / record['id']
@@ -258,13 +261,17 @@ def native_batch(operation):
         work.mkdir(parents=True, exist_ok=True)
         log_path = model_dir / (operation + '.log')
         record['evidence'].append(f"models/{record['id']}/{operation}.log")
+        label = f"prepare {position}/{len(suite['entries'])} {operation}: {record['selection']['model_id']}"
         try:
             sdk_dir = model_dir / ('sdk-' + operation)
             sdk_dir.mkdir(exist_ok=True)
             shutil.copyfile('/prepared/sdk-prepare/sdk.json', sdk_dir / 'sdk.json')
             record['evidence'].append(f"models/{record['id']}/sdk-{operation}/sdk.json")
-            with log_path.open('w') as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
-                native(operation, record['id'], work, verifier)
+            # Native output stays in the per-model log. Heartbeats use the saved
+            # trusted console stream despite redirect_stdout inside the operation.
+            with PROGRESS.operation(label):
+                with log_path.open('w') as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+                    native(operation, record['id'], work, verifier)
             if operation == 'online':
                 baseline, _, _, identity = SDK.load_baseline(Path('/prepared') / record['baseline'])
                 record.update(baseline_sha256=identity['baseline_sha256'],
@@ -282,7 +289,10 @@ def native_batch(operation):
             if operation == 'offline':
                 suite['asset_verification'] = dict(verifier.stats)
             write_json(suite_path, suite)
-            print(f"{operation}: {record['selection']['model_id']}: {record['preparation']['reason'] or 'ready'}", flush=True)
+            failed = record['preparation']['status'] == 'failed' and record['preparation']['reason'] != 'preparation not reached'
+            outcome = ('FAIL ' + record['preparation']['reason']) if failed else (
+                'pipeline fetched; assets available' if operation == 'online' else 'prepared; cache reused')
+            PROGRESS.emit(label + ': ' + outcome)
 
 
 def run_host(args):
@@ -336,6 +346,8 @@ def run_host(args):
     if cached:
         attempt['inventory_sha256'] = digest(output / 'inventory.json')
         attempt['inventory_path'] = 'inventory.json'
+    PROGRESS.emit(f"prepare: {len(attempt['entries'])} selections; cache verification " +
+                  ('full integrity' if attempt['full_integrity'] else 'unchanged asset receipts'))
     container_name = 'hrx-prepare-' + uuid.uuid4().hex
     def interrupted(signum, frame):
         raise KeyboardInterrupt
@@ -388,12 +400,15 @@ def run_host(args):
         if contexts:
             try:
                 runtime = attempt['runtime']
-                subprocess.run(['docker', 'pull', '--platform', runtime['platform'], runtime['image']], check=True,
-                               stdout=subprocess.DEVNULL, timeout=300)
-                subprocess.run([sys.executable, '-I', str(SCRIPT_DIR / 'sdk-environment.py'), 'acquire',
+                PROGRESS.emit(f"prepare: SDK {runtime['sdk']['version']} at {runtime['sdk']['source_commit']}")
+                PROGRESS.run(['docker', 'pull', '--platform', runtime['platform'], runtime['image']],
+                    output / 'image-pull.log', label='prepare container image', check=True, timeout=300)
+                PROGRESS.run([sys.executable, '-u', '-I', str(SCRIPT_DIR / 'sdk-environment.py'), 'acquire',
                     '--baseline', str(output / runtime['sdk_baseline']), '--payload-root', str(output / 'sdk-payloads'),
-                    '--output', str(output / 'sdk-download')], check=True, timeout=600)
+                    '--output', str(output / 'sdk-download')], output / 'sdk-acquire.log',
+                    label='prepare SDK acquisition', check=True, timeout=600)
             except Exception as error:
+                PROGRESS.emit(f'prepare: FAIL common runtime: {type(error).__name__}: {error}')
                 for record, _, _ in contexts:
                     record['preparation'] = {'status': 'failed', 'reason': f'common runtime: {type(error).__name__}: {error}'}
                 write_json(output / 'prepared-suite.json', attempt)
@@ -414,13 +429,13 @@ def run_host(args):
                     command = common + ['--network', 'bridge' if operation == 'online' else 'none']
                     if operation == 'online' and os.environ.get('HF_TOKEN'):
                         command += ['--env', 'HF_TOKEN']
-                    command += [runtime['image'], 'python', '-I', '/source/scripts/prepare-cached-models.py',
+                    command += [runtime['image'], 'python', '-u', '-I', '/source/scripts/prepare-cached-models.py',
                                 '--stage', 'batch-' + operation]
                     try:
-                        with (output / ('batch-' + operation + '.log')).open('w') as log:
-                            subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT,
-                                           timeout=600 * len(contexts))
+                        PROGRESS.run(command, output / ('batch-' + operation + '.log'),
+                                     label='prepare batch ' + operation, check=True, timeout=600 * len(contexts))
                     except Exception as error:
+                        PROGRESS.emit(f'prepare batch {operation}: FAIL {type(error).__name__}: {error}')
                         attempt = read_json(output / 'prepared-suite.json')
                         for record in attempt['entries']:
                             if record['preparation']['reason'] == 'preparation not reached':
@@ -433,6 +448,7 @@ def run_host(args):
         print(f'Prepared suite: {output / "prepared-suite.json"}', flush=True)
         return int(bool(attempt['inventory_errors']) or any(item['preparation']['status'] != 'ready' for item in attempt['entries']))
     except KeyboardInterrupt:
+        PROGRESS.emit('prepare: interrupted; cleaning up owned container')
         attempt = read_json(output / 'prepared-suite.json')
         for record in attempt['entries']:
             if record['preparation']['reason'] == 'preparation not reached':
@@ -440,6 +456,10 @@ def run_host(args):
         write_json(output / 'prepared-suite.json', attempt)
         return 1
     finally:
+        try:
+            CAPTURE.preparation_snapshot(output, read_json(output / 'prepared-suite.json'))
+        except (ValueError, OSError) as error:
+            print(f'Preparation evidence capture unavailable: {error}', file=sys.stderr)
         subprocess.run(['docker', 'rm', '-f', container_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for sig, previous in old_handlers.items():
             signal.signal(sig, previous)
@@ -461,6 +481,7 @@ def main():
     try:
         return run_host(args)
     except (ValueError, OSError, subprocess.SubprocessError, KeyError, TypeError) as error:
+        PROGRESS.emit(f'prepare: FAIL {type(error).__name__}: {error}')
         print(f'Cannot prepare: {error}', file=sys.stderr)
         return 1
 

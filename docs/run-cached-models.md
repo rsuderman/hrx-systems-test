@@ -27,7 +27,20 @@ load/query/unload lifecycle without multiplying model coverage. These options
 do not change the pinned runtime or pipeline publication. Preparation still
 selects the repository-authored model/request settings.
 
-Each stage writes its own log at the attempt root. `stages.json` records stage
+Local commands and GitHub show concise `[hrx]` progress as work runs: preparation
+batch/model counters, SDK setup, shared-server startup, model cycle phases, brief
+failures and completion times. Quiet operations print a heartbeat after roughly
+30 seconds; native server/compiler output, query answers, polls and dependency
+lists stay in diagnostic files. Python producers flush immediately across the
+host/container boundaries. Cancellation terminates the owned child process group;
+log forwarding preserves the real command's failure status.
+
+Each stage writes its own log at the attempt root. Progress transport keeps at
+most 4 MiB per stage/container log, retaining its head and tail when truncated.
+Adjacent `*.log.metadata.json` records observed/retained bytes, captured ranges
+and whether capture completed; an interrupted capture does not claim a known
+original length. Per-model and shared server evidence retain their own policies.
+ `stages.json` records stage
 exits and `workflow.json` carries only optional source/run/runner identity;
 local runs need no GitHub credentials. A failed preparation may still produce a
 partial suite: execution tests ready entries while preserving failed entries.
@@ -74,3 +87,32 @@ HOME. Account ACLs, Docker/GPU group membership and any privileged setup remain
 operator responsibilities. No repository variable changes or dispatch occur
 when installing these scripts. Real GitHub validation requires publishing the
 reviewed source and manually dispatching the workflow separately.
+
+## Download failure evidence
+
+The combined command also writes `failures/failures.json` and, when failures
+exist, `model-failures.zip`. Unzip it and start with `README.md`: each failed
+model/cycle has a readable case folder with the saved request, response when
+reached, lifecycle facts and available pipeline source. Common runtime identity
+and server/stage logs appear once under `shared/`. Shared log lines are context
+for the run, not proof that a particular model emitted them. Bounded logs retain
+head and tail, with explicit capture/truncation metadata.
+
+Collection runs before reporting and again afterward, so preparation, startup,
+interruption, cleanup and HTML-rendering failures can still produce a bundle.
+Missing evidence is labeled. A clean pass produces no empty ZIP. Neither the
+bundle nor the separate full-report artifact includes weights, tokenizers,
+installed SDKs or environments.
+
+To regenerate from saved attempt evidence without a cache, GPU or network:
+
+```sh
+bash scripts/package-model-failures.sh --attempt "$attempt" \
+  --output "$attempt/failures" --zip "$attempt/model-failures.zip"
+```
+
+GitHub publishes the failure directory as the separate
+`model-failures-RUN-ATTEMPT` artifact, retained for seven days. Downloading that
+artifact already yields one ZIP; it contains no nested ZIP. The job summary
+uses the actual artifact download URL after upload. Packaging/upload failure is
+reported separately and never erases the original model/stage failure.

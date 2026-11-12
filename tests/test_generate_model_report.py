@@ -83,8 +83,11 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report['counts'],{'expected':3,'passed':1,'failed':1,'not_run':1,'incomplete':0,'cycles':2,'distinct_models':1})
         self.assertEqual(report['status'],'failed')
         self.assertIn('wrong answer',html);self.assertIn('prior cleanup failed',md)
-        # Failure notes belong below the uninterrupted table.
-        self.assertEqual(md.count('| Qwen/Qwen3.5-0.8B'),3)
+        # Failures are visible first, with passing and unreached selections separated.
+        self.assertLess(md.index('## Failures'), md.index('<summary>Passed (1)'))
+        self.assertLess(md.index('<summary>Passed (1)'), md.index('## Not run / incomplete'))
+        self.assertNotIn('**failed-model:**', md)
+        self.assertIn('expected 4, got 5', md)
     def test_missing_phase_and_model_never_imply_success(self):
         del self.raw['models'][0]['cycles'][0]['unload']
         other=copy.deepcopy(self.raw['expected_entries'][0]);other['id']='no-result'
@@ -126,7 +129,7 @@ class ReportTests(unittest.TestCase):
                 with self.assertRaises(REPORT.ReportError):REPORT.evidence_path(self.results,reference)
         (self.results/'escape.log').symlink_to(outside)
         with self.assertRaises(REPORT.ReportError):REPORT.evidence_path(self.results,'escape.log')
-        (self.results/'huge.log').write_bytes(b'x'*(REPORT.MAX_FILE+1))
+        (self.results/'huge.log').write_bytes(b'x'*(REPORT.MAX_LOG+1))
         with self.assertRaises(REPORT.ReportError):REPORT.evidence_path(self.results,'huge.log')
     def test_re_render_is_deterministic_and_does_not_mutate_saved_results(self):
         before={str(p.relative_to(self.results)):hashlib.sha256(p.read_bytes()).hexdigest() for p in self.results.rglob('*') if p.is_file()}
@@ -232,8 +235,10 @@ class ReportTests(unittest.TestCase):
         self.raw['source']={'commit':'faaa58382503bfa38b50e8c2a4c6d270f37e3bc6','dirty':False,
                             'files_sha256':{'script.py':'retained-source-identity'}}
         report,html,md=self.generate()
-        for heading in ('Coverage','Model results','Runtime and hardware','Source and run','Server lifecycle','Artifacts'):
+        for heading in ('Coverage','Runtime and hardware','Source and run','Server lifecycle','Artifacts'):
             self.assertIn('## '+heading,md)
+        self.assertIn('<details><summary>Passed (1)</summary>',md)
+        self.assertNotIn('## Failures',md)
         self.assertIn('**HRX runtime:** hrx-loom 0.1.0',md)
         self.assertIn('release v0.1.0',md)
         self.assertIn('**GPU:** AMD GPU',md)
@@ -272,6 +277,147 @@ class ReportTests(unittest.TestCase):
         self.assertIn('workflow’s artifact bundle',md)
         self.assertNotIn('javascript:',md)
         self.assertNotIn('](index.html)',md)
+    def test_failure_manifest_is_shared_with_renderers_and_escapes_diagnostics(self):
+        self.raw['models'][0]['cycles'][0]['assertion']={'status':'failed','reason':'opaque wrapper'}
+        self.raw['models'][0]['status']='failed';self.raw['status']='failed';self.save()
+        manifest=REPORT.load_failures(REPORT.normalize(self.results),self.results)
+        manifest['cases'][0]['display_name']='Publisher / Friendly model | <script>'
+        manifest['cases'][0]['summary']='Specific observed failure | <svg>'
+        manifest['cases'][0]['diagnostic']='Full original diagnostic </pre><script>unsafe</script> [untrusted](javascript:alert(1))'
+        path=self.root/'failures.json';path.write_text(json.dumps(manifest))
+        report=REPORT.generate(self.results,self.root/'report',path)
+        html=(self.root/'report/index.html').read_text();md=(self.root/'report/summary.md').read_text()
+        self.assertEqual(report['failures'],manifest)
+        self.assertIn(r'Specific observed failure \| &lt;svg&gt;',md)
+        self.assertIn('Full original diagnostic &lt;/pre&gt;&lt;script&gt;',html)
+        self.assertNotIn('<script>',html)
+        self.assertNotIn('](../failures/',md)
+        self.assertNotIn('[untrusted](javascript:',md)
+        self.assertIn('&#91;untrusted&#93;',md)
+        self.assertIn('1 failed selections · 1 failure cases',md)
+
+    def test_manifest_attempt_counts_and_passing_case_conflicts_rejected(self):
+        self.save();normalized=REPORT.normalize(self.results)
+        original=REPORT.load_failures(normalized,self.results)
+        for field,value in [('attempt_id','other-attempt'),('counts',{**original['counts'],'passed':99})]:
+            bad=copy.deepcopy(original);bad[field]=value
+            path=self.root/'bad.json';path.write_text(json.dumps(bad))
+            with self.assertRaises(REPORT.ReportError): REPORT.load_failures(normalized,self.results,path)
+        bad=copy.deepcopy(original)
+        bad['cases']=[{'case_id':'false','scope':'model','selection_id':'qwen-08b','display_name':'model',
+                       'phase':'query','summary':'false','diagnostic':'false'}]
+        path=self.root/'bad.json';path.write_text(json.dumps(bad))
+        with self.assertRaisesRegex(REPORT.ReportError,'passing or unknown'): REPORT.load_failures(normalized,self.results,path)
+
+    def test_manifest_cannot_omit_failed_selection_while_retaining_counts(self):
+        self.raw['models'][0]['cycles'][0]['readiness']={'status':'failed','reason':'readiness failed'}
+        self.raw['models'][0]['status']='failed';self.raw['status']='failed'
+        self.save();normalized=REPORT.normalize(self.results)
+        manifest=REPORT.load_failures(normalized,self.results)
+        self.assertEqual(manifest['counts']['failed'],1)
+        manifest['cases']=[]
+        path=self.root/'missing-cases.json';path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(REPORT.ReportError,'omit a failed selection'):
+            REPORT.load_failures(normalized,self.results,path)
+
+    def test_multiple_cycles_and_independent_unload_failure_keep_case_counts(self):
+        cycle=self.raw['models'][0]['cycles'][0]
+        cycle['readiness']={'status':'failed','reason':'expects 11 arguments, got 10'}
+        cycle['query']={'status':'not_run','reason':'readiness failed'}
+        cycle['assertion']={'status':'not_run','reason':'readiness failed'}
+        cycle['unload']={'status':'failed','reason':'removal deadline exceeded'}
+        self.raw['models'][0]['status']='failed';self.raw['status']='failed'
+        self.raw['models'][0]['cycles'].append(copy.deepcopy(cycle))
+        report,html,md=self.generate()
+        self.assertEqual(report['counts']['failed'],1)
+        self.assertEqual(len(report['failures']['cases']),2)
+        self.assertIn('1 failed selections · 2 failure cases',md)
+        self.assertIn('readiness · cycle 1',md)
+        self.assertIn('additional failure: unload',md)
+        self.assertIn('removal deadline exceeded',html)
+        self.assertNotIn('## Passed',md)
+        self.assertNotIn('<summary>Passed (',html)
+
+    def test_failure_first_even_when_passing_selection_is_first_in_inventory(self):
+        expected=copy.deepcopy(self.raw['expected_entries'][0]);expected['id']='broken'
+        expected['selection']['model_id']='Broken model';self.raw['expected_entries'].append(expected)
+        model=copy.deepcopy(self.raw['models'][0]);model['id']='broken';model['selection']=copy.deepcopy(expected['selection'])
+        model['cycles'][0]['model_id']='Broken model'
+        model['cycles'][0]['query']={'status':'failed','reason':'query deadline exceeded'}
+        model['cycles'][0]['assertion']={'status':'not_run','reason':'query did not finish'}
+        model['status']='failed';self.raw['models'].append(model);self.raw['status']='failed'
+        report,html,md=self.generate()
+        self.assertLess(md.index('Broken model'),md.index('<summary>Passed (1)'))
+        self.assertLess(html.index('<h2>Failures</h2>'),html.index('<summary>Passed (1)'))
+        self.assertIn('query deadline exceeded',md)
+        self.assertNotIn('Support matrix',html)
+        self.assertEqual(report['counts']['expected'],2)
+
+    def test_empty_inventory_is_not_verified_and_explains_missing_coverage(self):
+        self.raw['expected_entries']=[];self.raw['models']=[];self.raw['status']='failed'
+        report,html,md=self.generate()
+        self.assertEqual(report['counts']['expected'],0)
+        self.assertIn('## Failures',md)
+        self.assertNotIn('>Verified<',html)
+        self.assertNotIn('<summary>Passed (0)',md)
+
+    def test_bounded_four_mib_logs_allowed_but_other_evidence_remains_two_mib(self):
+        log=self.results/'late.log';log.write_bytes(b'x'*(REPORT.MAX_FILE+1))
+        self.assertEqual(REPORT.evidence_path(self.results,'late.log'),log)
+        data=self.results/'late.txt';data.write_bytes(log.read_bytes())
+        with self.assertRaises(REPORT.ReportError): REPORT.evidence_path(self.results,'late.txt')
+
+    def test_forty_pass_five_failure_saved_fixture_has_clear_consistent_sections(self):
+        expected=copy.deepcopy(self.raw['expected_entries'][0]);model=copy.deepcopy(self.raw['models'][0])
+        self.raw['expected_entries']=[];self.raw['models']=[]
+        reasons=['Server expects 11 arguments; pipeline declares 10',
+                 'Server expects 11 arguments; pipeline declares 10',
+                 'Compiler rejection: g_gdn_conv2 index.assume [-3,-1] llm.loom:3199',
+                 'Compiler rejection: g_gdn_conv index.assume [-3,-1] llm.loom:10650',
+                 'expected 4 but final answer was empty']
+        names=['Qwen3-Coder 30B','LFM3 Audio 2B','MiniCPM OCR','Qwen3.8 27B','Qwen3 14B']
+        for number in range(45):
+            entry=copy.deepcopy(expected);entry['id']=f'cached-{number:064x}'
+            entry['selection']['model_id']=f'Passing model {number}' if number<40 else names[number-40]
+            result=copy.deepcopy(model);result['id']=entry['id'];result['selection']=copy.deepcopy(entry['selection'])
+            result['cycles'][0]['model_id']=entry['selection']['model_id']
+            if number>=40:
+                phase='readiness' if number<44 else 'assertion'
+                result['cycles'][0][phase]={'status':'failed','reason':reasons[number-40]}
+                result['status']='failed'
+            if number==44:
+                response=self.results/'last-response.json'
+                response.write_text(json.dumps({'choices':[{'message':{'content':''},'finish_reason':'length'}],
+                                                'usage':{'completion_tokens':256}}))
+                result['cycles'][0]['response_path']='last-response.json'
+            self.raw['expected_entries'].append(entry);self.raw['models'].append(result)
+        self.raw['status']='failed'
+        report,html,md=self.generate()
+        self.assertEqual(report['counts']['expected'],45)
+        self.assertEqual(report['counts']['passed'],40)
+        self.assertEqual(report['counts']['failed'],5)
+        self.assertEqual(len(report['failures']['cases']),5)
+        self.assertIn('<summary>Passed (40)',md)
+        self.assertIn('Server expects 11 arguments; pipeline declares 10',md)
+        self.assertIn('256 completion tokens; expected 4',md)
+        self.assertLess(md.index('Qwen3-Coder 30B'),md.index('<summary>Passed (40)'))
+        self.assertNotIn('**cached-',md)
+        links=Links();links.feed(html)
+        for link in links.links:
+            if not urlsplit(link).scheme and not link.startswith('#'):
+                self.assertTrue((self.root/'report'/unquote(link)).is_file(),link)
+
+    def test_long_diagnostic_is_explicitly_shortened_only_in_summary(self):
+        reason='detailed compiler failure '+('retained detail '*800)
+        self.raw['models'][0]['cycles'][0]['readiness']={'status':'failed','reason':reason}
+        self.raw['models'][0]['status']='failed';self.raw['status']='failed'
+        report,html,md=self.generate()
+        self.assertIn(reason,html)
+        self.assertNotIn(reason,md)
+        self.assertIn('Diagnostic shortened here',md)
+        self.assertEqual(report['failures']['cases'][0]['diagnostic'],reason)
+        self.assertLess(len(md),10000)
+
     def test_malformed_schema_and_duplicate_entries_rejected(self):
         for edit in ['schema','duplicates']:
             self.raw=json.loads((FIXTURE/'suite-result.json').read_text())

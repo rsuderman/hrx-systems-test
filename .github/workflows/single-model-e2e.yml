@@ -75,7 +75,8 @@ jobs:
             echo 'Unknown model selection mode' >&2
             exit 1
           fi
-          bash scripts/prepare-cached-models.sh --root "$root" --output "$E2E_OUTPUT/prepared" "${selection_args[@]}" >"$E2E_OUTPUT/prepare.log" 2>&1
+          python3 -u -I scripts/ci-progress.py --label prepare --log "$E2E_OUTPUT/prepare.log" -- \
+            bash scripts/prepare-cached-models.sh --root "$root" --output "$E2E_OUTPUT/prepared" "${selection_args[@]}"
       - name: Run the prepared suite offline through one server
         id: run
         if: ${{ !cancelled() && steps.initialize.outcome == 'success' }}
@@ -87,9 +88,10 @@ jobs:
             echo 'No usable prepared manifest; no server started.' >&2
             exit 1
           fi
-          bash scripts/run-prepared-models.sh --prepared "$E2E_OUTPUT/prepared" \
+          python3 -u -I scripts/ci-progress.py --label run --log "$E2E_OUTPUT/run.log" -- \
+            bash scripts/run-prepared-models.sh --prepared "$E2E_OUTPUT/prepared" \
             --output "$E2E_OUTPUT/results" --workflow "$E2E_OUTPUT/workflow.json" \
-            --device-uri "$DEVICE_URI" --cycles "$TEST_CYCLES" >"$E2E_OUTPUT/run.log" 2>&1
+            --device-uri "$DEVICE_URI" --cycles "$TEST_CYCLES"
       - name: Confirm execution-owned container cleanup
         id: cleanup
         if: ${{ always() && steps.initialize.outcome == 'success' }}
@@ -97,7 +99,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/run-prepared-models.sh --cleanup --output "$E2E_OUTPUT/results" >"$E2E_OUTPUT/cleanup.log" 2>&1
+          python3 -u -I scripts/ci-progress.py --label cleanup --log "$E2E_OUTPUT/cleanup.log" -- \
+            bash scripts/run-prepared-models.sh --cleanup --output "$E2E_OUTPUT/results"
+      - name: Save pre-report outcomes and collect failure evidence
+        id: collect_failures
+        if: ${{ always() && steps.initialize.outcome == 'success' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
+          RUN_OUTCOME: ${{ steps.run.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
+        run: |
+          set -euo pipefail
+          python3 -I - "$E2E_OUTPUT/stages.json" <<'PYTHON'
+          import json, os, pathlib, sys
+          values = {name: os.environ[name.upper() + '_OUTCOME'] for name in ('prepare', 'run', 'cleanup')}
+          pathlib.Path(sys.argv[1]).write_text(json.dumps({'schema_version': 1, 'stages': values}, indent=2) + '\n')
+          PYTHON
+          bash scripts/package-model-failures.sh --attempt "$E2E_OUTPUT" --output "$E2E_OUTPUT/failures"
       - name: Generate verification artifacts from saved results
         id: report
         if: ${{ always() && steps.initialize.outcome == 'success' }}
@@ -109,7 +129,8 @@ jobs:
             echo 'No raw results; retaining preparation/execution diagnostics.' >&2
             exit 1
           fi
-          bash scripts/generate-model-report.sh --results "$E2E_OUTPUT/results" --output "$E2E_OUTPUT/report" >"$E2E_OUTPUT/report.log" 2>&1
+          python3 -u -I scripts/ci-progress.py --label report --log "$E2E_OUTPUT/report.log" -- \
+            bash scripts/generate-model-report.sh --results "$E2E_OUTPUT/results" --output "$E2E_OUTPUT/report" --failures "$E2E_OUTPUT/failures/failures.json"
       - name: Save stage outcomes
         if: ${{ always() && steps.initialize.outcome == 'success' }}
         shell: bash
@@ -126,6 +147,30 @@ jobs:
           statuses = {name: os.environ[name.upper() + '_OUTCOME'] for name in names}
           pathlib.Path(sys.argv[1]).write_text(json.dumps({'schema_version': 1, 'stages': statuses}, indent=2) + '\n')
           PY
+      - name: Finalize failure bundle including report errors
+        id: package_failures
+        if: ${{ always() && steps.initialize.outcome == 'success' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=0
+          bash scripts/package-model-failures.sh --attempt "$E2E_OUTPUT" --output "$E2E_OUTPUT/failures" || status=$?
+          if [[ -f "$E2E_OUTPUT/failures/README.md" ]]; then
+            printf 'has_failures=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'has_failures=false\n' >> "$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+      - name: Upload one failure-evidence download
+        id: upload_failures
+        if: ${{ always() && steps.initialize.outcome == 'success' && steps.package_failures.outputs.has_failures == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: model-failures-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.E2E_OUTPUT }}/failures/
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload compact report and available failure evidence
         id: upload
         if: ${{ always() && steps.initialize.outcome == 'success' }}
@@ -139,11 +184,14 @@ jobs:
             ${{ env.E2E_OUTPUT }}/run.log
             ${{ env.E2E_OUTPUT }}/cleanup.log
             ${{ env.E2E_OUTPUT }}/report.log
+            ${{ env.E2E_OUTPUT }}/*.log.metadata.json
             ${{ env.E2E_OUTPUT }}/report/
             ${{ env.E2E_OUTPUT }}/results/suite-result.json
             ${{ env.E2E_OUTPUT }}/results/inventory.json
             ${{ env.E2E_OUTPUT }}/results/server.log
+            ${{ env.E2E_OUTPUT }}/results/server.log.capture.json
             ${{ env.E2E_OUTPUT }}/results/container.log
+            ${{ env.E2E_OUTPUT }}/results/container.log.metadata.json
             ${{ env.E2E_OUTPUT }}/results/workflow.json
             ${{ env.E2E_OUTPUT }}/results/sdk-runtime/sdk.json
             ${{ env.E2E_OUTPUT }}/results/models/*/serve-result.json
@@ -163,6 +211,11 @@ jobs:
         if: ${{ always() && steps.initialize.outcome == 'success' }}
         shell: bash
         env:
+          COLLECT_OUTCOME: ${{ steps.collect_failures.outcome }}
+          PACKAGE_OUTCOME: ${{ steps.package_failures.outcome }}
+          FAILURE_ARTIFACT_URL: ${{ steps.upload_failures.outputs.artifact-url }}
+          FAILURE_UPLOAD_OUTCOME: ${{ steps.upload_failures.outcome }}
+          HAS_FAILURES: ${{ steps.package_failures.outputs.has_failures }}
           ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
           UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
           PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
@@ -172,6 +225,18 @@ jobs:
         run: |
           set -euo pipefail
           publication_status=0
+          if [[ "${COLLECT_OUTCOME:-success}" != success || "${PACKAGE_OUTCOME:-success}" != success ]]; then
+            printf '\n**Failure evidence incomplete:** collection or packaging failed. Inspect the stage outcomes and available report diagnostics.\n' >> "$GITHUB_STEP_SUMMARY"
+            publication_status=1
+          fi
+          if [[ "${HAS_FAILURES:-false}" = true ]]; then
+            if [[ "${FAILURE_UPLOAD_OUTCOME:-skipped}" = success && "${FAILURE_ARTIFACT_URL:-}" =~ ^https://[^[:space:]]+$ ]]; then
+              printf '\n[Download all failure details and logs](%s)\n\n' "${FAILURE_ARTIFACT_URL:-}" >> "$GITHUB_STEP_SUMMARY"
+            else
+              printf '\n**Failure bundle unavailable:** packaging or upload did not produce a usable download.\n' >> "$GITHUB_STEP_SUMMARY"
+              publication_status=1
+            fi
+          fi
           if [[ -f "$E2E_OUTPUT/report/summary.md" ]]; then
             if python3 -I - "$E2E_OUTPUT/report/summary.md" >> "$GITHUB_STEP_SUMMARY" <<'PY'
           import pathlib, re, sys, urllib.parse
@@ -188,6 +253,8 @@ jobs:
               printf '## Verification summary unavailable\n\nThe generated summary contains links that cannot be published in GitHub. See the artifact publication outcome below for report access and diagnostics.\n' >> "$GITHUB_STEP_SUMMARY"
               publication_status=1
             fi
+          elif [[ -f "$E2E_OUTPUT/failures/summary.md" ]]; then
+            cat "$E2E_OUTPUT/failures/summary.md" >> "$GITHUB_STEP_SUMMARY"
           else
             printf '## Verification incomplete\n\nNo rendered report was produced. Stage diagnostics are retained in the run artifacts when upload succeeds.\n' >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -205,19 +272,23 @@ jobs:
             printf '\n**Report bundle unavailable:** artifact upload did not succeed. Local results and diagnostics remain on the runner.\n' >> "$GITHUB_STEP_SUMMARY"
           fi
           printf '\n| Stage | Outcome |\n|---|---|\n' >> "$GITHUB_STEP_SUMMARY"
-          for stage in prepare run cleanup report upload; do
+          for stage in prepare run cleanup report collect package upload failure_upload; do
             variable="${stage^^}_OUTCOME"
-            printf '| %s | %s |\n' "$stage" "${!variable}" >> "$GITHUB_STEP_SUMMARY"
+            printf '| %s | %s |\n' "$stage" "${!variable:-skipped}" >> "$GITHUB_STEP_SUMMARY"
           done
           exit "$publication_status"
       - name: Remove disposable prepared inputs after confirmed cleanup
-        if: ${{ always() && steps.initialize.outcome == 'success' && steps.cleanup.outcome == 'success' }}
+        if: ${{ always() && steps.initialize.outcome == 'success' && steps.cleanup.outcome == 'success' && steps.package_failures.outcome == 'success' }}
         shell: bash
         run: rm -rf -- "$E2E_OUTPUT/prepared"
       - name: Require all stages and publication to pass
         if: always()
         shell: bash
         env:
+          PACKAGE_OUTCOME: ${{ steps.package_failures.outcome }}
+          COLLECT_OUTCOME: ${{ steps.collect_failures.outcome }}
+          FAILURE_UPLOAD_OUTCOME: ${{ steps.upload_failures.outcome }}
+          HAS_FAILURES: ${{ steps.package_failures.outputs.has_failures }}
           INITIALIZE_OUTCOME: ${{ steps.initialize.outcome }}
           PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
           RUN_OUTCOME: ${{ steps.run.outcome }}
@@ -227,7 +298,8 @@ jobs:
           SUMMARY_OUTCOME: ${{ steps.summary.outcome }}
         run: |
           set -euo pipefail
-          for stage in INITIALIZE PREPARE RUN CLEANUP REPORT UPLOAD SUMMARY; do
+          for stage in INITIALIZE PREPARE RUN CLEANUP REPORT COLLECT PACKAGE UPLOAD SUMMARY; do
             variable="${stage}_OUTCOME"
             [[ "${!variable}" = success ]] || { echo "$stage did not pass: ${!variable}" >&2; exit 1; }
           done
+          [[ "${HAS_FAILURES:-false}" != true || "${FAILURE_UPLOAD_OUTCOME:-skipped}" = success ]] || exit 1

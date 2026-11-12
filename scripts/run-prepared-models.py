@@ -29,6 +29,12 @@ MAX_EVIDENCE_BYTES = 4 * 1024 * 1024
 _ASSET_SPEC = importlib.util.spec_from_file_location('asset_verification', SCRIPT_DIR / 'asset-verification.py')
 ASSETS = importlib.util.module_from_spec(_ASSET_SPEC)
 _ASSET_SPEC.loader.exec_module(ASSETS)
+_PROGRESS_SPEC = importlib.util.spec_from_file_location('ci_progress', SCRIPT_DIR / 'ci-progress.py')
+PROGRESS = importlib.util.module_from_spec(_PROGRESS_SPEC)
+_PROGRESS_SPEC.loader.exec_module(PROGRESS)
+_CAPTURE_SPEC = importlib.util.spec_from_file_location('evidence_capture', SCRIPT_DIR / 'evidence-capture.py')
+CAPTURE = importlib.util.module_from_spec(_CAPTURE_SPEC)
+_CAPTURE_SPEC.loader.exec_module(CAPTURE)
 
 
 def read_json(path):
@@ -316,12 +322,13 @@ def assert_response(entry, response):
         raise ValueError(f'unsupported_test_kind: {kind}')
 
 
-def run_cycle(api, entry, model, output, cycle_number, limits):
+def run_cycle(api, entry, model, output, cycle_number, limits, position=None):
     name = entry['selection']['model_id']
     prefix = f"models/{entry['id']}/cycle-{cycle_number}"
     cycle = {'model_id': name, 'incarnation': None,
              **{key: phase() for key in PHASES}}
     model['cycles'].append(cycle)
+    label = f"run {position or '?'} cycle {cycle_number}: {name}"
     stage, accepted = 'load', False
     started = time.monotonic()
     try:
@@ -336,22 +343,26 @@ def run_cycle(api, entry, model, output, cycle_number, limits):
             'definition': {'kind': 'decision' if test_kind == 'decision_smoke' else 'text'}}
         # Registration can be accepted even if the client loses its response.
         accepted = True
-        api.request('/v1/models/register', deployment, accepted=(202,))
+        with PROGRESS.operation(label + ': load'):
+            api.request('/v1/models/register', deployment, accepted=(202,))
         cycle['load'] = phase('passed', None, started)
         stage, started = 'readiness', time.monotonic()
-        wait_ready(api, name, cycle, limits.readiness_timeout)
+        with PROGRESS.operation(label + ': readiness', timeout=limits.readiness_timeout):
+            wait_ready(api, name, cycle, limits.readiness_timeout)
         cycle['readiness'] = phase('passed', None, started)
         stage, started = 'query', time.monotonic()
         request = {**entry['smoke_request'], 'model': name}
         cycle['request_path'] = prefix + '/request.json'
         write_json(output / cycle['request_path'], request)
-        response = api.request('/v1/systemone' if test_kind == 'decision_smoke' else '/v1/chat/completions',
-                               request, timeout=limits.query_timeout)
+        with PROGRESS.operation(label + ': query', timeout=limits.query_timeout):
+            response = api.request('/v1/systemone' if test_kind == 'decision_smoke' else '/v1/chat/completions',
+                                   request, timeout=limits.query_timeout)
         cycle['response_path'] = prefix + '/response.json'
         write_json(output / cycle['response_path'], response)
         cycle['query'] = phase('passed', None, started)
         stage, started = 'assertion', time.monotonic()
-        assert_response(entry, response)
+        with PROGRESS.operation(label + ': answer check'):
+            assert_response(entry, response)
         cycle['assertion'] = phase('passed', None, started)
     except Exception as error:
         cycle[stage] = phase('failed', f'{type(error).__name__}: {error}', started)
@@ -368,8 +379,9 @@ def run_cycle(api, entry, model, output, cycle_number, limits):
             api.deadline = started + limits.unload_timeout + limits.abort_timeout
             reclamation_path = prefix + '/pool-reclamation.json'
             try:
-                cycle['unload'] = unregister(api, name, cycle, limits.unload_timeout, limits.abort_timeout)
-                reclaim_idle_pools(api, output / reclamation_path)
+                with PROGRESS.operation(label + ': unload', timeout=limits.unload_timeout + limits.abort_timeout):
+                    cycle['unload'] = unregister(api, name, cycle, limits.unload_timeout, limits.abort_timeout)
+                    reclaim_idle_pools(api, output / reclamation_path)
                 cycle['unload'].update(elapsed_seconds=time.monotonic() - started, evidence=[reclamation_path])
             except Exception as error:
                 cycle['unload'] = phase('failed', f'{type(error).__name__}: {error}', started)
@@ -382,19 +394,12 @@ def run_cycle(api, entry, model, output, cycle_number, limits):
     model['reason'] = None if model['status'] == 'passed' else next(
         (cycle[key].get('reason') for key in PHASES if cycle[key]['status'] != 'passed'), model.get('reason'))
     write_json(output / f"models/{entry['id']}/serve-result.json", model)
+    PROGRESS.emit(label + (': PASS' if passed else ': FAIL ' + PROGRESS.summarize(model['reason'] or 'model phase failed')))
     return cycle['unload']['status'] == 'passed'
 
 
 def drain_log(pipe, path):
-    written = 0
-    with path.open('wb') as stream:
-        while chunk := pipe.read1(8192):
-            if written < MAX_EVIDENCE_BYTES:
-                kept = chunk[:MAX_EVIDENCE_BYTES - written]
-                stream.write(kept)
-                written += len(kept)
-                stream.flush()
-        stream.flush()
+    CAPTURE.drain_log(pipe, path, MAX_EVIDENCE_BYTES)
 
 
 def stop_process(process, timeout):
@@ -431,7 +436,7 @@ def execute_lifecycle(suite, result, output, command, address, limits):
         server['identity'].update(pid=process.pid)
         thread = threading.Thread(target=drain_log, args=(process.stdout, output / 'server.log'), daemon=True)
         thread.start()
-        result['evidence'].append('server.log')
+        result['evidence'].extend(['server.log', 'server.log.capture.json'])
         api = Api(address, process)
         def ready():
             try:
@@ -442,15 +447,18 @@ def execute_lifecycle(suite, result, output, command, address, limits):
                 if error.status == 503:
                     return False
                 raise
-        poll(ready, limits.startup_timeout, process)
+        with PROGRESS.operation('run shared server startup', timeout=limits.startup_timeout):
+            poll(ready, limits.startup_timeout, process)
         if api.status():
             raise RuntimeError('new empty server unexpectedly has model registrations')
         server['start'] = phase('passed', None, started)
-        for entry, model in zip(suite['entries'], result['models']):
+        PROGRESS.emit('run: shared server ready')
+        for position, (entry, model) in enumerate(zip(suite['entries'], result['models']), 1):
             if entry['preparation']['status'] != 'ready':
+                PROGRESS.emit(f"run {position}/{len(suite['entries'])}: {entry.get('selection', {}).get('model_id', entry['id'])}: not run; preparation failed")
                 continue
             for number in range(1, limits.cycles + 1):
-                safe = run_cycle(api, entry, model, output, number, limits)
+                safe = run_cycle(api, entry, model, output, number, limits, f"{position}/{len(suite['entries'])}")
                 write_json(output / 'suite-result.json', result)
                 if not safe:
                     raise RuntimeError('model removal could not be confirmed; remaining entries not run')
@@ -461,13 +469,15 @@ def execute_lifecycle(suite, result, output, command, address, limits):
     except (Exception, KeyboardInterrupt) as error:
         lifecycle_failed = True
         result['reason'] = f'{type(error).__name__}: {error}'
+        PROGRESS.emit('run: FAIL ' + result['reason'])
         if server['start']['status'] != 'passed':
             server['start'] = phase('failed', result['reason'], started)
     finally:
         if process is not None:
             started = time.monotonic()
             try:
-                server['shutdown'] = stop_process(process, limits.shutdown_timeout)
+                with PROGRESS.operation('run shared server shutdown', timeout=limits.shutdown_timeout):
+                    server['shutdown'] = stop_process(process, limits.shutdown_timeout)
             except Exception as error:
                 server['shutdown'] = phase('failed', f'{type(error).__name__}: {error}', started)
             if thread is not None:
@@ -490,6 +500,10 @@ def execute_lifecycle(suite, result, output, command, address, limits):
         for model in result['models']:
             write_json(output / f"models/{model['id']}/serve-result.json", model)
         write_json(output / 'suite-result.json', result)
+    PROGRESS.emit(f"run: {sum(model['status'] == 'passed' for model in result['models'])} passed; "
+                  f"{sum(model['status'] == 'failed' for model in result['models'])} failed; "
+                  f"{sum(model['status'] in ('not_run', 'incomplete') for model in result['models'])} not run/incomplete; "
+                  f"server cleanup {server['cleanup']['status']}")
     return 0 if passed else 1
 
 
@@ -659,6 +673,8 @@ def run_host(args):
     result = initial_results(suite, {'device_uri': args.device_uri})
     result['started_at'] = host_started_at
     result['source']['execution_runner_sha256'] = digest(Path(__file__))
+    result['source']['execution_helpers_sha256'] = {name: digest(SCRIPT_DIR / name) for name in
+        ('asset-verification.py', 'ci-progress.py', 'evidence-capture.py', 'failure-records.py')}
     if args.workflow:
         if args.workflow.stat().st_size > 16384:
             raise ValueError('workflow identity file exceeds its size limit')
@@ -710,17 +726,16 @@ def run_host(args):
                 '--mount', f'type=bind,src={output},dst=/results']
             for key in ('huggingface', 'loom-assets'):
                 command += ['--mount', f"type=bind,src={suite['cache_roots'][key]['host_path']},dst=/model-cache/{key},readonly"]
-            command += [suite['runtime']['image'], 'python', '-I', '/source/scripts/run-prepared-models.py',
+            command += [suite['runtime']['image'], 'python', '-u', '-I', '/source/scripts/run-prepared-models.py',
                         '--inside-container', '--device-uri', args.device_uri, '--cycles', str(args.cycles)]
             for field in ('startup_timeout', 'readiness_timeout', 'query_timeout', 'unload_timeout', 'abort_timeout', 'shutdown_timeout'):
                 command += ['--' + field.replace('_', '-'), str(getattr(args, field))]
             try:
-                with (output / 'container.log').open('w') as log:
-                    budget = (300 + args.startup_timeout + args.shutdown_timeout + len(suite['entries']) *
-                              args.cycles * (args.readiness_timeout + args.query_timeout +
-                                             args.unload_timeout + args.abort_timeout + 30))
-                    container_started = True
-                    execution = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=False, timeout=budget)
+                budget = (300 + args.startup_timeout + args.shutdown_timeout + len(suite['entries']) *
+                          args.cycles * (args.readiness_timeout + args.query_timeout +
+                                         args.unload_timeout + args.abort_timeout + 30))
+                container_started = True
+                execution = PROGRESS.run(command, output / 'container.log', label='run execution container', timeout=budget)
             finally:
                 cleanup_container(output)
         result = read_json(output / 'suite-result.json')
@@ -730,6 +745,7 @@ def run_host(args):
     except (Exception, KeyboardInterrupt) as error:
         result = read_json(output / 'suite-result.json')
         result.update(status='failed', reason=f'{type(error).__name__}: {error}', ended_at=now())
+        PROGRESS.emit('run: FAIL ' + result['reason'])
         if result['server']['start']['status'] != 'passed':
             result['server']['start'] = phase('failed', result['reason'])
     finally:
@@ -742,6 +758,13 @@ def run_host(args):
         result['server']['identity']['container'] = name
         if result.get('elapsed_seconds') is not None:
             result['lifecycle_elapsed_seconds'] = result['elapsed_seconds']
+        try:
+            CAPTURE.failed_sources(prepared, output, suite, result)
+        except (ValueError, OSError, TypeError, KeyError) as error:
+            result['failure_capture_error'] = f'{type(error).__name__}: {error}'
+            result['status'] = 'failed'
+            result['reason'] = result.get('reason') or 'Failure evidence capture failed: ' + str(error)
+            PROGRESS.emit('run: FAIL evidence capture: ' + str(error))
         result['ended_at'] = now()
         result['elapsed_seconds'] = time.monotonic() - host_began
         write_json(output / 'suite-result.json', result)
@@ -761,9 +784,10 @@ def inside_container(args):
             if not os.statvfs(path).f_flag & os.ST_RDONLY:
                 raise ValueError('immutable execution input mount is writable')
         # Host preflight validates host-side cache paths; container sees fixed mounts.
-        subprocess.run([sys.executable, '-I', '/source/scripts/sdk-environment.py', 'install',
-            '--baseline', str(baseline), '--payload-root', str(payloads),
-            '--output', '/results/sdk-runtime'], check=True)
+        with PROGRESS.operation('run SDK installation'):
+            subprocess.run([sys.executable, '-u', '-I', '/source/scripts/sdk-environment.py', 'install',
+                '--baseline', str(baseline), '--payload-root', str(payloads),
+                '--output', '/results/sdk-runtime'], check=True)
         receipt = read_json('/results/sdk-runtime/sdk.json')
         if receipt['identity'] != suite['runtime']['sdk_identity']:
             raise ValueError('serving SDK identity differs from prepared SDK')
@@ -806,6 +830,7 @@ def main():
             cleanup_container(args.output.absolute())
             return 0
         except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+            PROGRESS.emit(f'cleanup: FAIL {type(error).__name__}: {error}')
             print(f'Execution container cleanup unconfirmed: {error}', file=sys.stderr)
             return 1
     if args.prepared is None or args.output is None:
@@ -813,6 +838,7 @@ def main():
     try:
         return run_host(args)
     except (ValueError, OSError, KeyError, TypeError) as error:
+        PROGRESS.emit(f'run: FAIL {type(error).__name__}: {error}')
         print(f'Cannot execute prepared suite: {error}', file=sys.stderr)
         return 1
 

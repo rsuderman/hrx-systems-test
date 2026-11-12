@@ -1,6 +1,8 @@
 """Real subprocess/HTTP fixtures for sequential native-model lifecycle control."""
 import argparse
 import copy
+from contextlib import redirect_stdout
+import io
 from datetime import datetime
 import importlib.util
 import json
@@ -344,6 +346,19 @@ class LifecycleTests(unittest.TestCase):
                 self.assertGreater(memory['workspace']['committed_bytes'], 0)
         self.assertEqual(result['server']['shutdown']['status'], 'passed')
 
+    def test_progress_names_failing_phase_and_keeps_selection_denominator(self):
+        self.suite['entries'][0]['preparation'] = {'status': 'failed', 'reason': 'fixture unavailable'}
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code, result, _ = self.run_fixture()
+        text = output.getvalue()
+        self.assertEqual(code, 1)
+        self.assertIn('run 1/2: first: not run; preparation failed', text)
+        self.assertIn('run 2/2 cycle 1: second: readiness: starting', text)
+        self.assertIn('run 2/2 cycle 1: second: PASS', text)
+        self.assertNotIn('REGISTER', text, 'native server output leaked into progress')
+        self.assertLess(text.index('shared server ready'), text.index('run 2/2 cycle'))
+
     def test_every_published_owned_pool_is_trimmed_before_next_registration(self):
         code, result, output = self.run_fixture('multiple_pools')
         self.assertEqual(code, 0)
@@ -502,7 +517,8 @@ class LifecycleTests(unittest.TestCase):
             return argparse.Namespace(returncode=0)
         with mock.patch.object(RUN, 'copy_evidence'), mock.patch.object(RUN, 'verify_prepared', return_value=(None, None)), \
                 mock.patch.object(RUN, 'gpu_options', return_value=([], {})), \
-                mock.patch.object(RUN, 'cleanup_container'), mock.patch.object(RUN.subprocess, 'run', side_effect=execute):
+                mock.patch.object(RUN, 'cleanup_container'), mock.patch.object(RUN.subprocess, 'run', side_effect=execute), \
+                mock.patch.object(RUN.PROGRESS, 'run', side_effect=lambda command, path, **kwargs: execute(command)):
             self.assertEqual(RUN.run_host(args), 1)
         saved = RUN.read_json(args.output / 'suite-result.json')
         self.assertEqual(saved['status'], 'failed')

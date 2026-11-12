@@ -22,7 +22,7 @@ output=""
 while (($#)); do
   case "$1" in
     --output) output="$2"; shift 2;;
-    --root|--suite|--selection|--runtime-baseline|--prepared|--results|--workflow|--device-uri|--cycles) shift 2;;
+    --root|--suite|--selection|--runtime-baseline|--prepared|--results|--workflow|--device-uri|--cycles|--failures) shift 2;;
     --cleanup|--full-integrity) shift;;
     *) exit 99;;
   esac
@@ -68,6 +68,9 @@ class StageCompositionTests(unittest.TestCase):
         scripts.mkdir(parents=True)
         self.script = scripts / 'run-cached-models.sh'
         shutil.copyfile(ROOT / 'scripts/run-cached-models.sh', self.script)
+        shutil.copyfile(ROOT / 'scripts/ci-progress.py', scripts / 'ci-progress.py')
+        for helper in ('package-model-failures.sh', 'package-model-failures.py', 'failure-records.py'):
+            shutil.copyfile(ROOT / 'scripts' / helper, scripts / helper)
         for name, kind in [('prepare-cached-models.sh', 'prepare'),
                            ('run-prepared-models.sh', 'run'),
                            ('generate-model-report.sh', 'report')]:
@@ -136,6 +139,7 @@ class StageCompositionTests(unittest.TestCase):
         self.assertEqual(self.order(), ['prepare'])
         self.assertEqual(self.status('run')['status'], 'not_run')
         self.assertTrue((self.output / 'prepare.log').is_file())
+        self.assertTrue((self.output / 'model-failures.zip').is_file())
 
     def test_execution_failure_survives_successful_report(self):
         result = self.invoke(TEST_RUN_EXIT='9')
@@ -149,6 +153,9 @@ class StageCompositionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 5)
         self.assertTrue((self.output / 'results/suite-result.json').is_file())
         self.assertEqual(self.status('report')['exit_code'], 5)
+        self.assertTrue((self.output / 'model-failures.zip').is_file())
+        manifest = json.loads((self.output / 'failures/failures.json').read_text())
+        self.assertIn('report', [case['phase'] for case in manifest['cases']])
 
     def test_cleanup_failure_retains_prepared_inputs_for_owned_container(self):
         result = self.invoke(TEST_CLEANUP_EXIT='6')
@@ -193,7 +200,7 @@ class StageCompositionTests(unittest.TestCase):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: process.poll() is None and process.kill())
         deadline = time.monotonic() + 5
-        while 'run' not in self.order() and time.monotonic() < deadline:
+        while ('run' not in self.order() or not (self.output / 'results/suite-result.json').exists()) and time.monotonic() < deadline:
             time.sleep(0.02)
         self.assertIn('run', self.order())
         process.send_signal(signal.SIGTERM)
@@ -203,22 +210,40 @@ class StageCompositionTests(unittest.TestCase):
         self.assertEqual(self.status('run')['exit_code'], 143)
         self.assertTrue((self.output / 'prepared').exists())
 
+    def test_workflow_packages_before_and_after_render_and_uploads_directory(self):
+        workflow = (ROOT / '.github/workflows/single-model-e2e.yml').read_text()
+        collect = workflow.index('      - name: Save pre-report outcomes and collect failure evidence')
+        render = workflow.index('      - name: Generate verification artifacts from saved results')
+        final = workflow.index('      - name: Finalize failure bundle including report errors')
+        upload = workflow.index('      - name: Upload one failure-evidence download')
+        self.assertLess(collect, render)
+        self.assertLess(render, final)
+        self.assertLess(final, upload)
+        section = workflow[upload:workflow.index('      - name: Upload compact report')]
+        self.assertIn('/failures/', section)
+        self.assertNotIn('.zip', section)
+        self.assertIn('retention-days: 7', section)
+
     def test_workflow_final_gate_rejects_upload_and_stage_failures(self):
         script = workflow_run_block('Require all stages and publication to pass')
         env = {**self.env, **{name + '_OUTCOME': 'success'
-               for name in ('INITIALIZE', 'PREPARE', 'RUN', 'CLEANUP', 'REPORT', 'UPLOAD', 'SUMMARY')}}
+               for name in ('INITIALIZE', 'PREPARE', 'RUN', 'CLEANUP', 'REPORT', 'COLLECT', 'PACKAGE', 'UPLOAD', 'SUMMARY')}, 'HAS_FAILURES': 'false', 'FAILURE_UPLOAD_OUTCOME': 'skipped'}
         good = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
         self.assertEqual(good.returncode, 0, good.stderr)
-        for stage in ('PREPARE', 'RUN', 'CLEANUP', 'REPORT', 'UPLOAD', 'SUMMARY'):
+        for stage in ('PREPARE', 'RUN', 'CLEANUP', 'REPORT', 'COLLECT', 'PACKAGE', 'UPLOAD', 'SUMMARY'):
             with self.subTest(stage=stage):
                 bad = subprocess.run(['bash', '-c', script], env={**env, stage + '_OUTCOME': 'failure'},
                     capture_output=True, text=True)
                 self.assertNotEqual(bad.returncode, 0)
 
-    def publish_summary(self, *, upload='success', artifact_url=None, rendered=True, workflow_metadata=True):
+    def publish_summary(self, *, upload='success', artifact_url=None, rendered=True, workflow_metadata=True,
+                        failure_url='', failure_upload='skipped', fallback=None, package='success'):
         # Recorded real run/artifact identity; this test performs no network calls.
         self.artifact_url = 'https://github.com/rsuderman/hrx-systems-test/actions/runs/42933895801/artifacts/13816663497'
         self.output.mkdir()
+        if fallback is not None:
+            (self.output / 'failures').mkdir()
+            (self.output / 'failures/summary.md').write_text(fallback)
         if rendered:
             results = self.root / 'saved-results'
             shutil.copytree(ROOT / 'tests/fixtures/model-report/passing', results)
@@ -240,7 +265,10 @@ class StageCompositionTests(unittest.TestCase):
         env = {**self.env, 'E2E_OUTPUT': str(self.output), 'GITHUB_STEP_SUMMARY': str(summary_path),
                'ARTIFACT_URL': self.artifact_url if artifact_url is None else artifact_url,
                'UPLOAD_OUTCOME': upload, 'PREPARE_OUTCOME': 'success', 'RUN_OUTCOME': 'success',
-               'CLEANUP_OUTCOME': 'success', 'REPORT_OUTCOME': 'success' if rendered else 'failure'}
+               'CLEANUP_OUTCOME': 'success', 'REPORT_OUTCOME': 'success' if rendered else 'failure',
+               'COLLECT_OUTCOME': 'success', 'PACKAGE_OUTCOME': package,
+               'HAS_FAILURES': 'true' if failure_upload != 'skipped' else 'false',
+               'FAILURE_ARTIFACT_URL': failure_url, 'FAILURE_UPLOAD_OUTCOME': failure_upload}
         published = subprocess.run(['bash', '-c', workflow_run_block('Publish readable summary and report download')],
             env=env, capture_output=True, text=True, timeout=10)
         return published, summary_path.read_text()
@@ -271,6 +299,33 @@ class StageCompositionTests(unittest.TestCase):
         links = re.findall(r'\[[^\]]*\]\(([^)]+)\)', summary)
         self.assertTrue(all(link.startswith('https://') for link in links), links)
         self.assertNotIn('](index.html)', summary)
+
+    def test_workflow_failure_download_is_independent_and_uses_exact_url(self):
+        url = 'https://github.com/owner/repo/actions/runs/42/artifacts/123'
+        result, summary = self.publish_summary(failure_url=url, failure_upload='success')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('[Download all failure details and logs](' + url + ')', summary)
+        self.assertIn('[Download verification report bundle](' + self.artifact_url + ')', summary)
+
+    def test_workflow_failure_upload_error_is_explicit_without_broken_link(self):
+        result, summary = self.publish_summary(failure_upload='failure')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Failure bundle unavailable', summary)
+        self.assertNotIn('[Download all failure details and logs]', summary)
+        self.assertIn('| failure_upload | failure |', summary)
+
+    def test_workflow_packaging_error_is_visible_even_without_failure_archive(self):
+        result, summary = self.publish_summary(package='failure')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Failure evidence incomplete', summary)
+        self.assertIn('| package | failure |', summary)
+
+    def test_workflow_renderer_failure_publishes_saved_readable_fallback(self):
+        result, summary = self.publish_summary(rendered=False,
+            fallback='## Verification incomplete\n\nExpected: **45**\n\n## Failures\n\nSDK acquisition: access denied\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Expected: **45**', summary)
+        self.assertIn('SDK acquisition: access denied', summary)
 
     def test_workflow_upload_failure_keeps_summary_without_download_link(self):
         published, summary = self.publish_summary(upload='failure')
