@@ -114,7 +114,7 @@ def evidence_path(root, relative):
             break
         require(not parent.is_symlink(), f"Symlink evidence is not allowed: {relative}")
     require(candidate.resolve().is_relative_to(root), f"Evidence escapes results: {relative}")
-    require(candidate.is_file() and candidate.stat().st_size <= (MAX_LOG if path.suffix.lower() == ".log" else MAX_FILE),
+    require(candidate.is_file() and candidate.stat().st_size <= (32 * 1024 * 1024 if path.name == "selection-snapshot.json" else (MAX_LOG if path.suffix.lower() == ".log" or path.name == "runtime-selection.json" else MAX_FILE)),
             f"Missing or oversized evidence: {relative}")
     return candidate
 
@@ -509,6 +509,7 @@ def render_html(report, root):
     remaining = rows["not_run"] + rows["incomplete"]
     incomplete = ('<section><h2>Not run / incomplete</h2>' + table_header + ''.join(remaining)
                   + '</tbody></table></div></section>') if remaining else ''
+    compatibility = '<section><h2>Pipeline compatibility</h2><pre>' + escaped(chr(10).join(upgrade_markdown(report))) + '</pre></section>' if report.get('runtime_policy') else ''
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'">
 <title>HRX model verification · {escaped(report['attempt_id'])}</title><style>{CSS}</style></head><body><main>
@@ -517,6 +518,7 @@ def render_html(report, root):
 <section class="notice {status}"><strong>{escaped(title)}</strong><span>{escaped(report.get('reason') or ('Every expected selection and server cleanup passed.' if mode=='real' else 'Synthetic fixture results; this is not proof of real model support.'))}</span></section>
 <section class="tiles">{tiles}</section><p class="caption">{counts['distinct_models']} distinct model IDs · Rows represent configured test entries; repeated cycles increase neither count. Text smoke results cover only the tested text path.</p>
 {RUNTIME_SUMMARY.render_html(report["runtime_summary"])}
+{compatibility}
 {failure_html(report)}
 {passing}
 {incomplete}
@@ -549,6 +551,7 @@ def render_markdown(report):
         lines += ['Selection: all published runner-cache selections, deduplicated and frozen before preparation.',
                   'Decision smoke checks the single-choice service contract, not learned decision quality.', '']
     lines += RUNTIME_SUMMARY.markdown(report["runtime_summary"])
+    lines += upgrade_markdown(report)
     lines += failure_markdown(report)
     passed = [model for model in report["models"] if model["status"] == "passed"]
     remaining = [model for model in report["models"] if model["status"] in ("not_run", "incomplete")]
@@ -611,6 +614,19 @@ def render_markdown(report):
         lines.append('[HTML report](index.html) · [Final JSON](report.json) · [Raw results](suite-result.json)')
     lines += ['', 'Full runtime, hardware and source identities are retained in the downloadable JSON results.', '']
     return '\n'.join(lines)
+
+
+def upgrade_markdown(report):
+    policy = report.get('runtime_policy')
+    if not isinstance(policy, dict): return []
+    lines = ['', '## Pipeline compatibility', '',
+             'Runtime policy: `' + markdown(str(policy.get('policy_id') or policy.get('id') or policy.get('family') or 'recorded')) + '`.', '',
+             '| Entry | Pipeline upgrade | Migration |', '| --- | --- | --- |']
+    for model in report['models']:
+        upgrade = model.get('pipeline_upgrade') or {}
+        lines.append('| ' + markdown(model['id']) + ' | ' + markdown(upgrade.get('status','not recorded')) + ' | ' + markdown(upgrade.get('migration_id','none')) + ' |')
+    lines += ['', 'Published and effective execution settings, original publication metadata, policy digests and source identities are retained in the JSON results and evidence.', '']
+    return lines
 
 
 def generate(results, output, failures=None):

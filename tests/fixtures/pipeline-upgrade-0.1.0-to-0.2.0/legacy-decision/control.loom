@@ -1,0 +1,1351 @@
+// SystemOne decision control for the LiquidAI d1 (lfm3) GGUF. Each question is
+// rendered with the GGUF "systemone" chat template exactly as llama.cpp's
+// server-decision.cpp does (state, instructions, options, label codes; text
+// values have special-token spellings broken by a zero-width space; non-string
+// values are JSON with Python json.dumps separators), tokenized with special
+// token matching, and paired with its option label-token groups.
+func.decl import("input") @encode(%text: buffer, %flags: i32, %capacity: i64) -> (buffer, i64)
+
+func.decl import("input") @require(%condition: i32, %diagnostic: buffer)
+
+func.decl import("json") @compact(%json: buffer) -> (buffer)
+
+func.decl import("json") @unescape(%source: buffer, %offset: i64, %length: i64, %target: buffer, %target_offset: i64) -> (i64)
+
+func.decl import("runner") @execute_2(%stage: i32, %input: hal.buffer, %output: hal.buffer) -> (i64)
+
+global.rodata.def @lit_prefix = bytes("3c7c73746172746f66746578747c3e3c7c696d5f73746172747c3e757365720a")
+
+global.rodata.def @lit_question = bytes("0a0a0a5155455354494f4e3a0a")
+
+global.rodata.def @lit_options = bytes("0a0a4f7074696f6e733a0a")
+
+global.rodata.def @lit_reply_code = bytes("0a0a5265706c79207769746820746865206f7074696f6e20636f6465206f6e6c792e")
+
+global.rodata.def @lit_yes = bytes("0a5965733a20")
+
+global.rodata.def @lit_no = bytes("0a4e6f3a20")
+
+global.rodata.def @lit_none = bytes("4e6f6e65")
+
+global.rodata.def @lit_reply_yn = bytes("0a0a5265706c79207769746820796573206f72206e6f206f6e6c792e")
+
+global.rodata.def @lit_reply_digit = bytes("0a5265706c79207769746820612073696e676c6520646967697420302d")
+
+global.rodata.def @lit_only = bytes("206f6e6c792e")
+
+global.rodata.def @lit_suffix = bytes("3c7c696d5f656e647c3e0a3c7c696d5f73746172747c3e617373697374616e740a3c7468696e6b3e3c2f7468696e6b3e")
+
+global.rodata.def @lit_two_nl = bytes("0a0a")
+
+global.rodata.def @lit_zwsp = bytes("e2808b")
+
+global.rodata.def @lit_esc_quote = bytes("5c22")
+
+global.rodata.def @lit_esc_backslash = bytes("5c5c")
+
+global.rodata.def @lit_esc_b = bytes("5c62")
+
+global.rodata.def @lit_esc_f = bytes("5c66")
+
+global.rodata.def @lit_esc_n = bytes("5c6e")
+
+global.rodata.def @lit_esc_r = bytes("5c72")
+
+global.rodata.def @lit_esc_t = bytes("5c74")
+
+global.rodata.def @lit_esc_u00 = bytes("5c753030")
+
+global.rodata.def @lit_hex = bytes("30313233343536373839616263646566")
+
+global.rodata.def @lit_item_sep = bytes("2c20")
+
+global.rodata.def @lit_key_sep = bytes("3a20")
+
+global.rodata.def @msg_capacity = bytes("5468652072656e6465726564206465636973696f6e2070726f6d707420657863656564732074686973206d6f64656c27732063617061636974793a206174206d6f737420333237363820746f6b656e732070657220726571756573742e")
+
+global.rodata.def @msg_labels = bytes("54686973206d6f64656c20737570706f72747320312d3235352063686f696365206f7074696f6e732c20322d31302073636f7265206c6576656c7320616e64206e6f756c207175657374696f6e732e")
+
+global.rodata.def @msg_cohort = bytes("4465636973696f6e20636f686f7274206578636565647320746865207061636b656420726f772c206f7074696f6e206f72206c6162656c2063617061636974792e")
+
+global.rodata.def @spell_blob = bytes("3c7c696d675f726f775f31305f636f6c5f31307c3e3c7c696d675f726f775f31305f636f6c5f317c3e3c7c696d675f726f775f31305f636f6c5f327c3e3c7c696d675f726f775f31305f636f6c5f337c3e3c7c696d675f726f775f31305f636f6c5f347c3e3c7c696d675f726f775f31305f636f6c5f357c3e3c7c696d675f726f775f31305f636f6c5f367c3e3c7c696d675f726f775f31305f636f6c5f377c3e3c7c696d675f726f775f31305f636f6c5f387c3e3c7c696d675f726f775f31305f636f6c5f397c3e3c7c696d675f726f775f315f636f6c5f31307c3e3c7c696d675f726f775f325f636f6c5f31307c3e3c7c696d675f726f775f335f636f6c5f31307c3e3c7c696d675f726f775f345f636f6c5f31307c3e3c7c696d675f726f775f355f636f6c5f31307c3e3c7c696d675f726f775f365f636f6c5f31307c3e3c7c696d675f726f775f375f636f6c5f31307c3e3c7c696d675f726f775f385f636f6c5f31307c3e3c7c696d675f726f775f395f636f6c5f31307c3e3c7c696d675f726f775f315f636f6c5f317c3e3c7c696d675f726f775f315f636f6c5f327c3e3c7c696d675f726f775f315f636f6c5f337c3e3c7c696d675f726f775f315f636f6c5f347c3e3c7c696d675f726f775f315f636f6c5f357c3e3c7c696d675f726f775f315f636f6c5f367c3e3c7c696d675f726f775f315f636f6c5f377c3e3c7c696d675f726f775f315f636f6c5f387c3e3c7c696d675f726f775f315f636f6c5f397c3e3c7c696d675f726f775f325f636f6c5f317c3e3c7c696d675f726f775f325f636f6c5f327c3e3c7c696d675f726f775f325f636f6c5f337c3e3c7c696d675f726f775f325f636f6c5f347c3e3c7c696d675f726f775f325f636f6c5f357c3e3c7c696d675f726f775f325f636f6c5f367c3e3c7c696d675f726f775f325f636f6c5f377c3e3c7c696d675f726f775f325f636f6c5f387c3e3c7c696d675f726f775f325f636f6c5f397c3e3c7c696d675f726f775f335f636f6c5f317c3e3c7c696d675f726f775f335f636f6c5f327c3e3c7c696d675f726f775f335f636f6c5f337c3e3c7c696d675f726f775f335f636f6c5f347c3e3c7c696d675f726f775f335f636f6c5f357c3e3c7c696d675f726f775f335f636f6c5f367c3e3c7c696d675f726f775f335f636f6c5f377c3e3c7c696d675f726f775f335f636f6c5f387c3e3c7c696d675f726f775f335f636f6c5f397c3e3c7c696d675f726f775f345f636f6c5f317c3e3c7c696d675f726f775f345f636f6c5f327c3e3c7c696d675f726f775f345f636f6c5f337c3e3c7c696d675f726f775f345f636f6c5f347c3e3c7c696d675f726f775f345f636f6c5f357c3e3c7c696d675f726f775f345f636f6c5f367c3e3c7c696d675f726f775f345f636f6c5f377c3e3c7c696d675f726f775f345f636f6c5f387c3e3c7c696d675f726f775f345f636f6c5f397c3e3c7c696d675f726f775f355f636f6c5f317c3e3c7c696d675f726f775f355f636f6c5f327c3e3c7c696d675f726f775f355f636f6c5f337c3e3c7c696d675f726f775f355f636f6c5f347c3e3c7c696d675f726f775f355f636f6c5f357c3e3c7c696d675f726f775f355f636f6c5f367c3e3c7c696d675f726f775f355f636f6c5f377c3e3c7c696d675f726f775f355f636f6c5f387c3e3c7c696d675f726f775f355f636f6c5f397c3e3c7c696d675f726f775f365f636f6c5f317c3e3c7c696d675f726f775f365f636f6c5f327c3e3c7c696d675f726f775f365f636f6c5f337c3e3c7c696d675f726f775f365f636f6c5f347c3e3c7c696d675f726f775f365f636f6c5f357c3e3c7c696d675f726f775f365f636f6c5f367c3e3c7c696d675f726f775f365f636f6c5f377c3e3c7c696d675f726f775f365f636f6c5f387c3e3c7c696d675f726f775f365f636f6c5f397c3e3c7c696d675f726f775f375f636f6c5f317c3e3c7c696d675f726f775f375f636f6c5f327c3e3c7c696d675f726f775f375f636f6c5f337c3e3c7c696d675f726f775f375f636f6c5f347c3e3c7c696d675f726f775f375f636f6c5f357c3e3c7c696d675f726f775f375f636f6c5f367c3e3c7c696d675f726f775f375f636f6c5f377c3e3c7c696d675f726f775f375f636f6c5f387c3e3c7c696d675f726f775f375f636f6c5f397c3e3c7c696d675f726f775f385f636f6c5f317c3e3c7c696d675f726f775f385f636f6c5f327c3e3c7c696d675f726f775f385f636f6c5f337c3e3c7c696d675f726f775f385f636f6c5f347c3e3c7c696d675f726f775f385f636f6c5f357c3e3c7c696d675f726f775f385f636f6c5f367c3e3c7c696d675f726f775f385f636f6c5f377c3e3c7c696d675f726f775f385f636f6c5f387c3e3c7c696d675f726f775f385f636f6c5f397c3e3c7c696d675f726f775f395f636f6c5f317c3e3c7c696d675f726f775f395f636f6c5f327c3e3c7c696d675f726f775f395f636f6c5f337c3e3c7c696d675f726f775f395f636f6c5f347c3e3c7c696d675f726f775f395f636f6c5f357c3e3c7c696d675f726f775f395f636f6c5f367c3e3c7c696d675f726f775f395f636f6c5f377c3e3c7c696d675f726f775f395f636f6c5f387c3e3c7c696d675f726f775f395f636f6c5f397c3e3c7c746f6f6c5f63616c6c5f73746172747c3e3c7c746f6f6c5f6c6973745f73746172747c3e3c7c696d675f7468756d626e61696c7c3e3c7c746f6f6c5f63616c6c5f656e647c3e3c7c746f6f6c5f6c6973745f656e647c3e3c7c766973696f6e5f73746172747c3e3c7c617564696f5f73746172747c3e3c7c696d6167655f73706c69747c3e3c7c6d697865645f73746172747c3e3c7c73746172746f66746578747c3e3c7c746578745f73746172747c3e3c7c766973696f6e5f656e647c3e3c7c656e646f66746578747c3e3c7c6d697865645f656e647c3e3c7c696d5f73746172747c3e3c7c746578745f656e647c3e3c7c66696d5f6d69647c3e3c7c66696d5f7072657c3e3c7c66696d5f7375667c3e3c7c696d5f656e647c3e3c7c696d6167657c3e3c7c766964656f7c3e3c696d6167653e3c7c7061647c3e")
+
+global.rodata.def @spell_table = bytes("0000000015000000150000001400000029000000140000003d000000140000005100000014000000650000001400000079000000140000008d00000014000000a100000014000000b500000014000000c900000014000000dd00000014000000f100000014000000050100001400000019010000140000002d010000140000004101000014000000550100001400000069010000140000007d010000130000009001000013000000a301000013000000b601000013000000c901000013000000dc01000013000000ef010000130000000202000013000000150200001300000028020000130000003b020000130000004e020000130000006102000013000000740200001300000087020000130000009a02000013000000ad02000013000000c002000013000000d302000013000000e602000013000000f9020000130000000c030000130000001f030000130000003203000013000000450300001300000058030000130000006b030000130000007e030000130000009103000013000000a403000013000000b703000013000000ca03000013000000dd03000013000000f0030000130000000304000013000000160400001300000029040000130000003c040000130000004f040000130000006204000013000000750400001300000088040000130000009b04000013000000ae04000013000000c104000013000000d404000013000000e704000013000000fa040000130000000d0500001300000020050000130000003305000013000000460500001300000059050000130000006c050000130000007f050000130000009205000013000000a505000013000000b805000013000000cb05000013000000de05000013000000f105000013000000040600001300000017060000130000002a060000130000003d0600001300000050060000130000006306000013000000760600001300000089060000130000009c06000013000000af06000013000000c206000013000000d506000013000000e806000013000000fb060000130000000e070000130000002107000013000000340700001300000047070000130000005a070000130000006d0700001300000080070000130000009307000013000000a607000011000000b707000011000000c807000011000000d907000010000000e90700000f000000f80700000f000000070800000f000000160800000f000000250800000e000000330800000e000000410800000d0000004e0800000d0000005b0800000c000000670800000c000000730800000b0000007e0800000b000000890800000b000000940800000a0000009e08000009000000a708000009000000b008000007000000b708000007000000")
+
+global.rodata.def @choice_codes = bytes("4142434445464748494a4b4c4d4e4f505152535455565758595a4141414241434144414541464147414841493030414b414c414d414e414f4150415141524153415441554156415741584159415a424142424243424442454246424730314249424a424b424c424d424e424f4250425142524253425442554256425742584259425a4341434243434344434543464347434843493032434b434c434d434e434f4350435143524353435443554356435743584359435a444144424443444444454446444744484449444a444b444c444d444e444f445044514452445344544455445644574458445930334541454245434544454545464547303430353036454b454c454d454e30374550455145524553455445554556455745584559455a464146424643464446454646303846484649464a464b464c464d3039464f4650465146524653465431304656465746584659465a4741474247434744474547464747474847493131474b474c474d474e474f4750475147524753475447554756475747584759475a484148424843484448454846313248484849484a484b484c484d484e484f4850485148524853485448554856485748584859485a494149424943494449454946494749484949494a494b494c494d494e494f495049514952495349544955")
+
+global.rodata.def @choice_table = bytes("0000000001000000290000004e01000001000000010000002a0000007a01000002000000010000002b0000005401000003000000010000002c0000008401000004000000010000002d0000009701000005000000010000002e0000009a01000006000000010000002f000000a10100000700000001000000300000009301000008000000010000003100000066010000090000000100000032000000cd0100000a0000000100000033000000e30100000b0000000100000034000000920100000c0000000100000035000000640100000d0000000100000036000000ab0100000e0000000100000037000000e00100000f0000000100000038000000740100001000000001000000390000007005000011000000010000003a0000009801000012000000010000003b0000004501000013000000010000003c0000005001000014000000010000003d000000f601000015000000010000003e0000000602000016000000010000003f000000a60100001700000001000000400000000d060000180000000100000041000000fe0200001900000001000000420000007f0300001a00000002000000391a00003c6a00001c0000000200000049140000594a00001e000000020000001b0b00006d3500002000000002000000230f00000d1d000022000000020000006f6f00006da60000240000000200000061290000665b0000260000000200000025140000f13700002800000002000000bdc7000003be00002a000000020000004c570000c43400002c000000020000002b020000ffffffff2e000000020000001c5e0000586e00003000000002000000400a0000952900003200000002000000ad0e00005a2700003400000002000000fb090000de1a00003600000002000000f4c90100cc6c01003800000002000000490e0000301d00003a00000002000000cf0201004a6f01003c00000002000000a9070000132600003e0000000200000080080000652c00004000000002000000d7070000bb37000042000000020000006503010054c50000440000000200000009290000f457000046000000020000005a030100f9bb00004800000002000000c6720000e86e01004a000000020000004e48000012d301004c00000002000000ce9b010073b900004e00000002000000e71e0000ff7c00005000000002000000c94e000069910000520000000200000062160000482c00005400000002000000ac350000ba9b000056000000020000001a6900002f6500005800000002000000d6950000106c01005a00000002000000a5c60000f15500005c00000002000000c80f0000ffffffff5e00000002000000c7330000b7a5000060000000020000000703010044c100006200000002000000599e010078d9000064000000020000003f320000a55300006600000002000000973500009d4a00006800000002000000b412000067cb01006a000000020000009d350000b85900006c000000020000002a510000ad7500006e0000000200000046030100e87001007000000002000000823c0000ca5200007200000002000000231c00007888000074000000020000008c7300009f9e00007600000002000000df8f0000dfd800007800000002000000aa80000022f600007a00000002000000d69a010083cd00007c00000002000000a29b010038cc01007e0000000200000089cc00002b5800008000000002000000dca00100ffffffff82000000020000005e210000e131000084000000020000006c9e00002c5900008600000002000000a5120000284100008800000002000000e81a0000c41500008a00000002000000011a00004a2900008c00000002000000ba6900009c4e00008e00000002000000fc990000ee7a0000900000000200000081140000ef24000092000000020000002b2d00008a3d00009400000002000000de140000ffffffff9600000002000000d1fb0000d6d000009800000002000000dc1a0000e62700009a00000002000000896000009c5100009c00000002000000c8a30000573800009e00000002000000540f0000fb0e0000a0000000020000005f250000b6300000a2000000020000000c07010095ca0100a400000002000000311800002e2c0000a6000000020000008b240000ed320000a800000002000000a10d0000333b0000aa00000002000000cc9e01000cca0000ac000000020000006095000063540000ae00000002000000329e0100a0c70000b00000000200000058080100c3c90000b200000002000000e803010062f40000b400000002000000fd060100ffffffffb600000002000000c6190000896a0000b800000002000000eb3b0000cc640000ba000000020000004b3f0000562f0000bc00000002000000fa3f0000c6c70000be0000000200000079130000cb1d0000c000000002000000c1190000cc9a0000c200000002000000c29b0100dac10000c400000002000000bb8900000e940000c6000000020000004d4e0000d1580000c800000002000000f1a0010028550000ca000000020000004ae40000ffffffffcc00000002000000a92b0000728f0000ce0000000200000030510000b5500000d000000002000000a9ac000019b10000d20000000200000089500000ae3e0000d40000000200000083270000fdb10000d6000000020000009b030100ffffffffd8000000020000007c230000ec540000da000000020000007e270000c6450000dc0000000200000034660000c6ae0000de000000020000007f82000072cd0000e0000000020000000f0401000bb80000e200000002000000b49c0100b4a20000e400000002000000d57d0100679c0100e60000000200000055040100ffffffffe80000000200000002160000ffffffffea00000002000000584d00004fa90000ec0000000200000043ca000012e10000ee000000020000002a1200005e420000f000000002000000050e0000a7480000f200000002000000c91e000073880000f4000000020000006351000075ac0000f600000002000000f5230000889a0000f800000002000000c1160000fffffffffa00000002000000510c0000fffffffffc000000020000004f170000fffffffffe00000002000000e8070100ffffffff0001000002000000881500006d490000020100000200000098120000ed51000004010000020000004b09000000310000060100000200000077110000ffffffff0801000002000000b4250000754900000a0100000200000083030100ffffffff0c0100000200000025060000e84000000e01000002000000e4070000c53f000010010000020000003d0e00007d6300001201000002000000adc40000ba2a00001401000002000000f776000026550000160100000200000075e80000ffffffff180100000200000012200000ce2f00001a0100000200000031fc0000ffffffff1c01000002000000ad9c0100ffffffff1e01000002000000b31600004a40000020010000020000001d0801008dc90100220100000200000030230000e52500002401000002000000b8c40000c3d400002601000002000000787e0000349d000028010000020000003718000033a600002a01000002000000bb0f0000ffffffff2c01000002000000b10401002a7101002e01000002000000104000004347000030010000020000003fa00100ffffffff3201000002000000b9c6000052b300003401000002000000b32600001b4d00003601000002000000fb900000c85f0000380100000200000034110000ffffffff3a010000020000007841000031be00003c01000002000000ca3b000074af00003e010000020000000a050100ffffffff4001000002000000f1340000ad60000042010000020000005936000087a80000440100000200000039390000ebac000046010000020000008e020000ffffffff4801000002000000679e0100ffffffff4a01000002000000d6840100ffffffff4c0100000200000016b9000002ea00004e0100000200000054040100cecc010050010000020000003d9c0100ffffffff52010000020000007b3a000096750000540100000200000047240000c58a000056010000020000006c300000b35a000058010000020000009fc4000019a700005a010000020000002c3c0000af7b00005c010000020000001b4b000082f600005e01000002000000ff6b0000ffffffff6001000002000000c3a80000c38f00006201000002000000b8c90000fe9f000064010000020000006b040000ffffffff6601000002000000709a0100ffffffff6801000002000000812f0000623e00006a01000002000000a95e0000665d00006c01000002000000938800006f8000006e01000002000000215300005d6c00007001000002000000895f0000764100007201000002000000ef030100ffffffff74010000020000003c3e00004d4d000076010000020000004e3b00007fa70000780100000200000090540000ae6700007a010000020000002aa101006ff400007c0100000200000006030100ffffffff7e01000002000000f49a010000a000008001000002000000579c0100ffffffff82010000020000008f040100ffffffff84010000020000002f9c0100ffffffff8601000002000000c6320000098800008801000002000000ea030100c0d500008a010000020000001f420000135800008c01000002000000f9330000fc4300008e01000002000000d61600001c5b00009001000002000000db820000379c0000920100000200000069030000ffffffff9401000002000000a3d50000d4ef000096010000020000009c9b0000baca010098010000020000005d9c0100ffffffff9a01000002000000db040100c0c200009c01000002000000f23b0000d4d600009e01000002000000f3b80000b48e0000a00100000200000062a10100ffffffffa201000002000000e8280000bbbd0000a401000002000000da370000bb810000a601000002000000d5030100ffffffffa8010000020000004c3d000096550000aa01000002000000182e00003c870000ac0100000200000081240000212c0000ae01000002000000229e0100ffffffffb0010000020000000c0801004bc40000b2010000020000002b9b0100ffffffffb40100000200000095040100ffffffffb6010000020000009a030100ffffffffb801000002000000579a0100ffffffffba01000002000000b71f00007da70000bc0100000200000004290000cba60000be01000002000000a50b0000283c0000c001000002000000b5080000cd250000c2010000020000005d320000a8b40000c401000002000000591f0000684a0000c601000002000000c81400004ef10000c80100000200000074040100ffffffffca0100000200000076080000bb0b0000cc01000002000000e39d0100ffffffffce010000020000006ea80000ffffffffd001000002000000ec16000043350000d2010000020000003313000077600000d401000002000000fa060000111a0000d601000002000000b6250000e8520000d801000002000000bb150000e8270000da01000002000000c4950000bc930000dc01000002000000be160000344d0000de010000020000007c0c0000100e0000e001000002000000d50b000021300000e2010000020000007e9d0100a6de0000")
+
+global.rodata.def @letter_table = bytes("00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff290000004e0100002a0000007a0100002b000000540100002c000000840100002d000000970100002e0000009a0100002f000000a10100003000000093010000310000006601000032000000cd01000033000000e30100003400000092010000350000006401000036000000ab01000037000000e0010000380000007401000039000000700500003a000000980100003b000000450100003c000000500100003d000000f60100003e000000060200003f000000a6010000400000000d06000041000000fe020000420000007f03000000000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff490000000b0100004a000000250100004b000000180100004c000000150100004d000000400100004e000000230100004f0000004f010000500000003701000051000000d302000052000000ef01000053000000ba01000054000000340100005500000027010000560000003c010000570000001e010000580000001b01000059000000a82100005a000000780100005b000000120100005c000000090100005d0000004b0100005e0000005a0100005f0000002001000060000000f8090000610000007e010000620000002c02000000000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff")
+
+global.rodata.def @score_table = bytes("18000000190000001a0000001b0000001c0000001d0000001e0000001f0000002000000021000000")
+
+global.rodata.def @noul_table = bytes("03000000c3080000c31100008e4c000002000000a32d00009f300000ffffffff")
+
+func.def @fail_unless(%condition: i1, %message: buffer) {
+  %condition32 = scalar.extui %condition : i1 to i32
+  func.call @require(%condition32, %message) : (i32, buffer)
+  func.return
+}
+
+func.def @off(%v: i64) -> (offset) {
+  %b = scalar.assume %v [range(%v, 0, 9223372036854775807)] : i64
+  %o = index.cast %b : i64 to offset
+  func.return %o : offset
+}
+
+func.def @ix(%v: i64) -> (index) {
+  %b = scalar.assume %v [range(%v, 0, 9223372036854775807)] : i64
+  %o = index.cast %b : i64 to index
+  func.return %o : index
+}
+
+func.def @byte_at(%buf: buffer, %pos: i64) -> (i8) {
+  %o = func.call @off(%pos) : (i64) -> (offset)
+  %v = buffer.view %buf[%o] : buffer -> view<1xi8>
+  %b = view.load %v[0] : view<1xi8> -> i8
+  func.return %b : i8
+}
+
+func.def @i32_at(%buf: buffer, %index: i64) -> (i32) {
+  %c4 = scalar.constant 4 : i64
+  %bytes = scalar.muli %index, %c4 : i64
+  %o = func.call @off(%bytes) : (i64) -> (offset)
+  %v = buffer.view %buf[%o] : buffer -> view<1xi32>
+  %x = view.load %v[0] : view<1xi32> -> i32
+  func.return %x : i32
+}
+
+func.def @i64_at(%buf: buffer, %index: i64) -> (i64) {
+  %c8 = scalar.constant 8 : i64
+  %bytes = scalar.muli %index, %c8 : i64
+  %o = func.call @off(%bytes) : (i64) -> (offset)
+  %v = buffer.view %buf[%o] : buffer -> view<1xi64>
+  %x = view.load %v[0] : view<1xi64> -> i64
+  func.return %x : i64
+}
+
+func.def @i64_b(%buf: buffer, %bytes: i64) -> (i64) {
+  %o = func.call @off(%bytes) : (i64) -> (offset)
+  %v = buffer.view %buf[%o] : buffer -> view<1xi64>
+  %x = view.load %v[0] : view<1xi64> -> i64
+  func.return %x : i64
+}
+
+func.def @i32_b(%buf: buffer, %bytes: i64) -> (i32) {
+  %o = func.call @off(%bytes) : (i64) -> (offset)
+  %v = buffer.view %buf[%o] : buffer -> view<1xi32>
+  %x = view.load %v[0] : view<1xi32> -> i32
+  func.return %x : i32
+}
+
+func.def @set_i32(%buf: buffer, %index: i64, %value: i32) {
+  %c4 = scalar.constant 4 : i64
+  %bytes = scalar.muli %index, %c4 : i64
+  %o = func.call @off(%bytes) : (i64) -> (offset)
+  %v = buffer.view %buf[%o] : buffer -> view<1xi32>
+  view.store %value, %v[0] : i32, view<1xi32>
+  func.return
+}
+
+func.def @set_i64(%buf: buffer, %index: i64, %value: i64) {
+  %c8 = scalar.constant 8 : i64
+  %bytes = scalar.muli %index, %c8 : i64
+  %o = func.call @off(%bytes) : (i64) -> (offset)
+  %v = buffer.view %buf[%o] : buffer -> view<1xi64>
+  view.store %value, %v[0] : i64, view<1xi64>
+  func.return
+}
+
+func.def @put(%out: buffer, %pos: i64, %b: i8) -> (i64) {
+  %length = buffer.length %out
+  %cap = index.cast %length : offset to i64
+  %ok = scalar.cmpi ult, %pos, %cap : i64
+  %message = global.load @msg_capacity : buffer
+  func.call @fail_unless(%ok, %message) : (i1, buffer)
+  %o = func.call @off(%pos) : (i64) -> (offset)
+  %v = buffer.view %out[%o] : buffer -> view<1xi8>
+  view.store %b, %v[0] : i8, view<1xi8>
+  %c1 = scalar.constant 1 : i64
+  %next = scalar.addi %pos, %c1 : i64
+  func.return %next : i64
+}
+
+func.def @put_range(%out: buffer, %pos: i64, %src: buffer, %src_offset: i64, %count: i64) -> (i64) {
+  %c0 = scalar.constant 0 : i64
+  %length = buffer.length %out
+  %cap = index.cast %length : offset to i64
+  %end = scalar.addi %pos, %count : i64
+  %ok = scalar.cmpi ule, %end, %cap : i64
+  %message = global.load @msg_capacity : buffer
+  func.call @fail_unless(%ok, %message) : (i1, buffer)
+  %some = scalar.cmpi sgt, %count, %c0 : i64
+  scf.if %some {
+    %so = func.call @off(%src_offset) : (i64) -> (offset)
+    %po = func.call @off(%pos) : (i64) -> (offset)
+    %bytes = func.call @off(%count) : (i64) -> (offset)
+    buffer.copy %src[%so], %out[%po], %bytes
+  }
+  func.return %end : i64
+}
+
+func.def @put_lit(%out: buffer, %pos: i64, %lit: buffer) -> (i64) {
+  %c0 = scalar.constant 0 : i64
+  %length = buffer.length %lit
+  %count = index.cast %length : offset to i64
+  %end = func.call @put_range(%out, %pos, %lit, %c0, %count) : (buffer, i64, buffer, i64, i64) -> (i64)
+  func.return %end : i64
+}
+
+func.def @newline_indent(%out: buffer, %pos: i64, %spaces: i64) -> (i64) {
+  %nl = scalar.constant 10 : i8
+  %sp = scalar.constant 32 : i8
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %p0 = func.call @put(%out, %pos, %nl) : (buffer, i64, i8) -> (i64)
+  %n = func.call @ix(%spaces) : (i64) -> (index)
+  %p = scf.for %i = [%c0 to %n step %c1](%q = %p0 : i64) -> (i64) {
+    %r = func.call @put(%out, %q, %sp) : (buffer, i64, i8) -> (i64)
+    scf.yield %r : i64
+  }
+  func.return %p : i64
+}
+
+// True when text[i:] starts with a special-token spelling.
+func.def @spelling_at(%text: buffer, %count: i64, %i: i64) -> (i1) {
+  %origin = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %cn = index.constant 124 : index
+  %false = scalar.constant false : i1
+  %true = scalar.constant true : i1
+  %blob = global.load @spell_blob : buffer
+  %table = global.load @spell_table : buffer
+  %tv = buffer.view %table[%origin] : buffer -> view<124x2xi32>
+  %found = scf.for %s = [%c0 to %cn step %c1](%f = %false : i1) -> (i1) {
+    %so32 = view.load %tv[%s, 0] : view<124x2xi32> -> i32
+    %sl32 = view.load %tv[%s, 1] : view<124x2xi32> -> i32
+    %so = scalar.extsi %so32 : i32 to i64
+    %sl = scalar.extsi %sl32 : i32 to i64
+    %end = scalar.addi %i, %sl : i64
+    %fits = scalar.cmpi ule, %end, %count : i64
+    %todo = scalar.xori %f, %true : i1
+    %check = scalar.andi %fits, %todo : i1
+    %m = scf.if %check -> (i1) {
+      %n = func.call @ix(%sl) : (i64) -> (index)
+      %eq = scf.for %j = [%c0 to %n step %c1](%e = %true : i1) -> (i1) {
+        %j64 = index.cast %j : index to i64
+        %ti = scalar.addi %i, %j64 : i64
+        %bi = scalar.addi %so, %j64 : i64
+        %a = func.call @byte_at(%text, %ti) : (buffer, i64) -> (i8)
+        %b = func.call @byte_at(%blob, %bi) : (buffer, i64) -> (i8)
+        %same = scalar.cmpi eq, %a, %b : i8
+        %e2 = scalar.andi %e, %same : i1
+        scf.yield %e2 : i1
+      }
+      scf.yield %eq : i1
+    } else {
+      scf.yield %false : i1
+    }
+    %f2 = scalar.ori %f, %m : i1
+    scf.yield %f2 : i1
+  }
+  func.return %found : i1
+}
+
+// Emits decoded text: a zero-width space after the '<' of every special-token
+// spelling; mode 1 also writes '_' as ' ' (option keys); mode 2 escapes the
+// text as the body of a JSON string (llama.cpp jinja tojson).
+func.def @emit_decoded(%out: buffer, %pos: i64, %text: buffer, %count: i64, %mode: i32) -> (i64) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c1_i32 = scalar.constant 1 : i32
+  %c2_i32 = scalar.constant 2 : i32
+  %lt = scalar.constant 60 : i8
+  %underscore = scalar.constant 95 : i8
+  %space = scalar.constant 32 : i8
+  %quote = scalar.constant 34 : i8
+  %backslash = scalar.constant 92 : i8
+  %b8 = scalar.constant 8 : i8
+  %b9 = scalar.constant 9 : i8
+  %b10 = scalar.constant 10 : i8
+  %b12 = scalar.constant 12 : i8
+  %b13 = scalar.constant 13 : i8
+  %b15 = scalar.constant 15 : i8
+  %c4_i8 = scalar.constant 4 : i8
+  %keys = scalar.cmpi eq, %mode, %c1_i32 : i32
+  %json = scalar.cmpi eq, %mode, %c2_i32 : i32
+  %n = func.call @ix(%count) : (i64) -> (index)
+  %end = scf.for %i = [%c0 to %n step %c1](%p = %pos : i64) -> (i64) {
+    %i64 = index.cast %i : index to i64
+    %c = func.call @byte_at(%text, %i64) : (buffer, i64) -> (i8)
+    %is_lt = scalar.cmpi eq, %c, %lt : i8
+    %next = scf.if %is_lt -> (i64) {
+      %hit = func.call @spelling_at(%text, %count, %i64) : (buffer, i64, i64) -> (i1)
+      %pa = func.call @put(%out, %p, %c) : (buffer, i64, i8) -> (i64)
+      %pb = scf.if %hit -> (i64) {
+        %zwsp = global.load @lit_zwsp : buffer
+        %pz = func.call @put_lit(%out, %pa, %zwsp) : (buffer, i64, buffer) -> (i64)
+        scf.yield %pz : i64
+      } else {
+        scf.yield %pa : i64
+      }
+      scf.yield %pb : i64
+    } else {
+      %is_us = scalar.cmpi eq, %c, %underscore : i8
+      %to_space = scalar.andi %keys, %is_us : i1
+      %pk = scf.if %to_space -> (i64) {
+        %ps = func.call @put(%out, %p, %space) : (buffer, i64, i8) -> (i64)
+        scf.yield %ps : i64
+      } else {
+        %pj = scf.if %json -> (i64) {
+          %pe = func.call @emit_json_char(%out, %p, %c) : (buffer, i64, i8) -> (i64)
+          scf.yield %pe : i64
+        } else {
+          %pr = func.call @put(%out, %p, %c) : (buffer, i64, i8) -> (i64)
+          scf.yield %pr : i64
+        }
+        scf.yield %pj : i64
+      }
+      scf.yield %pk : i64
+    }
+    scf.yield %next : i64
+  }
+  func.return %end : i64
+}
+
+func.def @emit_json_char(%out: buffer, %p: i64, %c: i8) -> (i64) {
+  %quote = scalar.constant 34 : i8
+  %backslash = scalar.constant 92 : i8
+  %b8 = scalar.constant 8 : i8
+  %b9 = scalar.constant 9 : i8
+  %b10 = scalar.constant 10 : i8
+  %b12 = scalar.constant 12 : i8
+  %b13 = scalar.constant 13 : i8
+  %b32 = scalar.constant 32 : i8
+  %b15 = scalar.constant 15 : i8
+  %c4_i8 = scalar.constant 4 : i8
+  %is_quote = scalar.cmpi eq, %c, %quote : i8
+  %is_bs = scalar.cmpi eq, %c, %backslash : i8
+  %is_b = scalar.cmpi eq, %c, %b8 : i8
+  %is_t = scalar.cmpi eq, %c, %b9 : i8
+  %is_n = scalar.cmpi eq, %c, %b10 : i8
+  %is_f = scalar.cmpi eq, %c, %b12 : i8
+  %is_r = scalar.cmpi eq, %c, %b13 : i8
+  %is_ctl = scalar.cmpi ult, %c, %b32 : i8
+  %r = scf.if %is_quote -> (i64) {
+    %l = global.load @lit_esc_quote : buffer
+    %x = func.call @put_lit(%out, %p, %l) : (buffer, i64, buffer) -> (i64)
+    scf.yield %x : i64
+  } else {
+    %r1 = scf.if %is_bs -> (i64) {
+      %l = global.load @lit_esc_backslash : buffer
+      %x = func.call @put_lit(%out, %p, %l) : (buffer, i64, buffer) -> (i64)
+      scf.yield %x : i64
+    } else {
+      %r2 = scf.if %is_b -> (i64) {
+        %l = global.load @lit_esc_b : buffer
+        %x = func.call @put_lit(%out, %p, %l) : (buffer, i64, buffer) -> (i64)
+        scf.yield %x : i64
+      } else {
+        %r3 = scf.if %is_t -> (i64) {
+          %l = global.load @lit_esc_t : buffer
+          %x = func.call @put_lit(%out, %p, %l) : (buffer, i64, buffer) -> (i64)
+          scf.yield %x : i64
+        } else {
+          %r4 = scf.if %is_n -> (i64) {
+            %l = global.load @lit_esc_n : buffer
+            %x = func.call @put_lit(%out, %p, %l) : (buffer, i64, buffer) -> (i64)
+            scf.yield %x : i64
+          } else {
+            %r5 = scf.if %is_f -> (i64) {
+              %l = global.load @lit_esc_f : buffer
+              %x = func.call @put_lit(%out, %p, %l) : (buffer, i64, buffer) -> (i64)
+              scf.yield %x : i64
+            } else {
+              %r6 = scf.if %is_r -> (i64) {
+                %l = global.load @lit_esc_r : buffer
+                %x = func.call @put_lit(%out, %p, %l) : (buffer, i64, buffer) -> (i64)
+                scf.yield %x : i64
+              } else {
+                %r7 = scf.if %is_ctl -> (i64) {
+                  %l = global.load @lit_esc_u00 : buffer
+                  %x = func.call @put_lit(%out, %p, %l) : (buffer, i64, buffer) -> (i64)
+                  %hexlit = global.load @lit_hex : buffer
+                  %hi8 = scalar.shrui %c, %c4_i8 : i8
+                  %lo8 = scalar.andi %c, %b15 : i8
+                  %hi = scalar.extui %hi8 : i8 to i64
+                  %lo = scalar.extui %lo8 : i8 to i64
+                  %hc = func.call @byte_at(%hexlit, %hi) : (buffer, i64) -> (i8)
+                  %lc = func.call @byte_at(%hexlit, %lo) : (buffer, i64) -> (i8)
+                  %y = func.call @put(%out, %x, %hc) : (buffer, i64, i8) -> (i64)
+                  %z = func.call @put(%out, %y, %lc) : (buffer, i64, i8) -> (i64)
+                  scf.yield %z : i64
+                } else {
+                  %x = func.call @put(%out, %p, %c) : (buffer, i64, i8) -> (i64)
+                  scf.yield %x : i64
+                }
+                scf.yield %r7 : i64
+              }
+              scf.yield %r6 : i64
+            }
+            scf.yield %r5 : i64
+          }
+          scf.yield %r4 : i64
+        }
+        scf.yield %r3 : i64
+      }
+      scf.yield %r2 : i64
+    }
+    scf.yield %r1 : i64
+  }
+  func.return %r : i64
+}
+
+// Decodes the escaped JSON string src[offset, offset+count) and emits it.
+func.def @emit_string(%out: buffer, %pos: i64, %src: buffer, %offset: i64, %count: i64, %mode: i32) -> (i64) {
+  %c0 = scalar.constant 0 : i64
+  %some = scalar.cmpi sgt, %count, %c0 : i64
+  %end = scf.if %some -> (i64) {
+    %bytes = func.call @off(%count) : (i64) -> (offset)
+    %tmp = buffer.alloca<private> align(8) %bytes : buffer
+    %n = func.call @unescape(%src, %offset, %count, %tmp, %c0) : (buffer, i64, i64, buffer, i64) -> (i64)
+    %e = func.call @emit_decoded(%out, %pos, %tmp, %n, %mode) : (buffer, i64, buffer, i64, i32) -> (i64)
+    scf.yield %e : i64
+  } else {
+    scf.yield %pos : i64
+  }
+  func.return %end : i64
+}
+
+// Compact JSON of src[offset, offset+count) (whitespace removed, spelling kept).
+func.def @compact_range(%src: buffer, %offset: i64, %count: i64) -> (buffer) {
+  %origin = index.constant 0 : offset
+  %bytes = func.call @off(%count) : (i64) -> (offset)
+  %tmp = buffer.alloca<private> align(8) %bytes : buffer
+  %so = func.call @off(%offset) : (i64) -> (offset)
+  buffer.copy %src[%so], %tmp[%origin], %bytes
+  %compact = func.call @compact(%tmp) : (buffer) -> (buffer)
+  func.return %compact : buffer
+}
+
+// jinja tojson of an object/array: indent < 0 gives ", " / ": " on one line;
+// indent >= 0 gives json.dumps(indent=n) layout. Strings are decoded, broken
+// and re-escaped; numbers and literals keep their spelling.
+func.def @emit_json(%out: buffer, %pos: i64, %src: buffer, %offset: i64, %count: i64, %indent: i64) -> (i64) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %z64 = scalar.constant 0 : i64
+  %one = scalar.constant 1 : i64
+  %false = scalar.constant false : i1
+  %true = scalar.constant true : i1
+  %c2_i32 = scalar.constant 2 : i32
+  %quote = scalar.constant 34 : i8
+  %backslash = scalar.constant 92 : i8
+  %lbrace = scalar.constant 123 : i8
+  %rbrace = scalar.constant 125 : i8
+  %lbracket = scalar.constant 91 : i8
+  %rbracket = scalar.constant 93 : i8
+  %comma = scalar.constant 44 : i8
+  %colon = scalar.constant 58 : i8
+  %nul = scalar.constant 0 : i8
+  %pretty = scalar.cmpi sge, %indent, %z64 : i64
+  %cj = func.call @compact_range(%src, %offset, %count) : (buffer, i64, i64) -> (buffer)
+  %length = buffer.length %cj
+  %n64 = index.cast %length : offset to i64
+  %n = func.call @ix(%n64) : (i64) -> (index)
+  %end, %depth_end, %in_end, %esc_end, %start_end = scf.for %i = [%c0 to %n step %c1](%p = %pos : i64, %depth = %z64 : i64, %in_str = %false : i1, %esc = %false : i1, %sstart = %z64 : i64) -> (i64, i64, i1, i1, i64) {
+    %i64 = index.cast %i : index to i64
+    %c = func.call @byte_at(%cj, %i64) : (buffer, i64) -> (i8)
+    %rp, %rd, %ri, %re, %rs = scf.if %in_str -> (i64, i64, i1, i1, i64) {
+      %ap, %ai, %ae = scf.if %esc -> (i64, i1, i1) {
+        scf.yield %p, %true, %false : i64, i1, i1
+      } else {
+        %is_bs = scalar.cmpi eq, %c, %backslash : i8
+        %bp, %bi, %be = scf.if %is_bs -> (i64, i1, i1) {
+          scf.yield %p, %true, %true : i64, i1, i1
+        } else {
+          %is_q = scalar.cmpi eq, %c, %quote : i8
+          %cp, %ci = scf.if %is_q -> (i64, i1) {
+            %slen = scalar.subi %i64, %sstart : i64
+            %q1 = func.call @emit_string(%out, %p, %cj, %sstart, %slen, %c2_i32) : (buffer, i64, buffer, i64, i64, i32) -> (i64)
+            %q2 = func.call @put(%out, %q1, %quote) : (buffer, i64, i8) -> (i64)
+            scf.yield %q2, %false : i64, i1
+          } else {
+            scf.yield %p, %true : i64, i1
+          }
+          scf.yield %cp, %ci, %false : i64, i1, i1
+        }
+        scf.yield %bp, %bi, %be : i64, i1, i1
+      }
+      scf.yield %ap, %depth, %ai, %ae, %sstart : i64, i64, i1, i1, i64
+    } else {
+      %is_q = scalar.cmpi eq, %c, %quote : i8
+      %is_lb = scalar.cmpi eq, %c, %lbrace : i8
+      %is_lk = scalar.cmpi eq, %c, %lbracket : i8
+      %is_rb = scalar.cmpi eq, %c, %rbrace : i8
+      %is_rk = scalar.cmpi eq, %c, %rbracket : i8
+      %is_open = scalar.ori %is_lb, %is_lk : i1
+      %is_close = scalar.ori %is_rb, %is_rk : i1
+      %is_comma = scalar.cmpi eq, %c, %comma : i8
+      %is_colon = scalar.cmpi eq, %c, %colon : i8
+      %after = scalar.addi %i64, %one : i64
+      %op, %od, %oi, %os = scf.if %is_q -> (i64, i64, i1, i64) {
+        %x = func.call @put(%out, %p, %quote) : (buffer, i64, i8) -> (i64)
+        scf.yield %x, %depth, %true, %after : i64, i64, i1, i64
+      } else {
+        %pp, %pd = scf.if %is_open -> (i64, i64) {
+          %x = func.call @put(%out, %p, %c) : (buffer, i64, i8) -> (i64)
+          %d1 = scalar.addi %depth, %one : i64
+          %has_next = scalar.cmpi slt, %after, %n64 : i64
+          %next = scf.if %has_next -> (i8) {
+            %b = func.call @byte_at(%cj, %after) : (buffer, i64) -> (i8)
+            scf.yield %b : i8
+          } else {
+            scf.yield %nul : i8
+          }
+          %nrb = scalar.cmpi eq, %next, %rbrace : i8
+          %nrk = scalar.cmpi eq, %next, %rbracket : i8
+          %empty = scalar.ori %nrb, %nrk : i1
+          %not_empty = scalar.xori %empty, %true : i1
+          %brk = scalar.andi %not_empty, %pretty : i1
+          %y = scf.if %brk -> (i64) {
+            %sp = scalar.muli %d1, %indent : i64
+            %w = func.call @newline_indent(%out, %x, %sp) : (buffer, i64, i64) -> (i64)
+            scf.yield %w : i64
+          } else {
+            scf.yield %x : i64
+          }
+          scf.yield %y, %d1 : i64, i64
+        } else {
+          %qp, %qd = scf.if %is_close -> (i64, i64) {
+            %d0 = scalar.subi %depth, %one : i64
+            %has_prev = scalar.cmpi sgt, %i64, %z64 : i64
+            %before = scalar.subi %i64, %one : i64
+            %prev = scf.if %has_prev -> (i8) {
+              %b = func.call @byte_at(%cj, %before) : (buffer, i64) -> (i8)
+              scf.yield %b : i8
+            } else {
+              scf.yield %nul : i8
+            }
+            %plb = scalar.cmpi eq, %prev, %lbrace : i8
+            %plk = scalar.cmpi eq, %prev, %lbracket : i8
+            %was_open = scalar.ori %plb, %plk : i1
+            %not_open = scalar.xori %was_open, %true : i1
+            %brk = scalar.andi %not_open, %pretty : i1
+            %y = scf.if %brk -> (i64) {
+              %sp = scalar.muli %d0, %indent : i64
+              %w = func.call @newline_indent(%out, %p, %sp) : (buffer, i64, i64) -> (i64)
+              scf.yield %w : i64
+            } else {
+              scf.yield %p : i64
+            }
+            %x = func.call @put(%out, %y, %c) : (buffer, i64, i8) -> (i64)
+            scf.yield %x, %d0 : i64, i64
+          } else {
+            %rp2 = scf.if %is_comma -> (i64) {
+              %y = scf.if %pretty -> (i64) {
+                %x = func.call @put(%out, %p, %c) : (buffer, i64, i8) -> (i64)
+                %sp = scalar.muli %depth, %indent : i64
+                %w = func.call @newline_indent(%out, %x, %sp) : (buffer, i64, i64) -> (i64)
+                scf.yield %w : i64
+              } else {
+                %l = global.load @lit_item_sep : buffer
+                %w = func.call @put_lit(%out, %p, %l) : (buffer, i64, buffer) -> (i64)
+                scf.yield %w : i64
+              }
+              scf.yield %y : i64
+            } else {
+              %rp3 = scf.if %is_colon -> (i64) {
+                %l = global.load @lit_key_sep : buffer
+                %w = func.call @put_lit(%out, %p, %l) : (buffer, i64, buffer) -> (i64)
+                scf.yield %w : i64
+              } else {
+                %w = func.call @put(%out, %p, %c) : (buffer, i64, i8) -> (i64)
+                scf.yield %w : i64
+              }
+              scf.yield %rp3 : i64
+            }
+            scf.yield %rp2, %depth : i64, i64
+          }
+          scf.yield %qp, %qd : i64, i64
+        }
+        scf.yield %pp, %pd, %false, %sstart : i64, i64, i1, i64
+      }
+      scf.yield %op, %od, %oi, %false, %os : i64, i64, i1, i1, i64
+    }
+    scf.yield %rp, %rd, %ri, %re, %rs : i64, i64, i1, i1, i64
+  }
+  func.return %end : i64
+}
+
+// A value as the template prints it: strings raw (broken), others tojson.
+func.def @emit_value(%out: buffer, %pos: i64, %src: buffer, %offset: i64, %count: i64, %type: i64, %indent: i64) -> (i64) {
+  %c0 = scalar.constant 0 : i64
+  %c0_i32 = scalar.constant 0 : i32
+  %is_string = scalar.cmpi eq, %type, %c0 : i64
+  %end = scf.if %is_string -> (i64) {
+    %e = func.call @emit_string(%out, %pos, %src, %offset, %count, %c0_i32) : (buffer, i64, buffer, i64, i64, i32) -> (i64)
+    scf.yield %e : i64
+  } else {
+    %e = func.call @emit_json(%out, %pos, %src, %offset, %count, %indent) : (buffer, i64, buffer, i64, i64, i64) -> (i64)
+    scf.yield %e : i64
+  }
+  func.return %end : i64
+}
+
+// Jinja truthiness of a choice description (null, "", [] and {} are false).
+func.def @truthy(%src: buffer, %offset: i64, %count: i64, %type: i64) -> (i1) {
+  %c0 = scalar.constant 0 : i64
+  %c2 = scalar.constant 2 : i64
+  %c6 = scalar.constant 6 : i64
+  %is_null = scalar.cmpi eq, %type, %c6 : i64
+  %is_string = scalar.cmpi eq, %type, %c0 : i64
+  %false = scalar.constant false : i1
+  %r = scf.if %is_null -> (i1) {
+    scf.yield %false : i1
+  } else {
+    %r2 = scf.if %is_string -> (i1) {
+      %ne = scalar.cmpi sgt, %count, %c0 : i64
+      scf.yield %ne : i1
+    } else {
+      %cj = func.call @compact_range(%src, %offset, %count) : (buffer, i64, i64) -> (buffer)
+      %length = buffer.length %cj
+      %n = index.cast %length : offset to i64
+      %ne = scalar.cmpi sgt, %n, %c2 : i64
+      scf.yield %ne : i1
+    }
+    scf.yield %r2 : i1
+  }
+  func.return %r : i1
+}
+
+// Decoded single ASCII letter of a choice key, or 0.
+func.def @key_letter(%src: buffer, %offset: i64, %count: i64) -> (i64) {
+  %c0 = scalar.constant 0 : i64
+  %c1 = scalar.constant 1 : i64
+  %c32 = scalar.constant 32 : i64
+  %c65 = scalar.constant 65 : i64
+  %c90 = scalar.constant 90 : i64
+  %c97 = scalar.constant 97 : i64
+  %c122 = scalar.constant 122 : i64
+  %some = scalar.cmpi sgt, %count, %c0 : i64
+  %r = scf.if %some -> (i64) {
+    %bytes = func.call @off(%count) : (i64) -> (offset)
+    %tmp = buffer.alloca<private> align(8) %bytes : buffer
+    %n = func.call @unescape(%src, %offset, %count, %tmp, %c0) : (buffer, i64, i64, buffer, i64) -> (i64)
+    %single = scalar.cmpi eq, %n, %c1 : i64
+    %r2 = scf.if %single -> (i64) {
+      %b = func.call @byte_at(%tmp, %c0) : (buffer, i64) -> (i8)
+      %v = scalar.extui %b : i8 to i64
+      %up_lo = scalar.cmpi uge, %v, %c65 : i64
+      %up_hi = scalar.cmpi ule, %v, %c90 : i64
+      %lo_lo = scalar.cmpi uge, %v, %c97 : i64
+      %lo_hi = scalar.cmpi ule, %v, %c122 : i64
+      %up = scalar.andi %up_lo, %up_hi : i1
+      %lo = scalar.andi %lo_lo, %lo_hi : i1
+      %alpha = scalar.ori %up, %lo : i1
+      %res = scf.select %alpha, %v, %c0 : i64
+      scf.yield %res : i64
+    } else {
+      scf.yield %c0 : i64
+    }
+    scf.yield %r2 : i64
+  } else {
+    scf.yield %c0 : i64
+  }
+  func.return %r : i64
+}
+
+// 1 when every option key of the question is a single ASCII letter.
+func.def @all_letters(%request: buffer, %first: i64, %count: i64) -> (i1) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %z = scalar.constant 0 : i64
+  %c5 = scalar.constant 5 : i64
+  %true = scalar.constant true : i1
+  %base = func.call @option_base(%request) : (buffer) -> (i64)
+  %n = func.call @ix(%count) : (i64) -> (index)
+  %all = scf.for %j = [%c0 to %n step %c1](%a = %true : i1) -> (i1) {
+    %j64 = index.cast %j : index to i64
+    %o = scalar.addi %first, %j64 : i64
+    %rec = scalar.muli %o, %c5 : i64
+    %rec_i = scalar.addi %base, %rec : i64
+    %id_off = func.call @i64_at(%request, %rec_i) : (buffer, i64) -> (i64)
+    %rec_1 = scalar.addi %rec_i, %c5 : i64
+    %c1_64 = scalar.constant 1 : i64
+    %li = scalar.addi %rec_i, %c1_64 : i64
+    %id_len = func.call @i64_at(%request, %li) : (buffer, i64) -> (i64)
+    %letter = func.call @key_letter(%request, %id_off, %id_len) : (buffer, i64, i64) -> (i64)
+    %is = scalar.cmpi ne, %letter, %z : i64
+    %a2 = scalar.andi %a, %is : i1
+    scf.yield %a2 : i1
+  }
+  func.return %all : i1
+}
+
+// i64 index of the first option record: header (4) + questions (8 each).
+func.def @option_base(%request: buffer) -> (i64) {
+  %c3 = scalar.constant 3 : i64
+  %c4 = scalar.constant 4 : i64
+  %c8 = scalar.constant 8 : i64
+  %count = func.call @i64_at(%request, %c3) : (buffer, i64) -> (i64)
+  %q = scalar.muli %count, %c8 : i64
+  %base = scalar.addi %c4, %q : i64
+  func.return %base : i64
+}
+
+func.def @question_field(%request: buffer, %question: i64, %field: i64) -> (i64) {
+  %c4 = scalar.constant 4 : i64
+  %c8 = scalar.constant 8 : i64
+  %q = scalar.muli %question, %c8 : i64
+  %a = scalar.addi %c4, %q : i64
+  %i = scalar.addi %a, %field : i64
+  %v = func.call @i64_at(%request, %i) : (buffer, i64) -> (i64)
+  func.return %v : i64
+}
+
+func.def @option_field(%request: buffer, %option: i64, %field: i64) -> (i64) {
+  %c5 = scalar.constant 5 : i64
+  %base = func.call @option_base(%request) : (buffer) -> (i64)
+  %o = scalar.muli %option, %c5 : i64
+  %a = scalar.addi %base, %o : i64
+  %i = scalar.addi %a, %field : i64
+  %v = func.call @i64_at(%request, %i) : (buffer, i64) -> (i64)
+  func.return %v : i64
+}
+
+func.def @put_digit(%out: buffer, %pos: i64, %digit: i64) -> (i64) {
+  %c48 = scalar.constant 48 : i64
+  %v = scalar.addi %digit, %c48 : i64
+  %b = scalar.trunci %v : i64 to i8
+  %p = func.call @put(%out, %pos, %b) : (buffer, i64, i8) -> (i64)
+  func.return %p : i64
+}
+
+// Renders question q of the request; returns the byte length in out.
+func.def @render(%out: buffer, %request: buffer, %question: i64) -> (i64) {
+  %c0_i64 = scalar.constant 0 : i64
+  %c1_i64 = scalar.constant 1 : i64
+  %c2_i64 = scalar.constant 2 : i64
+  %c3_i64 = scalar.constant 3 : i64
+  %c4_i64 = scalar.constant 4 : i64
+  %c5_i64 = scalar.constant 5 : i64
+  %c6_i64 = scalar.constant 6 : i64
+  %c7_i64 = scalar.constant 7 : i64
+  %minus1 = scalar.constant -1 : i64
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %space = scalar.constant 32 : i8
+  %nl = scalar.constant 10 : i8
+  %state_off = func.call @i64_at(%request, %c0_i64) : (buffer, i64) -> (i64)
+  %state_len = func.call @i64_at(%request, %c1_i64) : (buffer, i64) -> (i64)
+  %state_type = func.call @i64_at(%request, %c2_i64) : (buffer, i64) -> (i64)
+  %kind = func.call @question_field(%request, %question, %c2_i64) : (buffer, i64, i64) -> (i64)
+  %ins_off = func.call @question_field(%request, %question, %c3_i64) : (buffer, i64, i64) -> (i64)
+  %ins_len = func.call @question_field(%request, %question, %c4_i64) : (buffer, i64, i64) -> (i64)
+  %ins_type = func.call @question_field(%request, %question, %c5_i64) : (buffer, i64, i64) -> (i64)
+  %first = func.call @question_field(%request, %question, %c6_i64) : (buffer, i64, i64) -> (i64)
+  %count = func.call @question_field(%request, %question, %c7_i64) : (buffer, i64, i64) -> (i64)
+  %prefix = global.load @lit_prefix : buffer
+  %p0 = func.call @put_lit(%out, %c0_i64, %prefix) : (buffer, i64, buffer) -> (i64)
+  %has_state = scalar.cmpi ne, %state_type, %c6_i64 : i64
+  %p1 = scf.if %has_state -> (i64) {
+    %ps = func.call @emit_value(%out, %p0, %request, %state_off, %state_len, %state_type, %c2_i64) : (buffer, i64, buffer, i64, i64, i64, i64) -> (i64)
+    %ql = global.load @lit_question : buffer
+    %pq = func.call @put_lit(%out, %ps, %ql) : (buffer, i64, buffer) -> (i64)
+    scf.yield %pq : i64
+  } else {
+    scf.yield %p0 : i64
+  }
+  %p2 = func.call @emit_value(%out, %p1, %request, %ins_off, %ins_len, %ins_type, %minus1) : (buffer, i64, buffer, i64, i64, i64, i64) -> (i64)
+  %n = func.call @ix(%count) : (i64) -> (index)
+  %last = scalar.subi %count, %c1_i64 : i64
+  %is_choice = scalar.cmpi eq, %kind, %c0_i64 : i64
+  %is_score = scalar.cmpi eq, %kind, %c1_i64 : i64
+  %p3 = scf.if %is_choice -> (i64) {
+    %ol = global.load @lit_options : buffer
+    %pa = func.call @put_lit(%out, %p2, %ol) : (buffer, i64, buffer) -> (i64)
+    %letters = func.call @all_letters(%request, %first, %count) : (buffer, i64, i64) -> (i1)
+    %codes = global.load @choice_codes : buffer
+    %ctable = global.load @choice_table : buffer
+    %pb = scf.for %j = [%c0 to %n step %c1](%p = %pa : i64) -> (i64) {
+      %j64 = index.cast %j : index to i64
+      %o = scalar.addi %first, %j64 : i64
+      %id_off = func.call @option_field(%request, %o, %c0_i64) : (buffer, i64, i64) -> (i64)
+      %id_len = func.call @option_field(%request, %o, %c1_i64) : (buffer, i64, i64) -> (i64)
+      %d_off = func.call @option_field(%request, %o, %c2_i64) : (buffer, i64, i64) -> (i64)
+      %d_len = func.call @option_field(%request, %o, %c3_i64) : (buffer, i64, i64) -> (i64)
+      %d_type = func.call @option_field(%request, %o, %c4_i64) : (buffer, i64, i64) -> (i64)
+      %pc = scf.if %letters -> (i64) {
+        %letter = func.call @key_letter(%request, %id_off, %id_len) : (buffer, i64, i64) -> (i64)
+        %b = scalar.trunci %letter : i64 to i8
+        %x = func.call @put(%out, %p, %b) : (buffer, i64, i8) -> (i64)
+        scf.yield %x : i64
+      } else {
+        %row = scalar.muli %j64, %c4_i64 : i64
+        %code_off32 = func.call @i32_at(%ctable, %row) : (buffer, i64) -> (i32)
+        %row1 = scalar.addi %row, %c1_i64 : i64
+        %code_len32 = func.call @i32_at(%ctable, %row1) : (buffer, i64) -> (i32)
+        %code_off = scalar.extsi %code_off32 : i32 to i64
+        %code_len = scalar.extsi %code_len32 : i32 to i64
+        %x = func.call @put_range(%out, %p, %codes, %code_off, %code_len) : (buffer, i64, buffer, i64, i64) -> (i64)
+        scf.yield %x : i64
+      }
+      %pd = func.call @put(%out, %pc, %space) : (buffer, i64, i8) -> (i64)
+      %described = func.call @truthy(%request, %d_off, %d_len, %d_type) : (buffer, i64, i64, i64) -> (i1)
+      %pe = scf.if %described -> (i64) {
+        %x = func.call @emit_value(%out, %pd, %request, %d_off, %d_len, %d_type, %minus1) : (buffer, i64, buffer, i64, i64, i64, i64) -> (i64)
+        scf.yield %x : i64
+      } else {
+        %x = func.call @emit_string(%out, %pd, %request, %id_off, %id_len, %c1_i32) : (buffer, i64, buffer, i64, i64, i32) -> (i64)
+        scf.yield %x : i64
+      }
+      %more = scalar.cmpi slt, %j64, %last : i64
+      %pf = scf.if %more -> (i64) {
+        %x = func.call @put(%out, %pe, %nl) : (buffer, i64, i8) -> (i64)
+        scf.yield %x : i64
+      } else {
+        scf.yield %pe : i64
+      }
+      scf.yield %pf : i64
+    }
+    %rl = global.load @lit_reply_code : buffer
+    %pz = func.call @put_lit(%out, %pb, %rl) : (buffer, i64, buffer) -> (i64)
+    scf.yield %pz : i64
+  } else {
+    %pq = scf.if %is_score -> (i64) {
+      %tl = global.load @lit_two_nl : buffer
+      %pa = func.call @put_lit(%out, %p2, %tl) : (buffer, i64, buffer) -> (i64)
+      %pb = scf.for %j = [%c0 to %n step %c1](%p = %pa : i64) -> (i64) {
+        %j64 = index.cast %j : index to i64
+        %o = scalar.addi %first, %j64 : i64
+        %d_off = func.call @option_field(%request, %o, %c2_i64) : (buffer, i64, i64) -> (i64)
+        %d_len = func.call @option_field(%request, %o, %c3_i64) : (buffer, i64, i64) -> (i64)
+        %d_type = func.call @option_field(%request, %o, %c4_i64) : (buffer, i64, i64) -> (i64)
+        %x = func.call @put_digit(%out, %p, %j64) : (buffer, i64, i64) -> (i64)
+        %y = func.call @put(%out, %x, %space) : (buffer, i64, i8) -> (i64)
+        %z = func.call @emit_value(%out, %y, %request, %d_off, %d_len, %d_type, %minus1) : (buffer, i64, buffer, i64, i64, i64, i64) -> (i64)
+        %w = func.call @put(%out, %z, %nl) : (buffer, i64, i8) -> (i64)
+        scf.yield %w : i64
+      }
+      %rl = global.load @lit_reply_digit : buffer
+      %pc = func.call @put_lit(%out, %pb, %rl) : (buffer, i64, buffer) -> (i64)
+      %pd = func.call @put_digit(%out, %pc, %last) : (buffer, i64, i64) -> (i64)
+      %ol = global.load @lit_only : buffer
+      %pe = func.call @put_lit(%out, %pd, %ol) : (buffer, i64, buffer) -> (i64)
+      scf.yield %pe : i64
+    } else {
+      // noul: options arrive as [false, true]; llama.cpp shows true first.
+      %true_option = scalar.addi %first, %c1_i64 : i64
+      %ft = func.call @option_field(%request, %first, %c4_i64) : (buffer, i64, i64) -> (i64)
+      %tt = func.call @option_field(%request, %true_option, %c4_i64) : (buffer, i64, i64) -> (i64)
+      %f_has = scalar.cmpi ne, %ft, %c6_i64 : i64
+      %t_has = scalar.cmpi ne, %tt, %c6_i64 : i64
+      %criteria = scalar.ori %f_has, %t_has : i1
+      %pa = scf.if %criteria -> (i64) {
+        %pb = scf.for %j = [%c0 to %n step %c1](%p = %p2 : i64) -> (i64) {
+          %j64 = index.cast %j : index to i64
+          %rev = scalar.subi %last, %j64 : i64
+          %o = scalar.addi %first, %rev : i64
+          %d_off = func.call @option_field(%request, %o, %c2_i64) : (buffer, i64, i64) -> (i64)
+          %d_len = func.call @option_field(%request, %o, %c3_i64) : (buffer, i64, i64) -> (i64)
+          %d_type = func.call @option_field(%request, %o, %c4_i64) : (buffer, i64, i64) -> (i64)
+          %is_true = scalar.cmpi eq, %rev, %c1_i64 : i64
+          %yl = global.load @lit_yes : buffer
+          %nl2 = global.load @lit_no : buffer
+          %lit = scf.select %is_true, %yl, %nl2 : buffer
+          %x = func.call @put_lit(%out, %p, %lit) : (buffer, i64, buffer) -> (i64)
+          %absent = scalar.cmpi eq, %d_type, %c6_i64 : i64
+          %y = scf.if %absent -> (i64) {
+            %none = global.load @lit_none : buffer
+            %z = func.call @put_lit(%out, %x, %none) : (buffer, i64, buffer) -> (i64)
+            scf.yield %z : i64
+          } else {
+            %z = func.call @emit_value(%out, %x, %request, %d_off, %d_len, %d_type, %minus1) : (buffer, i64, buffer, i64, i64, i64, i64) -> (i64)
+            scf.yield %z : i64
+          }
+          scf.yield %y : i64
+        }
+        scf.yield %pb : i64
+      } else {
+        scf.yield %p2 : i64
+      }
+      %rl = global.load @lit_reply_yn : buffer
+      %pc = func.call @put_lit(%out, %pa, %rl) : (buffer, i64, buffer) -> (i64)
+      scf.yield %pc : i64
+    }
+    scf.yield %pq : i64
+  }
+  %suffix = global.load @lit_suffix : buffer
+  %p4 = func.call @put_lit(%out, %p3, %suffix) : (buffer, i64, buffer) -> (i64)
+  func.return %p4 : i64
+}
+
+// Label groups of question q, appended at groups[gpos] (label counts) and
+// labels[lpos]; public option order (scores ascending, noul [false, true]).
+func.def @labels(%request: buffer, %question: i64, %prepared: buffer, %group_base: i64, %label_base: i64) -> (i64) {
+  %c0_i64 = scalar.constant 0 : i64
+  %c1_i64 = scalar.constant 1 : i64
+  %c2_i64 = scalar.constant 2 : i64
+  %c3_i64 = scalar.constant 3 : i64
+  %c4_i64 = scalar.constant 4 : i64
+  %c6_i64 = scalar.constant 6 : i64
+  %c7_i64 = scalar.constant 7 : i64
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %minus1 = scalar.constant -1 : i32
+  %one_i32 = scalar.constant 1 : i32
+  %two_i32 = scalar.constant 2 : i32
+  %kind = func.call @question_field(%request, %question, %c2_i64) : (buffer, i64, i64) -> (i64)
+  %first = func.call @question_field(%request, %question, %c6_i64) : (buffer, i64, i64) -> (i64)
+  %count = func.call @question_field(%request, %question, %c7_i64) : (buffer, i64, i64) -> (i64)
+  %n = func.call @ix(%count) : (i64) -> (index)
+  %is_choice = scalar.cmpi eq, %kind, %c0_i64 : i64
+  %is_score = scalar.cmpi eq, %kind, %c1_i64 : i64
+  %letters = scf.if %is_choice -> (i1) {
+    %a = func.call @all_letters(%request, %first, %count) : (buffer, i64, i64) -> (i1)
+    scf.yield %a : i1
+  } else {
+    %f = scalar.constant false : i1
+    scf.yield %f : i1
+  }
+  %ctable = global.load @choice_table : buffer
+  %ltable = global.load @letter_table : buffer
+  %stable = global.load @score_table : buffer
+  %ntable = global.load @noul_table : buffer
+  %total = scf.for %j = [%c0 to %n step %c1](%used = %c0_i64 : i64) -> (i64) {
+    %j64 = index.cast %j : index to i64
+    %o = scalar.addi %first, %j64 : i64
+    %t0, %t1, %t2 = scf.if %is_choice -> (i32, i32, i32) {
+      %a0, %a1 = scf.if %letters -> (i32, i32) {
+        %id_off = func.call @option_field(%request, %o, %c0_i64) : (buffer, i64, i64) -> (i64)
+        %id_len = func.call @option_field(%request, %o, %c1_i64) : (buffer, i64, i64) -> (i64)
+        %letter = func.call @key_letter(%request, %id_off, %id_len) : (buffer, i64, i64) -> (i64)
+        %row = scalar.muli %letter, %c2_i64 : i64
+        %row1 = scalar.addi %row, %c1_i64 : i64
+        %x0 = func.call @i32_at(%ltable, %row) : (buffer, i64) -> (i32)
+        %x1 = func.call @i32_at(%ltable, %row1) : (buffer, i64) -> (i32)
+        scf.yield %x0, %x1 : i32, i32
+      } else {
+        %row = scalar.muli %j64, %c4_i64 : i64
+        %row2 = scalar.addi %row, %c2_i64 : i64
+        %row3 = scalar.addi %row, %c3_i64 : i64
+        %x0 = func.call @i32_at(%ctable, %row2) : (buffer, i64) -> (i32)
+        %x1 = func.call @i32_at(%ctable, %row3) : (buffer, i64) -> (i32)
+        scf.yield %x0, %x1 : i32, i32
+      }
+      scf.yield %a0, %a1, %minus1 : i32, i32, i32
+    } else {
+      %b0, %b1, %b2 = scf.if %is_score -> (i32, i32, i32) {
+        %x0 = func.call @i32_at(%stable, %j64) : (buffer, i64) -> (i32)
+        scf.yield %x0, %minus1, %minus1 : i32, i32, i32
+      } else {
+        %row = scalar.muli %j64, %c4_i64 : i64
+        %r1 = scalar.addi %row, %c1_i64 : i64
+        %r2 = scalar.addi %row, %c2_i64 : i64
+        %r3 = scalar.addi %row, %c3_i64 : i64
+        %x0 = func.call @i32_at(%ntable, %r1) : (buffer, i64) -> (i32)
+        %x1 = func.call @i32_at(%ntable, %r2) : (buffer, i64) -> (i32)
+        %x2 = func.call @i32_at(%ntable, %r3) : (buffer, i64) -> (i32)
+        scf.yield %x0, %x1, %x2 : i32, i32, i32
+      }
+      scf.yield %b0, %b1, %b2 : i32, i32, i32
+    }
+    %h1 = scalar.cmpi sge, %t1, %one_i32 : i32
+    %h2 = scalar.cmpi sge, %t2, %one_i32 : i32
+    %h1_i = scalar.extui %h1 : i1 to i32
+    %h2_i = scalar.extui %h2 : i1 to i32
+    %k1 = scalar.addi %one_i32, %h1_i : i32
+    %k = scalar.addi %k1, %h2_i : i32
+    %gi = scalar.addi %group_base, %j64 : i64
+    func.call @set_i32(%prepared, %gi, %k) : (buffer, i64, i32)
+    %l0 = scalar.addi %label_base, %used : i64
+    func.call @set_i32(%prepared, %l0, %t0) : (buffer, i64, i32)
+    %l1 = scalar.addi %l0, %c1_i64 : i64
+    scf.if %h1 {
+      func.call @set_i32(%prepared, %l1, %t1) : (buffer, i64, i32)
+    }
+    %l2 = scalar.addi %l1, %c1_i64 : i64
+    scf.if %h2 {
+      func.call @set_i32(%prepared, %l2, %t2) : (buffer, i64, i32)
+    }
+    %k64 = scalar.extui %k : i32 to i64
+    %next = scalar.addi %used, %k64 : i64
+    scf.yield %next : i64
+  }
+  func.return %total : i64
+}
+
+// Prepared request (little-endian):
+//   i64[4] question count, tokens, groups, labels
+//   i64[4] per question: tokens, groups, labels, i32 index of its data
+//   i32 data per question: token IDs, label count per group, label IDs
+func.def public @prepare_request(%state: buffer, %request: buffer) -> (buffer, i64, i64) {
+  %c0_i64 = scalar.constant 0 : i64
+  %c1_i64 = scalar.constant 1 : i64
+  %c2_i64 = scalar.constant 2 : i64
+  %c3_i64 = scalar.constant 3 : i64
+  %c4_i64 = scalar.constant 4 : i64
+  %c5_i64 = scalar.constant 5 : i64
+  %c7_i64 = scalar.constant 7 : i64
+  %c8_i64 = scalar.constant 8 : i64
+  %c16_i64 = scalar.constant 16 : i64
+  %c0_i32 = scalar.constant 0 : i32
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %origin = index.constant 0 : offset
+  %limit = func.call @i64_at(%state, %c1_i64) : (buffer, i64) -> (i64)
+  %count = func.call @i64_at(%request, %c3_i64) : (buffer, i64) -> (i64)
+  %nq = func.call @ix(%count) : (i64) -> (index)
+  %label_message = global.load @msg_labels : buffer
+  %bound_groups, %bound_labels = scf.for %q = [%c0 to %nq step %c1](%g = %c0_i64 : i64, %l = %c0_i64 : i64) -> (i64, i64) {
+    %q64 = index.cast %q : index to i64
+    %kind = func.call @question_field(%request, %q64, %c2_i64) : (buffer, i64, i64) -> (i64)
+    %options = func.call @question_field(%request, %q64, %c7_i64) : (buffer, i64, i64) -> (i64)
+    %is_choice = scalar.cmpi eq, %kind, %c0_i64 : i64
+    %is_score = scalar.cmpi eq, %kind, %c1_i64 : i64
+    %max255 = scalar.constant 255 : i64
+    %max10 = scalar.constant 10 : i64
+    %maximum = scf.select %is_choice, %max255, %max10 : i64
+    %positive = scalar.cmpi sgt, %options, %c0_i64 : i64
+    %bounded = scalar.cmpi ule, %options, %maximum : i64
+    %valid = scalar.andi %positive, %bounded : i1
+    func.call @fail_unless(%valid, %label_message) : (i1, buffer)
+    %g2 = scalar.addi %g, %options : i64
+    %per = scf.select %is_score, %c1_i64, %c3_i64 : i64
+    %extra = scalar.muli %options, %per : i64
+    %l2 = scalar.addi %l, %extra : i64
+    scf.yield %g2, %l2 : i64, i64
+  }
+  %header_words = scalar.addi %c1_i64, %count : i64
+  %c32_bytes = scalar.constant 32 : i64
+  %header_bytes = scalar.muli %header_words, %c32_bytes : i64
+  %data_words_a = scalar.addi %limit, %c1_i64 : i64
+  %data_words_b = scalar.addi %data_words_a, %bound_groups : i64
+  %data_words = scalar.addi %data_words_b, %bound_labels : i64
+  %data_bytes = scalar.muli %data_words, %c4_i64 : i64
+  %prepared_raw = scalar.addi %header_bytes, %data_bytes : i64
+  %c7_round = scalar.constant 7 : i64
+  %c_mask = scalar.constant -8 : i64
+  %prepared_up = scalar.addi %prepared_raw, %c7_round : i64
+  %prepared_bytes = scalar.andi %prepared_up, %c_mask : i64
+  %pb = func.call @off(%prepared_bytes) : (i64) -> (offset)
+  %prepared = buffer.alloca<private> align(8) %pb : buffer
+  buffer.fill %c0_i32, %prepared[%origin], %pb : i32
+  %request_length = buffer.length %request
+  %rl = index.cast %request_length : offset to i64
+  %render_cap_a = scalar.muli %rl, %c16_i64 : i64
+  %render_extra = scalar.constant 8192 : i64
+  %render_cap = scalar.addi %render_cap_a, %render_extra : i64
+  %rc = func.call @off(%render_cap) : (i64) -> (offset)
+  %text = buffer.alloca<private> align(8) %rc : buffer
+  %data_base = scalar.divui %header_bytes, %c4_i64 : i64
+  %capacity_message = global.load @msg_capacity : buffer
+  %tokens, %groups, %labels, %cursor = scf.for %q = [%c0 to %nq step %c1](%t = %c0_i64 : i64, %g = %c0_i64 : i64, %l = %c0_i64 : i64, %w = %data_base : i64) -> (i64, i64, i64, i64) {
+    %q64 = index.cast %q : index to i64
+    %length = func.call @render(%text, %request, %q64) : (buffer, buffer, i64) -> (i64)
+    %lo = func.call @off(%length) : (i64) -> (offset)
+    %exact = buffer.alloca<private> align(8) %lo : buffer
+    buffer.copy %text[%origin], %exact[%origin], %lo
+    %remaining = scalar.subi %limit, %t : i64
+    %ask = scalar.addi %remaining, %c1_i64 : i64
+    %ids, %n = func.call @encode(%exact, %c0_i32, %ask) : (buffer, i32, i64) -> (buffer, i64)
+    %fits = scalar.cmpi ule, %n, %remaining : i64
+    func.call @fail_unless(%fits, %capacity_message) : (i1, buffer)
+    %id_bytes = scalar.muli %n, %c4_i64 : i64
+    %ib = func.call @off(%id_bytes) : (i64) -> (offset)
+    %dst_bytes = scalar.muli %w, %c4_i64 : i64
+    %dst = func.call @off(%dst_bytes) : (i64) -> (offset)
+    buffer.copy %ids[%origin], %prepared[%dst], %ib
+    %options = func.call @question_field(%request, %q64, %c7_i64) : (buffer, i64, i64) -> (i64)
+    %group_base = scalar.addi %w, %n : i64
+    %label_base = scalar.addi %group_base, %options : i64
+    %nl = func.call @labels(%request, %q64, %prepared, %group_base, %label_base) : (buffer, i64, buffer, i64, i64) -> (i64)
+    %record = scalar.muli %q64, %c4_i64 : i64
+    %r0 = scalar.addi %record, %c4_i64 : i64
+    %r1 = scalar.addi %r0, %c1_i64 : i64
+    %r2 = scalar.addi %r0, %c2_i64 : i64
+    %r3 = scalar.addi %r0, %c3_i64 : i64
+    func.call @set_i64(%prepared, %r0, %n) : (buffer, i64, i64)
+    func.call @set_i64(%prepared, %r1, %options) : (buffer, i64, i64)
+    func.call @set_i64(%prepared, %r2, %nl) : (buffer, i64, i64)
+    func.call @set_i64(%prepared, %r3, %w) : (buffer, i64, i64)
+    %c31_align = scalar.constant 31 : i64
+    %mask_align = scalar.constant -32 : i64
+    %n_up = scalar.addi %n, %c31_align : i64
+    %n_aligned = scalar.andi %n_up, %mask_align : i64
+    %t2 = scalar.addi %t, %n_aligned : i64
+    %g2 = scalar.addi %g, %options : i64
+    %l2 = scalar.addi %l, %nl : i64
+    %w2 = scalar.addi %label_base, %nl : i64
+    scf.yield %t2, %g2, %l2, %w2 : i64, i64, i64, i64
+  }
+  func.call @set_i64(%prepared, %c0_i64, %count) : (buffer, i64, i64)
+  func.call @set_i64(%prepared, %c1_i64, %tokens) : (buffer, i64, i64)
+  func.call @set_i64(%prepared, %c2_i64, %groups) : (buffer, i64, i64)
+  func.call @set_i64(%prepared, %c3_i64, %labels) : (buffer, i64, i64)
+  func.return %prepared, %tokens, %c0_i64 : buffer, i64, i64
+}
+
+// Packs a cohort into the device payload of the smallest token shape.
+func.def public @prepare_batch(%state: buffer, %tags: buffer, %ranges: buffer, %packed: buffer) -> (i32, buffer, buffer) {
+  %c0_i64 = scalar.constant 0 : i64
+  %c1_i64 = scalar.constant 1 : i64
+  %c2_i64 = scalar.constant 2 : i64
+  %c3_i64 = scalar.constant 3 : i64
+  %c4_i64 = scalar.constant 4 : i64
+  %c8_i64 = scalar.constant 8 : i64
+  %c16_i64 = scalar.constant 16 : i64
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %origin = index.constant 0 : offset
+  %row_cap = scalar.constant 2048 : i64
+  %group_cap = scalar.constant 16384 : i64
+  %label_cap = scalar.constant 32768 : i64
+  %range_length = buffer.length %ranges
+  %range_bytes = index.cast %range_length : offset to i64
+  %requests64 = scalar.divui %range_bytes, %c16_i64 : i64
+  %requests = func.call @ix(%requests64) : (i64) -> (index)
+  %rows, %tokens, %groups, %labels = scf.for %r = [%c0 to %requests step %c1](%a = %c0_i64 : i64, %b = %c0_i64 : i64, %c = %c0_i64 : i64, %d = %c0_i64 : i64) -> (i64, i64, i64, i64) {
+    %r64 = index.cast %r : index to i64
+    %ri = scalar.muli %r64, %c2_i64 : i64
+    %src = func.call @i64_at(%ranges, %ri) : (buffer, i64) -> (i64)
+    %b1 = scalar.addi %src, %c8_i64 : i64
+    %b2 = scalar.addi %b1, %c8_i64 : i64
+    %b3 = scalar.addi %b2, %c8_i64 : i64
+    %x0 = func.call @i64_b(%packed, %src) : (buffer, i64) -> (i64)
+    %x1 = func.call @i64_b(%packed, %b1) : (buffer, i64) -> (i64)
+    %x2 = func.call @i64_b(%packed, %b2) : (buffer, i64) -> (i64)
+    %x3 = func.call @i64_b(%packed, %b3) : (buffer, i64) -> (i64)
+    %na = scalar.addi %a, %x0 : i64
+    %nb = scalar.addi %b, %x1 : i64
+    %nc = scalar.addi %c, %x2 : i64
+    %nd = scalar.addi %d, %x3 : i64
+    scf.yield %na, %nb, %nc, %nd : i64, i64, i64, i64
+  }
+  %fit_rows = scalar.cmpi ule, %rows, %row_cap : i64
+  %fit_groups = scalar.cmpi ule, %groups, %group_cap : i64
+  %fit_labels = scalar.cmpi ule, %labels, %label_cap : i64
+  %fit_a = scalar.andi %fit_rows, %fit_groups : i1
+  %fit = scalar.andi %fit_a, %fit_labels : i1
+  %cohort_message = global.load @msg_cohort : buffer
+  func.call @fail_unless(%fit, %cohort_message) : (i1, buffer)
+  // Smallest declared shape holding the cohort (state: [count, limit, shapes...]).
+  %shape_count = func.call @i64_at(%state, %c0_i64) : (buffer, i64) -> (i64)
+  %ns = func.call @ix(%shape_count) : (i64) -> (index)
+  %minus1 = scalar.constant -1 : i64
+  %chosen, %shape = scf.for %s = [%c0 to %ns step %c1](%cs = %minus1 : i64, %ct = %c0_i64 : i64) -> (i64, i64) {
+    %s64 = index.cast %s : index to i64
+    %si = scalar.addi %s64, %c2_i64 : i64
+    %t = func.call @i64_at(%state, %si) : (buffer, i64) -> (i64)
+    %unset = scalar.cmpi slt, %cs, %c0_i64 : i64
+    %holds = scalar.cmpi uge, %t, %tokens : i64
+    %take = scalar.andi %unset, %holds : i1
+    %ns2 = scf.select %take, %s64, %cs : i64
+    %nt = scf.select %take, %t, %ct : i64
+    scf.yield %ns2, %nt : i64, i64
+  }
+  %found = scalar.cmpi sge, %chosen, %c0_i64 : i64
+  %capacity_message = global.load @msg_capacity : buffer
+  func.call @fail_unless(%found, %capacity_message) : (i1, buffer)
+  // Stage ordinal of the chosen shape tag.
+  %tag_length = buffer.length %tags
+  %tag_bytes = index.cast %tag_length : offset to i64
+  %tag_count = scalar.divui %tag_bytes, %c8_i64 : i64
+  %nt_i = func.call @ix(%tag_count) : (i64) -> (index)
+  %stage64 = scf.for %s = [%c0 to %nt_i step %c1](%st = %minus1 : i64) -> (i64) {
+    %s64 = index.cast %s : index to i64
+    %tag = func.call @i64_at(%tags, %s64) : (buffer, i64) -> (i64)
+    %unset = scalar.cmpi slt, %st, %c0_i64 : i64
+    %match = scalar.cmpi eq, %tag, %shape : i64
+    %take = scalar.andi %unset, %match : i1
+    %n2 = scf.select %take, %s64, %st : i64
+    scf.yield %n2 : i64
+  }
+  %stage_found = scalar.cmpi sge, %stage64, %c0_i64 : i64
+  func.call @fail_unless(%stage_found, %capacity_message) : (i1, buffer)
+  %stage = scalar.trunci %stage64 : i64 to i32
+  // Payload words (i32): header 4, ids T, info 4T, rows 4R, groups 2G, labels L.
+  %ids_w = scalar.constant 4 : i64
+  %info_w = scalar.addi %ids_w, %shape : i64
+  %shape4 = scalar.muli %shape, %c4_i64 : i64
+  %rows_w = scalar.addi %info_w, %shape4 : i64
+  %rows_words = scalar.constant 8192 : i64
+  %groups_w = scalar.addi %rows_w, %rows_words : i64
+  %group_words = scalar.constant 32768 : i64
+  %labels_w = scalar.addi %groups_w, %group_words : i64
+  %end_w = scalar.addi %labels_w, %label_cap : i64
+  %payload_bytes = scalar.muli %end_w, %c4_i64 : i64
+  %pbo = func.call @off(%payload_bytes) : (i64) -> (offset)
+  %payload = buffer.alloca<private> align(16) %pbo : buffer
+  buffer.fill %c0_i32, %payload[%origin], %pbo : i32
+  %rows32 = scalar.trunci %rows : i64 to i32
+  %tokens32 = scalar.trunci %tokens : i64 to i32
+  %groups32 = scalar.trunci %groups : i64 to i32
+  %labels32 = scalar.trunci %labels : i64 to i32
+  func.call @set_i32(%payload, %c0_i64, %rows32) : (buffer, i64, i32)
+  func.call @set_i32(%payload, %c1_i64, %tokens32) : (buffer, i64, i32)
+  func.call @set_i32(%payload, %c2_i64, %groups32) : (buffer, i64, i32)
+  func.call @set_i32(%payload, %c3_i64, %labels32) : (buffer, i64, i32)
+  // Result plan: header 4, per request 3, per row 2 (i64).
+  %plan_words_a = scalar.muli %requests64, %c3_i64 : i64
+  %plan_words_b = scalar.muli %rows, %c2_i64 : i64
+  %plan_words_c = scalar.addi %plan_words_a, %plan_words_b : i64
+  %plan_words = scalar.addi %plan_words_c, %c4_i64 : i64
+  %plan_bytes = scalar.muli %plan_words, %c8_i64 : i64
+  %plo = func.call @off(%plan_bytes) : (i64) -> (offset)
+  %plan = buffer.alloca<private> align(8) %plo : buffer
+  %physical = scalar.muli %group_cap, %c4_i64 : i64
+  %live = scalar.muli %groups, %c4_i64 : i64
+  func.call @set_i64(%plan, %c0_i64, %physical) : (buffer, i64, i64)
+  func.call @set_i64(%plan, %c1_i64, %live) : (buffer, i64, i64)
+  func.call @set_i64(%plan, %c2_i64, %requests64) : (buffer, i64, i64)
+  func.call @set_i64(%plan, %c3_i64, %rows) : (buffer, i64, i64)
+  %row_plan = scalar.addi %c4_i64, %plan_words_a : i64
+  %e0, %e1, %e2, %e3 = scf.for %r = [%c0 to %requests step %c1](%row = %c0_i64 : i64, %tok = %c0_i64 : i64, %grp = %c0_i64 : i64, %lab = %c0_i64 : i64) -> (i64, i64, i64, i64) {
+    %r64 = index.cast %r : index to i64
+    %ri = scalar.muli %r64, %c2_i64 : i64
+    %src = func.call @i64_at(%ranges, %ri) : (buffer, i64) -> (i64)
+    %nq = func.call @i64_b(%packed, %src) : (buffer, i64) -> (i64)
+    %b1 = scalar.addi %src, %c8_i64 : i64
+    %ntok = func.call @i64_b(%packed, %b1) : (buffer, i64) -> (i64)
+    %pr = scalar.muli %r64, %c3_i64 : i64
+    %pr0 = scalar.addi %pr, %c4_i64 : i64
+    %pr1 = scalar.addi %pr0, %c1_i64 : i64
+    %pr2 = scalar.addi %pr0, %c2_i64 : i64
+    func.call @set_i64(%plan, %pr0, %row) : (buffer, i64, i64)
+    func.call @set_i64(%plan, %pr1, %nq) : (buffer, i64, i64)
+    %nqi = func.call @ix(%nq) : (i64) -> (index)
+    %f0, %f1, %f2, %f3 = scf.for %q = [%c0 to %nqi step %c1](%rw = %row : i64, %tk = %tok : i64, %gp = %grp : i64, %lb = %lab : i64) -> (i64, i64, i64, i64) {
+      %q64 = index.cast %q : index to i64
+      %c32_q = scalar.constant 32 : i64
+      %rec32 = scalar.muli %q64, %c32_q : i64
+      %rec = scalar.addi %rec32, %c32_q : i64
+      %ra = scalar.addi %src, %rec : i64
+      %rb = scalar.addi %ra, %c8_i64 : i64
+      %rc = scalar.addi %rb, %c8_i64 : i64
+      %rd = scalar.addi %rc, %c8_i64 : i64
+      %n = func.call @i64_b(%packed, %ra) : (buffer, i64) -> (i64)
+      %ng = func.call @i64_b(%packed, %rb) : (buffer, i64) -> (i64)
+      %nl = func.call @i64_b(%packed, %rc) : (buffer, i64) -> (i64)
+      %w = func.call @i64_b(%packed, %rd) : (buffer, i64) -> (i64)
+      %w_bytes = scalar.muli %w, %c4_i64 : i64
+      %data_bytes = scalar.addi %src, %w_bytes : i64
+      // ids and per-token info
+      %ids_dst = scalar.addi %ids_w, %tk : i64
+      %src_bytes = scalar.addi %data_bytes, %c0_i64 : i64
+      %dst_bytes = scalar.muli %ids_dst, %c4_i64 : i64
+      %n_bytes = scalar.muli %n, %c4_i64 : i64
+      %sbo = func.call @off(%src_bytes) : (i64) -> (offset)
+      %dbo = func.call @off(%dst_bytes) : (i64) -> (offset)
+      %nbo = func.call @off(%n_bytes) : (i64) -> (offset)
+      buffer.copy %packed[%sbo], %payload[%dbo], %nbo
+      %ni = func.call @ix(%n) : (i64) -> (index)
+      %tk32 = scalar.trunci %tk : i64 to i32
+      %n32 = scalar.trunci %n : i64 to i32
+      scf.for %i = [%c0 to %ni step %c1] {
+        %i64 = index.cast %i : index to i64
+        %token = scalar.addi %tk, %i64 : i64
+        %t4 = scalar.muli %token, %c4_i64 : i64
+        %w0 = scalar.addi %info_w, %t4 : i64
+        %w1 = scalar.addi %w0, %c1_i64 : i64
+        %w2 = scalar.addi %w0, %c2_i64 : i64
+        %w3 = scalar.addi %w0, %c3_i64 : i64
+        %i32v = scalar.trunci %i64 : i64 to i32
+        func.call @set_i32(%payload, %w0, %tk32) : (buffer, i64, i32)
+        func.call @set_i32(%payload, %w1, %n32) : (buffer, i64, i32)
+        func.call @set_i32(%payload, %w2, %i32v) : (buffer, i64, i32)
+        func.call @set_i32(%payload, %w3, %c1_i32) : (buffer, i64, i32)
+      }
+      // row record: last token, first group, group count, output offset
+      %last = scalar.addi %tk, %n : i64
+      %last1 = scalar.subi %last, %c1_i64 : i64
+      %rw4 = scalar.muli %rw, %c4_i64 : i64
+      %x0 = scalar.addi %rows_w, %rw4 : i64
+      %x1 = scalar.addi %x0, %c1_i64 : i64
+      %x2 = scalar.addi %x0, %c2_i64 : i64
+      %x3 = scalar.addi %x0, %c3_i64 : i64
+      %last32 = scalar.trunci %last1 : i64 to i32
+      %gp32 = scalar.trunci %gp : i64 to i32
+      %ng32 = scalar.trunci %ng : i64 to i32
+      func.call @set_i32(%payload, %x0, %last32) : (buffer, i64, i32)
+      func.call @set_i32(%payload, %x1, %gp32) : (buffer, i64, i32)
+      func.call @set_i32(%payload, %x2, %ng32) : (buffer, i64, i32)
+      func.call @set_i32(%payload, %x3, %gp32) : (buffer, i64, i32)
+      // result row
+      %rp2 = scalar.muli %rw, %c2_i64 : i64
+      %rp0 = scalar.addi %row_plan, %rp2 : i64
+      %rp1 = scalar.addi %rp0, %c1_i64 : i64
+      %out_bytes = scalar.muli %gp, %c4_i64 : i64
+      func.call @set_i64(%plan, %rp0, %out_bytes) : (buffer, i64, i64)
+      func.call @set_i64(%plan, %rp1, %ng) : (buffer, i64, i64)
+      // groups and labels
+      %n4 = scalar.muli %n, %c4_i64 : i64
+      %gsrc = scalar.addi %data_bytes, %n4 : i64
+      %ng4 = scalar.muli %ng, %c4_i64 : i64
+      %lsrc = scalar.addi %gsrc, %ng4 : i64
+      %ngi = func.call @ix(%ng) : (i64) -> (index)
+      %lend = scf.for %g = [%c0 to %ngi step %c1](%lc = %lb : i64) -> (i64) {
+        %g64 = index.cast %g : index to i64
+        %g4 = scalar.muli %g64, %c4_i64 : i64
+        %gs = scalar.addi %gsrc, %g4 : i64
+        %k = func.call @i32_b(%packed, %gs) : (buffer, i64) -> (i32)
+        %gg = scalar.addi %gp, %g64 : i64
+        %gg2 = scalar.muli %gg, %c2_i64 : i64
+        %y0 = scalar.addi %groups_w, %gg2 : i64
+        %y1 = scalar.addi %y0, %c1_i64 : i64
+        %lc32 = scalar.trunci %lc : i64 to i32
+        func.call @set_i32(%payload, %y0, %lc32) : (buffer, i64, i32)
+        func.call @set_i32(%payload, %y1, %k) : (buffer, i64, i32)
+        %k64 = scalar.extsi %k : i32 to i64
+        %nlc = scalar.addi %lc, %k64 : i64
+        scf.yield %nlc : i64
+      }
+      %lab_src_bytes = scalar.addi %lsrc, %c0_i64 : i64
+      %lab_dst_w = scalar.addi %labels_w, %lb : i64
+      %lab_dst_bytes = scalar.muli %lab_dst_w, %c4_i64 : i64
+      %lab_bytes = scalar.muli %nl, %c4_i64 : i64
+      %lso = func.call @off(%lab_src_bytes) : (i64) -> (offset)
+      %ldo = func.call @off(%lab_dst_bytes) : (i64) -> (offset)
+      %lno = func.call @off(%lab_bytes) : (i64) -> (offset)
+      %has_labels = scalar.cmpi sgt, %nl, %c0_i64 : i64
+      scf.if %has_labels {
+        buffer.copy %packed[%lso], %payload[%ldo], %lno
+      }
+      %rw2 = scalar.addi %rw, %c1_i64 : i64
+      %c31_align = scalar.constant 31 : i64
+      %mask_align = scalar.constant -32 : i64
+      %n_up = scalar.addi %n, %c31_align : i64
+      %n_aligned = scalar.andi %n_up, %mask_align : i64
+      %tk2 = scalar.addi %tk, %n_aligned : i64
+      %gp2 = scalar.addi %gp, %ng : i64
+      %lb2 = scalar.addi %lb, %nl : i64
+      scf.yield %rw2, %tk2, %gp2, %lb2 : i64, i64, i64, i64
+    }
+    // input-token usage: the live (unaligned) question tokens of this request
+    %qi_all = func.call @ix(%nq) : (i64) -> (index)
+    %raw_tokens = scf.for %q = [%c0 to %qi_all step %c1](%acc = %c0_i64 : i64) -> (i64) {
+      %q64 = index.cast %q : index to i64
+      %c32_r = scalar.constant 32 : i64
+      %rec32r = scalar.muli %q64, %c32_r : i64
+      %recr = scalar.addi %rec32r, %c32_r : i64
+      %rar = scalar.addi %src, %recr : i64
+      %nr = func.call @i64_b(%packed, %rar) : (buffer, i64) -> (i64)
+      %acc2 = scalar.addi %acc, %nr : i64
+      scf.yield %acc2 : i64
+    }
+    func.call @set_i64(%plan, %pr2, %raw_tokens) : (buffer, i64, i64)
+    scf.yield %f0, %f1, %f2, %f3 : i64, i64, i64, i64
+  }
+  func.return %stage, %payload, %plan : i32, buffer, buffer
+}
+
+func.def public @run(%stage: i32, %input: hal.buffer, %output: hal.buffer) {
+  %work = func.call @execute_2(%stage, %input, %output) : (i32, hal.buffer, hal.buffer) -> (i64)
+  func.return
+}

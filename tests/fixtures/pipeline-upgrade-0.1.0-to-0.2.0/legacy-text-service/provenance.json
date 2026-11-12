@@ -1,0 +1,4 @@
+{
+  "selection": "loom-fun/LiquidAI-LFM3-Audio-2B-loom@2e04065815f5184c8c1d64eab19fe7a036aaf607",
+  "purpose": "Minimal extracted legacy chat/tool provider and ABI wrapper fixture; original bytes of relevant functions retained"
+}

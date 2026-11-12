@@ -9,6 +9,7 @@ selection=""
 runtime_baseline=""
 runtime=""
 runtime_source_args=()
+preparation_policy_args=()
 device_uri="amdgpu://0"
 cycles=1
 keep_prepared=false
@@ -17,7 +18,9 @@ usage() {
   cat <<'HELP'
 Usage: bash scripts/run-cached-models.sh [--root CACHE_ROOT] [--suite SUITE_JSON | --selection cached]
        [--runtime RUNTIME_CONFIG | --runtime-baseline SDK_CONFIG] [--full-integrity]
-       [--runtime-source release|actions-main|actions-replay]
+       [--runtime-source release|release-latest|actions-main|actions-replay | --runtime-selection FILE]
+       [--selection-snapshot FILE] [--pipeline-upgrade auto|none]
+       [--pool-backing fixed|elastic] [--memory-bytes SIZE]
        [--runtime-run-id ID --runtime-run-attempt N --runtime-artifact-id ID --runtime-wheel-sha256 SHA256]
        [--output NEW_ATTEMPT] [--device-uri URI] [--cycles COUNT] [--keep-prepared]
 Runs the same Prepare, Run and Report Bash commands used by GitHub Actions.
@@ -26,13 +29,14 @@ HELP
 }
 while (($#)); do
   case "$1" in
-    --root|--suite|--selection|--runtime|--runtime-baseline|--output|--device-uri|--cycles|--runtime-source|--runtime-run-id|--runtime-run-attempt|--runtime-artifact-id|--runtime-wheel-sha256)
+    --root|--suite|--selection|--runtime|--runtime-baseline|--output|--device-uri|--cycles|--runtime-source|--runtime-run-id|--runtime-run-attempt|--runtime-artifact-id|--runtime-wheel-sha256|--runtime-selection|--selection-snapshot|--pipeline-upgrade|--pool-backing|--memory-bytes)
       (($# >= 2)) || { usage >&2; exit 2; }
       case "$1" in
         --root) root="$2";; --suite) suite="$2";; --output) output="$2";;
         --selection) selection="$2";; --runtime) runtime="$2";; --runtime-baseline) runtime_baseline="$2";;
         --device-uri) device_uri="$2";; --cycles) cycles="$2";;
         --runtime-source|--runtime-run-id|--runtime-run-attempt|--runtime-artifact-id|--runtime-wheel-sha256) runtime_source_args+=("$1" "$2");;
+        --runtime-selection|--selection-snapshot|--pipeline-upgrade|--pool-backing|--memory-bytes) preparation_policy_args+=("$1" "$2");;
       esac
       shift 2;;
     --keep-prepared) keep_prepared=true; shift;;
@@ -146,7 +150,7 @@ if value.get('repository') and value.get('run_id'):
 pathlib.Path(sys.argv[1]).write_text(json.dumps(value, indent=2) + '\n')
 PY
 write_status
-prepare_args=(--root "$root" --output "$output/prepared" "${runtime_source_args[@]}")
+prepare_args=(--root "$root" --output "$output/prepared" "${runtime_source_args[@]}" "${preparation_policy_args[@]}")
 [[ -z "$suite" ]] || prepare_args+=(--suite "$suite")
 [[ -z "$selection" ]] || prepare_args+=(--selection "$selection")
 [[ -z "$runtime" ]] || prepare_args+=(--runtime "$runtime")

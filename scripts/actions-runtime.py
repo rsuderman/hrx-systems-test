@@ -60,7 +60,7 @@ def sha(value, length=40):
 
 
 def add_source_arguments(parser):
-    parser.add_argument('--runtime-source', choices=('release', 'actions-main', 'actions-replay'))
+    parser.add_argument('--runtime-source', choices=('release', 'release-latest', 'actions-main', 'actions-replay'))
     parser.add_argument('--runtime-run-id')
     parser.add_argument('--runtime-run-attempt')
     parser.add_argument('--runtime-artifact-id')
@@ -75,6 +75,8 @@ def selector_from_args(args, configured=None):
         raise ActionsError('Replay identifiers require --runtime-source actions-replay', 'configuration')
     if mode is None:
         return copy.deepcopy(configured)
+    if mode == 'release-latest':
+        return {'kind': 'release_latest', 'repository': REPOSITORY, 'mode': 'latest-stable'}
     if mode == 'release':
         if configured and configured.get('kind') == 'release':
             return copy.deepcopy(configured)

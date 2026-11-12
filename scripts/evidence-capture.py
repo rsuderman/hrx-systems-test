@@ -81,7 +81,7 @@ def drain_log(pipe, path, limit=MAX_LOG):
 def preparation_snapshot(prepared, suite):
     """Capture compact diagnostics in prepared/failure-evidence for publication."""
     output = prepared / 'failure-evidence'
-    references = ['prepared-suite.json', 'inventory.json', 'image-pull.log', 'sdk-acquire.log', 'batch-online.log', 'batch-offline.log',
+    references = [record['path'] for record in suite.get('policy_files', [])] + ['selection-snapshot.json', 'runtime-selection.json', 'prepared-suite.json', 'inventory.json', 'image-pull.log', 'sdk-acquire.log', 'batch-online.log', 'batch-offline.log',
                   'actions-selection.json', 'resolved-runtime.json', 'target-environment.json',
                   'actions-qualification.log', 'sdk-download/sdk-error.json', 'sdk-download/sdk-acquisition.json']
     references += [name + '.metadata.json' for name in references if name.endswith('.log')]
@@ -92,12 +92,13 @@ def preparation_snapshot(prepared, suite):
             source = safe_file(prepared, relative)
             if source.suffix not in ('.json', '.log', '.txt'): continue
             size = source.stat().st_size
-            if retained + min(size, MAX_LOG) > 128 * 1024 * 1024:
+            limit = 32 * 1024 * 1024 if source.name == 'selection-snapshot.json' else MAX_LOG
+            if retained + min(size, limit) > 128 * 1024 * 1024:
                 errors.append(f'{relative}: aggregate capture limit'); continue
-            retained += min(size, MAX_LOG)
+            retained += min(size, limit)
             target = safe_destination(prepared, Path('failure-evidence') / relative)
             if source.suffix == '.log': bounded_copy(source, target)
-            elif source.stat().st_size <= MAX_LOG:
+            elif source.stat().st_size <= limit:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(source.read_bytes())
             else: errors.append(f'{relative}: exceeds capture limit')

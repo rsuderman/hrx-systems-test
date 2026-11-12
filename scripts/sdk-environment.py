@@ -213,8 +213,8 @@ def resolve_runtime(settings, selector=None, destination=None):
 
 
 def acquire_actions_runtime(settings, payload_root, *, selector, environment,
-                            qualifier=None, client=None, observe_source=None):
-    """Stage one Actions wheel and locked dependencies; never redownload the wheel."""
+                            qualifier=None, client=None, observe_source=None, selection=None):
+    """Stage one selected wheel and locked dependencies; never redownload the wheel."""
     spec = importlib.util.spec_from_file_location('sdk_actions_runtime', Path(__file__).with_name('actions-runtime.py'))
     actions = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(actions)
@@ -222,15 +222,28 @@ def acquire_actions_runtime(settings, payload_root, *, selector, environment,
     if payload_root.exists() or payload_root.is_symlink():
         raise SdkError('Actions payload root must be new per attempt')
     payload_root.mkdir(parents=True)
-    source = actions.resolve_source(selector, client=client, observe_request=observe_source)
+    releases = None
+    if selection is not None or selector.get('kind') == 'release_latest':
+        spec = importlib.util.spec_from_file_location('sdk_release_runtime', Path(__file__).with_name('release-runtime.py'))
+        releases = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(releases)
+        frozen = (releases.load_selection(selection) if selection is not None else
+                  releases.freeze_selection(selector, client=client, observe_request=observe_source))
+        if frozen['selector'] != selector:
+            raise SdkError('frozen runtime selector disagrees with requested selector')
+        source = frozen['source']
+    else:
+        source = actions.resolve_source(selector, client=client, observe_request=observe_source)
     if observe_source is not None:
         observe_source(source)
     lock = settings['_dependency_lock']
-    acquired = actions.acquire_wheel(source, payload_root / 'hrx', dependency_lock=lock,
+    acquire = releases.acquire_wheel if source['kind'] == 'release' else actions.acquire_wheel
+    acquired = acquire(source, payload_root / 'hrx', dependency_lock=lock,
                                      environment=environment, client=client, qualifier=qualifier)
     events = [{'kind': 'hrx', 'filename': acquired['wheel']['filename'],
                'sha256': acquired['wheel']['sha256'], 'verified_bytes': acquired['wheel']['size_bytes'],
-               'downloaded_bytes': acquired['source']['artifact']['size_bytes']}]
+               'downloaded_bytes': (acquired['source']['artifact']['size_bytes'] if acquired['source']['kind'] == 'github_actions'
+                                    else acquired['wheel']['size_bytes'])}]
     events.extend(acquire_payload(payload_root, 'python', item) for item in lock['wheels'])
     if qualifier is None:
         actions.validate_dependencies(acquired['metadata'], lock, environment=environment,

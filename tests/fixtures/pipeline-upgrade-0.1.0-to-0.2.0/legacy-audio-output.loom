@@ -1,0 +1,112 @@
+global.rodata.def @name = bytes("4c464d3320417564696f203242")
+
+global.rodata.def @think_open = bytes("3c7468696e6b3e")
+
+global.rodata.def @text_think_end = bytes("3c2f7468696e6b3e")
+
+global.rodata.def @text_tool_marker = bytes("3c746f6f6c5f63616c6c3e")
+
+func.def @text_until(%response: buffer, %marker: buffer, %previous: i64, %phase: i32) -> (i64) {
+  %c0 = index.constant 0 : offset
+  %c1 = index.constant 1 : offset
+  %zero32 = scalar.constant 0 : i32
+  %false = scalar.constant false : i1
+  %length = buffer.length %response
+  %marker_length = buffer.length %marker
+  // The owner supplies the last extent returned for this growing response.
+  %previous_value = scalar.assume %previous [range(%previous, 0, 9223372036854775807)] : i64
+  %start = index.cast %previous_value : i64 to offset
+  %streaming = scalar.cmpi eq, %phase, %zero32 : i32
+  %end = scf.while(%position = %start : offset) -> (offset) {
+    %has_bytes = index.cmp ult, %position, %length : offset
+    %advance = scf.if %has_bytes -> (i1) {
+      %remaining = index.sub %length, %position : offset
+      %short = index.cmp ult, %remaining, %marker_length : offset
+      %count = scf.select %short, %remaining, %marker_length : offset
+      %comparison = buffer.compare %response[%position], %marker[%c0], %count
+      %mismatch = scalar.cmpi ne, %comparison, %zero32 : i32
+      %complete_marker = index.cmp uge, %remaining, %marker_length : offset
+      %withhold = scalar.ori %streaming, %complete_marker : i1
+      %release_fragment = scalar.cmpi eq, %withhold, %false : i1
+      %advance = scalar.ori %mismatch, %release_fragment : i1
+      scf.yield %advance : i1
+    } else {
+      scf.yield %false : i1
+    }
+    scf.condition %advance, %position : i1, offset
+  } do(%position: offset) {
+    %next = index.add %position, %c1 : offset
+    scf.yield %next : offset
+  }
+  %result = index.cast %end : offset to i64
+  func.return %result : i64
+}
+
+func.def @text_is_space(%text: buffer, %position: offset) -> (i1) {
+  %byte = buffer.load.i8.u %text[%position]
+  %space = scalar.constant 32 : i32
+  %tab = scalar.constant 9 : i32
+  %carriage_return = scalar.constant 13 : i32
+  %is_space = scalar.cmpi eq, %byte, %space : i32
+  %after_tab = scalar.cmpi uge, %byte, %tab : i32
+  %before_return = scalar.cmpi ule, %byte, %carriage_return : i32
+  %control = scalar.andi %after_tab, %before_return : i1
+  %result = scalar.ori %is_space, %control : i1
+  func.return %result : i1
+}
+
+func.def public @output_next(%response: buffer, %previous: i64, %state: i64, %phase: i32) -> (i64, i64, i64, i64) {
+  %c0_i64 = scalar.constant 0 : i64
+  %c1_i64 = scalar.constant 1 : i64
+  %c2_i64 = scalar.constant 2 : i64
+  %origin = index.constant 0 : offset
+  %step = index.constant 1 : offset
+  %thinking = scalar.cmpi eq, %state, %c1_i64 : i64
+  %spacing = scalar.cmpi eq, %state, %c2_i64 : i64
+  %kind, %begin, %end, %next = scf.if %spacing -> (i64, i64, i64, i64) {
+    %start_value = scalar.assume %previous [range(%previous, 0, 9223372036854775807)] : i64
+    %start = index.cast %start_value : i64 to offset
+    %length = buffer.length %response
+    %false = scalar.constant false : i1
+    %stop = scf.while(%position = %start : offset) -> (offset) {
+      %available = index.cmp ult, %position, %length : offset
+      %space = scf.if %available -> (i1) {
+        %value = func.call @text_is_space(%response, %position) : (buffer, offset) -> (i1)
+        scf.yield %value : i1
+      } else {
+        scf.yield %false : i1
+      }
+      scf.condition %space, %position : i1, offset
+    } do(%position: offset) {
+      %following = index.add %position, %step : offset
+      scf.yield %following : offset
+    }
+    %start_text = index.cast %stop : offset to i64
+    %marker = global.load @text_tool_marker : buffer
+    %end = func.call @text_until(%response, %marker, %start_text, %phase) : (buffer, buffer, i64, i32) -> (i64)
+    %has_text = scalar.cmpi ne, %end, %start_text : i64
+    %next = scf.select %has_text, %c0_i64, %state : i64
+    scf.yield %c1_i64, %start_text, %end, %next : i64, i64, i64, i64
+  } else {
+    %think_marker = global.load @text_think_end : buffer
+    %tool_marker = global.load @text_tool_marker : buffer
+    %marker = scf.select %thinking, %think_marker, %tool_marker : buffer
+    %stop = func.call @text_until(%response, %marker, %previous, %phase) : (buffer, buffer, i64, i32) -> (i64)
+    %at_marker = scalar.cmpi eq, %stop, %previous : i64
+    %length_offset = buffer.length %response
+    %length = index.cast %length_offset : offset to i64
+    %remaining = scalar.subi %length, %stop : i64
+    %marker_length_offset = buffer.length %marker
+    %marker_length = index.cast %marker_length_offset : offset to i64
+    %complete = scalar.cmpi uge, %remaining, %marker_length : i64
+    %thinking_marker = scalar.andi %thinking, %at_marker : i1
+    %consume = scalar.andi %thinking_marker, %complete : i1
+    %after = scalar.addi %stop, %marker_length : i64
+    %end = scf.select %consume, %after, %stop : i64
+    %next = scf.select %consume, %c2_i64, %state : i64
+    %channel = scf.select %thinking, %c2_i64, %c1_i64 : i64
+    %kind = scf.select %consume, %c0_i64, %channel : i64
+    scf.yield %kind, %previous, %end, %next : i64, i64, i64, i64
+  }
+  func.return %kind, %begin, %end, %next : i64, i64, i64, i64
+}

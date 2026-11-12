@@ -22,7 +22,7 @@ output=""
 while (($#)); do
   case "$1" in
     --output) output="$2"; shift 2;;
-    --root|--suite|--selection|--runtime|--runtime-baseline|--prepared|--results|--workflow|--device-uri|--cycles|--failures) shift 2;;
+    --selection-snapshot|--runtime-selection|--root|--suite|--selection|--runtime|--runtime-baseline|--prepared|--results|--workflow|--device-uri|--cycles|--failures) shift 2;;
     --cleanup|--full-integrity) shift;;
     *) exit 99;;
   esac
@@ -48,7 +48,7 @@ exit "$result"
 
 
 def workflow_run_block(name):
-    source = (ROOT / '.github/workflows/single-model-e2e.yml').read_text()
+    source = (ROOT / '.github/workflows/_model-verification-worker.yml').read_text()
     section = source.split('      - name: ' + name + '\n', 1)[1]
     code = section.split('        run: |\n', 1)[1]
     lines = []
@@ -114,19 +114,33 @@ class StageCompositionTests(unittest.TestCase):
             'RAW_DISPATCH_INPUTS': json.dumps({} if inputs is None else inputs),
             'TRIGGER_SCHEDULE': '0 4 * * *' if event == 'schedule' else '',
             'GITHUB_TOKEN': 'secret-not-to-copy'}
-        result = subprocess.run(['bash', '-c', workflow_run_block('Initialize runner-owned attempt and workflow identity')],
-            env=environment, capture_output=True, text=True, timeout=15)
-        exported = dict(line.split('=', 1) for line in env_file.read_text().splitlines())
-        identity_file = Path(exported['E2E_OUTPUT']) / 'workflow.json'
-        identity = json.loads(identity_file.read_text()) if identity_file.exists() else None
-        return result, exported, identity
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('paired_fixture', ROOT / 'scripts/paired-ci.py')
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        try:
+            values = module.normalize(event, {} if inputs is None else inputs)
+            plan_dir = self.root / ('plan-' + str(number)); plan_dir.mkdir()
+            module.write(plan_dir / 'selection.json', {'entries': []})
+            module.write(plan_dir / 'runtime.json', {})
+            mode = values['runtime_source'] if values['runtime_source'] != 'both' else 'latest-release'
+            module.write(plan_dir / 'ci-plan.json', {'schema_version':1,'inputs':values,
+                'selection_snapshot':'selection.json','selection_snapshot_sha256':module.sha(plan_dir/'selection.json'),
+                'expected_entries':[], 'lanes':[{'id':'latest-release','runtime_source':mode,
+                    'runtime_selection':'runtime.json','runtime_selection_sha256':module.sha(plan_dir/'runtime.json')}]})
+            from unittest.mock import patch
+            with patch.dict(os.environ, environment):
+                exported = module.initialize(plan_dir/'ci-plan.json','latest-release',self.root/('initialized-'+str(number)))
+            identity = json.loads((Path(exported['E2E_OUTPUT'])/'workflow.json').read_text())
+            return subprocess.CompletedProcess([],0,'',''), exported, identity
+        except (ValueError, TypeError):
+            return subprocess.CompletedProcess([],1,'','invalid inputs'), {}, None
 
     def test_all_trigger_types_normalize_defaults_before_stages(self):
         for event in ('workflow_dispatch', 'push', 'schedule'):
             result, exported, identity = self.initialize_workflow(event)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(exported['MODEL_SELECTION'], 'cached')
-            self.assertEqual(exported['RUNTIME_SOURCE'], 'actions-main')
+            self.assertEqual(exported['RUNTIME_SOURCE'], 'latest-release')
             self.assertEqual(exported['DEVICE_URI'], 'amdgpu://0')
             self.assertEqual(exported['TEST_CYCLES'], '2')
             self.assertEqual(exported['FULL_INTEGRITY'], 'false')
@@ -147,7 +161,7 @@ class StageCompositionTests(unittest.TestCase):
                 'selection': 'suite', 'runtime_source': 'release', 'cycles': 0, 'full_integrity': True})
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(exported['MODEL_SELECTION'], 'cached')
-            self.assertEqual(exported['RUNTIME_SOURCE'], 'actions-main')
+            self.assertEqual(exported['RUNTIME_SOURCE'], 'latest-release')
             self.assertEqual(exported['TEST_CYCLES'], '2')
             self.assertEqual(exported['FULL_INTEGRITY'], 'false')
 
@@ -313,7 +327,7 @@ class StageCompositionTests(unittest.TestCase):
         self.assertTrue((self.output / 'prepared').exists())
 
     def test_workflow_packages_before_and_after_render_and_uploads_directory(self):
-        workflow = (ROOT / '.github/workflows/single-model-e2e.yml').read_text()
+        workflow = (ROOT / '.github/workflows/_model-verification-worker.yml').read_text()
         collect = workflow.index('      - name: Save pre-report outcomes and collect failure evidence')
         render = workflow.index('      - name: Generate verification artifacts from saved results')
         final = workflow.index('      - name: Finalize failure bundle including report errors')
@@ -329,7 +343,7 @@ class StageCompositionTests(unittest.TestCase):
     def test_workflow_final_gate_rejects_upload_and_stage_failures(self):
         script = workflow_run_block('Require all stages and publication to pass')
         env = {**self.env, **{name + '_OUTCOME': 'success'
-               for name in ('INITIALIZE', 'PREPARE', 'RUN', 'CLEANUP', 'REPORT', 'COLLECT', 'PACKAGE', 'UPLOAD', 'SUMMARY')}, 'HAS_FAILURES': 'false', 'FAILURE_UPLOAD_OUTCOME': 'skipped'}
+               for name in ('INITIALIZE', 'PREPARE', 'RUN', 'CLEANUP', 'REPORT', 'COLLECT', 'PACKAGE', 'UPLOAD', 'SUMMARY', 'LANE_RESULT', 'LANE_UPLOAD')}, 'HAS_FAILURES': 'false', 'FAILURE_UPLOAD_OUTCOME': 'skipped'}
         good = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
         self.assertEqual(good.returncode, 0, good.stderr)
         for stage in ('PREPARE', 'RUN', 'CLEANUP', 'REPORT', 'COLLECT', 'PACKAGE', 'UPLOAD', 'SUMMARY'):
@@ -376,7 +390,7 @@ class StageCompositionTests(unittest.TestCase):
         return published, summary_path.read_text()
 
     def test_workflow_publishes_summary_after_upload_with_exact_artifact_url(self):
-        workflow = (ROOT / '.github/workflows/single-model-e2e.yml').read_text()
+        workflow = (ROOT / '.github/workflows/_model-verification-worker.yml').read_text()
         self.assertLess(workflow.index('      - name: Upload compact report'),
                         workflow.index('      - name: Publish readable summary and report download'))
         self.assertIn('ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}', workflow)
@@ -454,7 +468,7 @@ class StageCompositionTests(unittest.TestCase):
         self.assertNotIn('open `report/index.html`', summary)
 
     def test_workflow_cancellation_prevents_new_model_work_but_keeps_cleanup(self):
-        workflow = (ROOT / '.github/workflows/single-model-e2e.yml').read_text()
+        workflow = (ROOT / '.github/workflows/_model-verification-worker.yml').read_text()
         for name in ('Prepare fresh pipelines and read-only cached assets',
                      'Run the prepared suite offline through one server'):
             section = workflow.split('      - name: ' + name + '\n', 1)[1].split('\n      - ', 1)[0]
@@ -467,6 +481,7 @@ class StageCompositionTests(unittest.TestCase):
     def test_workflow_cache_root_preserves_runner_environment_without_repo_override(self):
         script = workflow_run_block('Prepare fresh pipelines and read-only cached assets')
         self.output.mkdir()
+        (self.script.parent / 'paired-ci.py').write_text("import sys; sys.stdout.buffer.write(b'--selection-snapshot\\0fixture.json\\0')\n")
         for configured, expected in [('', str(self.cache_root)), ('/explicit-repo-cache', '/explicit-repo-cache')]:
             with self.subTest(configured=configured):
                 prepared = self.output / 'prepared'
@@ -474,17 +489,18 @@ class StageCompositionTests(unittest.TestCase):
                     shutil.rmtree(prepared)
                 result = subprocess.run(['bash', '-c', script], cwd=self.script.parent.parent,
                     env={**self.env, 'E2E_OUTPUT': str(self.output), 'CONFIGURED_CACHE_ROOT': configured,
-                         'HRX_SYSTEMS_ROOT': str(self.cache_root)}, capture_output=True, text=True)
+                         'HRX_SYSTEMS_ROOT': str(self.cache_root), 'CI_PLAN':'fixture', 'LANE_ID':'latest-release'}, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 arguments = (self.arguments / 'prepare').read_bytes().decode().split('\0')
                 self.assertEqual(arguments[arguments.index('--root') + 1], expected)
 
     def test_workflow_uses_runner_owned_outputs_and_compact_allowlist(self):
-        workflow = (ROOT / '.github/workflows/single-model-e2e.yml').read_text()
+        workflow = (ROOT / '.github/workflows/_model-verification-worker.yml').read_text()
         self.assertIn('output="$RUNNER_TEMP/', workflow)
         self.assertIn('persist-credentials: false', workflow)
-        self.assertIn('cancel-in-progress: false', workflow)
-        upload = workflow.split('          path: |\n', 1)[1].split('          if-no-files-found:', 1)[0]
+        self.assertNotIn('concurrency:', workflow)
+        self.assertIn('cancel-in-progress: false', (ROOT / '.github/workflows/single-model-e2e.yml').read_text())
+        upload = workflow.split('      - name: Upload compact report',1)[1].split('          path: |\n', 1)[1].split('          if-no-files-found:', 1)[0]
         self.assertIn('/report/', upload)
         for suffix in ('container.log', 'models/*/prepared-inputs.json', 'models/*/seed-manifest.json',
                        'models/*/online.log', 'models/*/offline.log',

@@ -1,0 +1,45 @@
+func.def public @chat_message(%raw: buffer, %role: buffer, %content: buffer, %parts: buffer, %reasoning: buffer, %calls: buffer, %state: i64, %ordinal: i64, %fields: i64, %part_count: i64) -> (buffer, i64, buffer) {
+  %c0 = index.constant 0 : offset
+  %c0_i64 = scalar.constant 0 : i64
+  %plain = scalar.cmpi eq, %fields, %c0_i64 : i64
+  func.call @check(%plain) : (i1)
+  %no_parts = scalar.cmpi eq, %part_count, %c0_i64 : i64
+  func.call @check(%no_parts) : (i1)
+  %assistant_role = global.load @assistant : buffer
+  %user_role = global.load @user : buffer
+  %system_role = global.load @system : buffer
+  %assistant = func.call @equal(%role, %assistant_role) : (buffer, buffer) -> (i1)
+  %user = func.call @equal(%role, %user_role) : (buffer, buffer) -> (i1)
+  %system = func.call @equal(%role, %system_role) : (buffer, buffer) -> (i1)
+  %ordinary = scalar.ori %user, %system : i1
+  %supported = scalar.ori %ordinary, %assistant : i1
+  func.call @check(%supported) : (i1)
+  %system_tag = global.load @system_tag : buffer
+  %user_tag = global.load @user_tag : buffer
+  %assistant_tag = global.load @assistant_tag : buffer
+  %role_tag = scf.select %user, %user_tag, %system_tag : buffer
+  %tag = scf.select %assistant, %assistant_tag, %role_tag : buffer
+  %reasoning_length = buffer.length %reasoning
+  %has_reasoning = index.cmp ne, %reasoning_length, %c0 : offset
+  %with_reasoning = scalar.andi %assistant, %has_reasoning : i1
+  %prefix = scf.if %with_reasoning -> (buffer) {
+    %open = global.load @think_open : buffer
+    %close = global.load @think_close : buffer
+    %opened = func.call @join(%tag, %open) : (buffer, buffer) -> (buffer)
+    %thought = func.call @join(%opened, %reasoning) : (buffer, buffer) -> (buffer)
+    %closed = func.call @join(%thought, %close) : (buffer, buffer) -> (buffer)
+    scf.yield %closed : buffer
+  } else {
+    scf.yield %tag : buffer
+  }
+  %body = func.call @join(%prefix, %content) : (buffer, buffer) -> (buffer)
+  %suffix = global.load @message_suffix : buffer
+  %fragment = func.call @join(%body, %suffix) : (buffer, buffer) -> (buffer)
+  %empty = global.load @empty : buffer
+  func.return %fragment, %state, %empty : buffer, i64, buffer
+}
+
+func.def public @parse_tools(%schemas: buffer, %response: buffer) -> (buffer) {
+  %empty = global.load @no_tools : buffer
+  func.return %empty : buffer
+}

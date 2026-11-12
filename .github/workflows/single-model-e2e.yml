@@ -8,10 +8,10 @@ on:
   workflow_dispatch:
     inputs:
       runtime_source:
-        description: Pinned release or one upstream main Actions SDK (no rebuild)
+        description: Both latest SDKs, one latest SDK, or an exact pinned/replay diagnostic
         type: choice
-        options: [actions-main, release, actions-replay]
-        default: actions-main
+        options: [both, release-latest, actions-main, release, actions-replay]
+        default: both
       runtime_run_id:
         description: Replay only - upstream Actions run ID
         type: string
@@ -43,351 +43,134 @@ on:
         default: 2
 permissions:
   contents: read
+# Keep the hardware lock on the outer pair, never on its called worker.
 concurrency:
   group: hrx-single-model-hardware
   cancel-in-progress: false
 jobs:
-  verify:
+  plan:
+    name: Freeze common inventory and both runtime selections
     runs-on: [self-hosted, linux, hrx-systems-test-bootstrap]
-    # Includes all cached selections plus preparation, reporting and cleanup.
-    timeout-minutes: 60
+    timeout-minutes: 15
+    outputs:
+      ready: ${{ steps.resolve.outputs.ready == 'true' && steps.upload_plan.outcome == 'success' }}
+      first_lane: ${{ steps.resolve.outputs.first_lane }}
+      second_lane: ${{ steps.resolve.outputs.second_lane }}
     env:
       CONFIGURED_CACHE_ROOT: ${{ vars.HRX_SYSTEMS_ROOT }}
       RAW_DISPATCH_INPUTS: ${{ toJSON(inputs) }}
-      TRIGGER_SCHEDULE: ${{ github.event.schedule }}
       PYTHONNOUSERSITE: '1'
       PYTHONPATH: ''
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Initialize runner-owned attempt and workflow identity
-        id: initialize
-        shell: bash
-        run: |
-          set -euo pipefail
-          output="$RUNNER_TEMP/hrx-model-tests/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          mkdir -p "$(dirname -- "$output")"
-          mkdir -- "$output"
-          printf 'E2E_OUTPUT=%s\n' "$output" >> "$GITHUB_ENV"
-          python3 -I - "$output/workflow.json" <<'PY'
-          import json, os, pathlib, re, sys
-          from datetime import datetime, timezone
-          event = os.environ['GITHUB_EVENT_NAME']
-          if event not in ('push', 'schedule', 'workflow_dispatch'):
-              sys.exit('Unsupported verification event')
-          raw = json.loads(os.environ.get('RAW_DISPATCH_INPUTS') or '{}')
-          if raw is None:
-              raw = {}
-          if not isinstance(raw, dict):
-              sys.exit('Dispatch inputs must be a JSON object')
-          defaults = {'selection': 'cached', 'runtime_source': 'actions-main',
-                      'device_uri': 'amdgpu://0', 'cycles': 2, 'full_integrity': False,
-                      'runtime_run_id': '', 'runtime_run_attempt': '',
-                      'runtime_artifact_id': '', 'runtime_wheel_sha256': ''}
-          if set(raw) - set(defaults):
-              sys.exit('Unknown verification input')
-          values = {**defaults, **raw} if event == 'workflow_dispatch' else defaults
-          if values['selection'] not in ('suite', 'cached'):
-              sys.exit('selection must be suite or cached')
-          if values['runtime_source'] not in ('release', 'actions-main', 'actions-replay'):
-              sys.exit('Invalid runtime source')
-          if not isinstance(values['device_uri'], str) or not re.fullmatch(r'amdgpu://[0-9]+', values['device_uri']):
-              sys.exit('device_uri must be amdgpu://INDEX')
-          def positive(value, label):
-              if type(value) is int and value > 0:
-                  return value
-              if isinstance(value, str) and re.fullmatch(r'[1-9][0-9]*', value):
-                  return int(value)
-              sys.exit(label + ' must be a positive integer')
-          values['cycles'] = positive(values['cycles'], 'cycles')
-          integrity = values['full_integrity']
-          if type(integrity) is bool:
-              pass
-          elif isinstance(integrity, str) and integrity in ('true', 'false'):
-              values['full_integrity'] = integrity == 'true'
-          else:
-              sys.exit('full_integrity must be boolean')
-          replay_keys = ('runtime_run_id', 'runtime_run_attempt', 'runtime_artifact_id', 'runtime_wheel_sha256')
-          if values['runtime_source'] == 'actions-replay':
-              for key in replay_keys[:-1]:
-                  values[key] = str(positive(values[key], key))
-              checksum = values['runtime_wheel_sha256']
-              if not isinstance(checksum, str) or not re.fullmatch(r'[0-9a-f]{64}', checksum):
-                  sys.exit('Replay requires the exact lowercase wheel SHA256')
-          elif any(values[key] not in ('', None) for key in replay_keys):
-              sys.exit('Replay identifiers require actions-replay')
-          else:
-              for key in replay_keys:
-                  values[key] = ''
-          exports = {'MODEL_SELECTION': values['selection'], 'RUNTIME_SOURCE': values['runtime_source'],
-                     'DEVICE_URI': values['device_uri'], 'TEST_CYCLES': str(values['cycles']),
-                     'FULL_INTEGRITY': str(values['full_integrity']).lower(),
-                     **{key.upper(): values[key] for key in replay_keys}}
-          with pathlib.Path(os.environ['GITHUB_ENV']).open('a') as stream:
-              for key, value in exports.items():
-                  stream.write(f'{key}={value}\n')
-          names = {'repository': 'GITHUB_REPOSITORY', 'run_id': 'GITHUB_RUN_ID',
-                   'run_attempt': 'GITHUB_RUN_ATTEMPT', 'ref': 'GITHUB_REF',
-                   'sha': 'GITHUB_SHA', 'runner': 'RUNNER_NAME'}
-          identity = {'schema_version': 1, **{key: os.environ[name] for key, name in names.items()}}
-          identity['run_url'] = f"{os.environ['GITHUB_SERVER_URL']}/{identity['repository']}/actions/runs/{identity['run_id']}"
-          identity.update(event_name=event, normalized_inputs=values,
-                          observed_at=datetime.now(timezone.utc).isoformat(),
-                          observed_time_source='runner initialization clock')
-          if event == 'schedule':
-              identity.update(schedule=os.environ.get('TRIGGER_SCHEDULE') or '0 4 * * *',
-                              schedule_timezone='America/Los_Angeles')
-          pathlib.Path(sys.argv[1]).write_text(json.dumps(identity, indent=2) + '\n')
-          PY
-      - name: Prepare fresh pipelines and read-only cached assets
-        id: prepare
+      - name: Freeze comparison plan
+        id: resolve
         env:
           HRX_ACTIONS_TOKEN: ${{ secrets.HRX_ACTIONS_TOKEN }}
-        if: ${{ !cancelled() && steps.initialize.outcome == 'success' }}
-        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           root="${CONFIGURED_CACHE_ROOT:-${HRX_SYSTEMS_ROOT:-$HOME/.local/share/hrx-systems-test}}"
-          selection_args=()
-          [[ -z "${RUNTIME_SOURCE:-}" ]] || selection_args+=(--runtime-source "$RUNTIME_SOURCE")
-          for field in run_id run_attempt artifact_id wheel_sha256; do
-            variable="RUNTIME_${field^^}"
-            [[ -z "${!variable:-}" ]] || selection_args+=("--runtime-${field//_/-}" "${!variable}")
-          done
-          [[ "${FULL_INTEGRITY:-false}" != true ]] || selection_args+=(--full-integrity)
-          if [[ "${MODEL_SELECTION:-suite}" = cached ]]; then
-            selection_args+=(--selection cached)
-          elif [[ "${MODEL_SELECTION:-suite}" != suite ]]; then
-            echo 'Unknown model selection mode' >&2
-            exit 1
-          fi
-          python3 -u -I scripts/ci-progress.py --label prepare --log "$E2E_OUTPUT/prepare.log" -- \
-            bash scripts/prepare-cached-models.sh --root "$root" --output "$E2E_OUTPUT/prepared" "${selection_args[@]}"
-      - name: Run the prepared suite offline through one server
-        id: run
-        if: ${{ !cancelled() && steps.initialize.outcome == 'success' }}
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! -f "$E2E_OUTPUT/prepared/prepared-suite.json" ]]; then
-            echo 'No usable prepared manifest; no server started.' >&2
-            exit 1
-          fi
-          python3 -u -I scripts/ci-progress.py --label run --log "$E2E_OUTPUT/run.log" -- \
-            bash scripts/run-prepared-models.sh --prepared "$E2E_OUTPUT/prepared" \
-            --output "$E2E_OUTPUT/results" --workflow "$E2E_OUTPUT/workflow.json" \
-            --device-uri "$DEVICE_URI" --cycles "$TEST_CYCLES"
-      - name: Confirm execution-owned container cleanup
-        id: cleanup
-        if: ${{ always() && steps.initialize.outcome == 'success' }}
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -u -I scripts/ci-progress.py --label cleanup --log "$E2E_OUTPUT/cleanup.log" -- \
-            bash scripts/run-prepared-models.sh --cleanup --output "$E2E_OUTPUT/results"
-      - name: Save pre-report outcomes and collect failure evidence
-        id: collect_failures
-        if: ${{ always() && steps.initialize.outcome == 'success' }}
-        continue-on-error: true
-        shell: bash
-        env:
-          PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
-          RUN_OUTCOME: ${{ steps.run.outcome }}
-          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
-        run: |
-          set -euo pipefail
-          python3 -I - "$E2E_OUTPUT/stages.json" <<'PYTHON'
-          import json, os, pathlib, sys
-          values = {name: os.environ[name.upper() + '_OUTCOME'] for name in ('prepare', 'run', 'cleanup')}
-          pathlib.Path(sys.argv[1]).write_text(json.dumps({'schema_version': 1, 'stages': values}, indent=2) + '\n')
+          base="$RUNNER_TEMP/hrx-model-tests/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$base"
+          python3 -I - "$base/dispatch-inputs.json" <<'PYTHON'
+          import json,os,pathlib,sys
+          value=json.loads(os.environ.get('RAW_DISPATCH_INPUTS') or '{}')
+          pathlib.Path(sys.argv[1]).write_text(json.dumps(value or {}))
           PYTHON
-          bash scripts/package-model-failures.sh --attempt "$E2E_OUTPUT" --output "$E2E_OUTPUT/failures"
-      - name: Generate verification artifacts from saved results
-        id: report
-        if: ${{ always() && steps.initialize.outcome == 'success' }}
+          python3 -u -I scripts/paired-ci.py plan --root "$root" --output "$base/plan" \
+            --inputs "$base/dispatch-inputs.json" --event "$GITHUB_EVENT_NAME" --github-output "$GITHUB_OUTPUT"
+      - name: Upload frozen plan
+        id: upload_plan
+        if: ${{ !cancelled() && steps.resolve.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: model-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hrx-model-tests/${{ github.run_id }}-${{ github.run_attempt }}/plan/
+          if-no-files-found: error
+          retention-days: 7
+  first:
+    name: Verify ${{ needs.plan.outputs.first_lane }}
+    needs: plan
+    if: ${{ always() && !cancelled() && needs.plan.outputs.ready == 'true' }}
+    uses: ./.github/workflows/_model-verification-worker.yml
+    with:
+      lane_id: ${{ needs.plan.outputs.first_lane }}
+    secrets:
+      HRX_ACTIONS_TOKEN: ${{ secrets.HRX_ACTIONS_TOKEN }}
+  second:
+    name: Verify ${{ needs.plan.outputs.second_lane }}
+    needs: [plan, first]
+    if: ${{ always() && !cancelled() && needs.plan.outputs.ready == 'true' && needs.plan.outputs.second_lane != '' }}
+    uses: ./.github/workflows/_model-verification-worker.yml
+    with:
+      lane_id: ${{ needs.plan.outputs.second_lane }}
+      previous_cleanup_safe: ${{ needs.first.outputs.cleanup_safe == 'true' && 'true' || 'false' }}
+    secrets:
+      HRX_ACTIONS_TOKEN: ${{ secrets.HRX_ACTIONS_TOKEN }}
+  comparison:
+    name: Report both runtime results
+    needs: [plan, first, second]
+    if: always()
+    runs-on: [self-hosted, linux, hrx-systems-test-bootstrap]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download frozen plan
+        if: ${{ needs.plan.outputs.ready == 'true' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: model-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hrx-model-comparison/${{ github.run_id }}-${{ github.run_attempt }}/plan
+      - name: Download all retained lane results
+        if: ${{ needs.plan.outputs.ready == 'true' }}
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: model-lane-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hrx-model-comparison/${{ github.run_id }}-${{ github.run_attempt }}/results
+      - name: Aggregate comparison without hiding lane failures
+        id: aggregate
+        if: always()
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! -f "$E2E_OUTPUT/results/suite-result.json" ]]; then
-            echo 'No raw results; retaining preparation/execution diagnostics.' >&2
+          base="$RUNNER_TEMP/hrx-model-comparison/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$base/summary" "$base/results"
+          if [[ ! -f "$base/plan/ci-plan.json" ]]; then
+            printf '# Verification incomplete\n\nThe frozen comparison plan was not retained. No verified paired result is available.\n' > "$base/summary/summary.md"
+            printf '{"schema_version":1,"status":"failed","reason":"frozen plan unavailable"}\n' > "$base/summary/paired-result.json"
             exit 1
           fi
-          python3 -u -I scripts/ci-progress.py --label report --log "$E2E_OUTPUT/report.log" -- \
-            bash scripts/generate-model-report.sh --results "$E2E_OUTPUT/results" --output "$E2E_OUTPUT/report" --failures "$E2E_OUTPUT/failures/failures.json"
-      - name: Save stage outcomes
-        if: ${{ always() && steps.initialize.outcome == 'success' }}
-        shell: bash
-        env:
-          PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
-          RUN_OUTCOME: ${{ steps.run.outcome }}
-          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
-          REPORT_OUTCOME: ${{ steps.report.outcome }}
-        run: |
-          set -euo pipefail
-          python3 -I - "$E2E_OUTPUT/stages.json" <<'PY'
-          import json, os, pathlib, sys
-          names = ('prepare', 'run', 'cleanup', 'report')
-          statuses = {name: os.environ[name.upper() + '_OUTCOME'] for name in names}
-          pathlib.Path(sys.argv[1]).write_text(json.dumps({'schema_version': 1, 'stages': statuses}, indent=2) + '\n')
-          PY
-      - name: Finalize failure bundle including report errors
-        id: package_failures
-        if: ${{ always() && steps.initialize.outcome == 'success' }}
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -euo pipefail
-          status=0
-          bash scripts/package-model-failures.sh --attempt "$E2E_OUTPUT" --output "$E2E_OUTPUT/failures" || status=$?
-          if [[ -f "$E2E_OUTPUT/failures/README.md" ]]; then
-            printf 'has_failures=true\n' >> "$GITHUB_OUTPUT"
-          else
-            printf 'has_failures=false\n' >> "$GITHUB_OUTPUT"
-          fi
-          exit "$status"
-      - name: Upload one failure-evidence download
-        id: upload_failures
-        if: ${{ always() && steps.initialize.outcome == 'success' && steps.package_failures.outputs.has_failures == 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: model-failures-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.E2E_OUTPUT }}/failures/
-          if-no-files-found: error
-          retention-days: 7
-      - name: Upload compact report and available failure evidence
+          python3 -I scripts/paired-ci.py aggregate --plan "$base/plan/ci-plan.json" \
+            --results "$base/results" --output "$base/summary"
+      - name: Upload combined comparison
         id: upload
-        if: ${{ always() && steps.initialize.outcome == 'success' }}
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: model-verification-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ env.E2E_OUTPUT }}/workflow.json
-            ${{ env.E2E_OUTPUT }}/stages.json
-            ${{ env.E2E_OUTPUT }}/prepare.log
-            ${{ env.E2E_OUTPUT }}/run.log
-            ${{ env.E2E_OUTPUT }}/cleanup.log
-            ${{ env.E2E_OUTPUT }}/report.log
-            ${{ env.E2E_OUTPUT }}/*.log.metadata.json
-            ${{ env.E2E_OUTPUT }}/report/
-            ${{ env.E2E_OUTPUT }}/results/suite-result.json
-            ${{ env.E2E_OUTPUT }}/results/inventory.json
-            ${{ env.E2E_OUTPUT }}/results/server.log
-            ${{ env.E2E_OUTPUT }}/results/server.log.capture.json
-            ${{ env.E2E_OUTPUT }}/results/container.log
-            ${{ env.E2E_OUTPUT }}/results/container.log.metadata.json
-            ${{ env.E2E_OUTPUT }}/results/workflow.json
-            ${{ env.E2E_OUTPUT }}/results/sdk-runtime/sdk.json
-            ${{ env.E2E_OUTPUT }}/results/models/*/serve-result.json
-            ${{ env.E2E_OUTPUT }}/results/models/*/prepared-inputs.json
-            ${{ env.E2E_OUTPUT }}/results/models/*/seed-manifest.json
-            ${{ env.E2E_OUTPUT }}/results/models/*/online.log
-            ${{ env.E2E_OUTPUT }}/results/models/*/offline.log
-            ${{ env.E2E_OUTPUT }}/results/models/*/sdk-online/sdk.json
-            ${{ env.E2E_OUTPUT }}/results/models/*/sdk-offline/sdk.json
-            ${{ env.E2E_OUTPUT }}/results/models/*/cycle-*/request.json
-            ${{ env.E2E_OUTPUT }}/results/models/*/cycle-*/response.json
-            ${{ env.E2E_OUTPUT }}/results/models/*/cycle-*/pool-reclamation.json
+          name: model-comparison-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hrx-model-comparison/${{ github.run_id }}-${{ github.run_attempt }}/summary/
           if-no-files-found: error
           retention-days: 7
-      - name: Publish readable summary and report download
-        id: summary
-        if: ${{ always() && steps.initialize.outcome == 'success' }}
+      - name: Publish combined summary
+        if: always()
         shell: bash
-        env:
-          COLLECT_OUTCOME: ${{ steps.collect_failures.outcome }}
-          PACKAGE_OUTCOME: ${{ steps.package_failures.outcome }}
-          FAILURE_ARTIFACT_URL: ${{ steps.upload_failures.outputs.artifact-url }}
-          FAILURE_UPLOAD_OUTCOME: ${{ steps.upload_failures.outcome }}
-          HAS_FAILURES: ${{ steps.package_failures.outputs.has_failures }}
-          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
-          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
-          PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
-          RUN_OUTCOME: ${{ steps.run.outcome }}
-          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
-          REPORT_OUTCOME: ${{ steps.report.outcome }}
         run: |
           set -euo pipefail
-          publication_status=0
-          if [[ "${COLLECT_OUTCOME:-success}" != success || "${PACKAGE_OUTCOME:-success}" != success ]]; then
-            printf '\n**Failure evidence incomplete:** collection or packaging failed. Inspect the stage outcomes and available report diagnostics.\n' >> "$GITHUB_STEP_SUMMARY"
-            publication_status=1
-          fi
-          if [[ "${HAS_FAILURES:-false}" = true ]]; then
-            if [[ "${FAILURE_UPLOAD_OUTCOME:-skipped}" = success && "${FAILURE_ARTIFACT_URL:-}" =~ ^https://[^[:space:]]+$ ]]; then
-              printf '\n[Download all failure details and logs](%s)\n\n' "${FAILURE_ARTIFACT_URL:-}" >> "$GITHUB_STEP_SUMMARY"
-            else
-              printf '\n**Failure bundle unavailable:** packaging or upload did not produce a usable download.\n' >> "$GITHUB_STEP_SUMMARY"
-              publication_status=1
-            fi
-          fi
-          if [[ -f "$E2E_OUTPUT/report/summary.md" ]]; then
-            if python3 -I - "$E2E_OUTPUT/report/summary.md" >> "$GITHUB_STEP_SUMMARY" <<'PY'
-          import pathlib, re, sys, urllib.parse
-          content = pathlib.Path(sys.argv[1]).read_text()
-          for target in re.findall(r'!?\[[^\]]*\]\(([^)]+)\)', content):
-              link = urllib.parse.urlsplit(target)
-              if link.scheme != 'https' or not link.netloc or any(ch.isspace() for ch in target):
-                  sys.exit('Generated summary contains a relative or non-HTTPS Markdown link')
-          print(content, end='')
-          PY
-            then
-              :
-            else
-              printf '## Verification summary unavailable\n\nThe generated summary contains links that cannot be published in GitHub. See the artifact publication outcome below for report access and diagnostics.\n' >> "$GITHUB_STEP_SUMMARY"
-              publication_status=1
-            fi
-          elif [[ -f "$E2E_OUTPUT/failures/summary.md" ]]; then
-            cat "$E2E_OUTPUT/failures/summary.md" >> "$GITHUB_STEP_SUMMARY"
-          else
-            printf '## Verification incomplete\n\nNo rendered report was produced. Stage diagnostics are retained in the run artifacts when upload succeeds.\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
-          if [[ "$UPLOAD_OUTCOME" = success && "$ARTIFACT_URL" =~ ^https://[^[:space:]]+$ ]]; then
-            printf '\n[Download verification report bundle](%s)\n\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
-            if [[ -f "$E2E_OUTPUT/report/index.html" ]]; then
-              printf 'Unzip the downloaded bundle and open `report/index.html` to browse the report and linked evidence.\n' >> "$GITHUB_STEP_SUMMARY"
-            else
-              printf 'Unzip the bundle to inspect the retained stage logs and raw results; no rendered HTML report was produced.\n' >> "$GITHUB_STEP_SUMMARY"
-            fi
-          elif [[ "$UPLOAD_OUTCOME" = success ]]; then
-            printf '\n**Report bundle unavailable:** upload returned no usable HTTPS download URL.\n' >> "$GITHUB_STEP_SUMMARY"
-            publication_status=1
-          else
-            printf '\n**Report bundle unavailable:** artifact upload did not succeed. Local results and diagnostics remain on the runner.\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
-          printf '\n| Stage | Outcome |\n|---|---|\n' >> "$GITHUB_STEP_SUMMARY"
-          for stage in prepare run cleanup report collect package upload failure_upload; do
-            variable="${stage^^}_OUTCOME"
-            printf '| %s | %s |\n' "$stage" "${!variable:-skipped}" >> "$GITHUB_STEP_SUMMARY"
-          done
-          exit "$publication_status"
-      - name: Remove disposable prepared inputs after confirmed cleanup
-        if: ${{ always() && steps.initialize.outcome == 'success' && steps.cleanup.outcome == 'success' && steps.package_failures.outcome == 'success' }}
-        shell: bash
-        run: rm -rf -- "$E2E_OUTPUT/prepared"
-      - name: Require all stages and publication to pass
+          summary="$RUNNER_TEMP/hrx-model-comparison/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/summary/summary.md"
+          if [[ -f "$summary" ]]; then cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Require both requested lanes and publication
         if: always()
         shell: bash
         env:
-          PACKAGE_OUTCOME: ${{ steps.package_failures.outcome }}
-          COLLECT_OUTCOME: ${{ steps.collect_failures.outcome }}
-          FAILURE_UPLOAD_OUTCOME: ${{ steps.upload_failures.outcome }}
-          HAS_FAILURES: ${{ steps.package_failures.outputs.has_failures }}
-          INITIALIZE_OUTCOME: ${{ steps.initialize.outcome }}
-          PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
-          RUN_OUTCOME: ${{ steps.run.outcome }}
-          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
-          REPORT_OUTCOME: ${{ steps.report.outcome }}
+          PLAN_READY: ${{ needs.plan.outputs.ready }}
+          AGGREGATE_OUTCOME: ${{ steps.aggregate.outcome }}
           UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
-          SUMMARY_OUTCOME: ${{ steps.summary.outcome }}
         run: |
-          set -euo pipefail
-          for stage in INITIALIZE PREPARE RUN CLEANUP REPORT COLLECT PACKAGE UPLOAD SUMMARY; do
-            variable="${stage}_OUTCOME"
-            [[ "${!variable}" = success ]] || { echo "$stage did not pass: ${!variable}" >&2; exit 1; }
-          done
-          [[ "${HAS_FAILURES:-false}" != true || "${FAILURE_UPLOAD_OUTCOME:-skipped}" = success ]] || exit 1
+          [[ "$PLAN_READY" = true && "$AGGREGATE_OUTCOME" = success && "$UPLOAD_OUTCOME" = success ]]

@@ -1,0 +1,20 @@
+global.rodata.def @name = bytes("333561335f68665f7634375f30393233")
+
+global.rodata.def @empty = bytes("")
+
+global.rodata.def @generation_prompt = bytes("3c7c696d5f73746172747c3e617373697374616e740a3c7468696e6b3e0a")
+
+func.def public @chat_begin(%request: buffer, %tools: buffer) -> (buffer, i64) {
+  %c0_i64 = scalar.constant 0 : i64
+  %tool_fields, %tool_type, %tool_count = func.call @members(%tools) : (buffer) -> (buffer, i32, i64)
+  %no_tools = scalar.cmpi eq, %tool_count, %c0_i64 : i64
+  func.call @check(%no_tools) : (i1)
+  %empty = global.load @empty : buffer
+  func.return %empty, %c0_i64 : buffer, i64
+}
+
+func.def public @chat_end(%state: i64) -> (buffer, i64) {
+  %prompt = global.load @generation_prompt : buffer
+  %thinking = scalar.constant 1 : i64
+  func.return %prompt, %thinking : buffer, i64
+}

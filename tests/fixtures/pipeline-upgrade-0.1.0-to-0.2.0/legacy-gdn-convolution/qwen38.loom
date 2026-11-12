@@ -1,0 +1,43 @@
+func.def inline @g_gdn_conv_chan(%chan_arg: index, %token: index, %tokens: index, %rel: index, %fresh: i1, %hist_origin: offset, %arena: buffer, %qkv: buffer, %conv_w: buffer) -> (f32) {
+  %chan = index.assume %chan_arg [range(%chan_arg, 0, 10239)] : index
+  %zero = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %zero_f = scalar.constant 0.0 : f32
+  %bt = index.assume %token [range(%token, 0, 8191), lt(%token, %tokens)] : index
+  %qkv_view = buffer.view %qkv[%zero] : buffer -> view<[%tokens]x10240xf32>
+  %w_view = buffer.view %conv_w[%zero] : buffer -> view<10240x4xf32>
+  %hist = buffer.view %arena[%hist_origin] : buffer -> view<10240x3xf32>
+  %w3 = view.load %w_view[%chan, 3] : view<10240x4xf32> -> f32
+  %cur = view.load %qkv_view[%bt, %chan] : view<[%tokens]x10240xf32> -> f32
+  %acc3 = scalar.mulf %cur, %w3 : f32
+  %acc = scf.for %tap = [%c0 to %c3 step %c1](%sum = %acc3 : f32) -> (f32) {
+    %tb = index.assume %tap [range(%tap, 0, 2)] : index
+    %back = index.sub %c3, %tb : index
+    %inside = index.cmp uge, %rel, %back : index
+    %xv = scf.if %inside -> (f32) {
+      %src_v = index.sub %token, %back : index
+      %src = index.assume %src_v [range(%src_v, 0, 8191), lt(%src_v, %tokens)] : index
+      %xx = view.load %qkv_view[%src, %chan] : view<[%tokens]x10240xf32> -> f32
+      scf.yield %xx : f32
+    } else {
+      %hv = scf.if %fresh -> (f32) {
+        scf.yield %zero_f : f32
+      } else {
+        %hi0 = index.add %rel, %c3 : index
+        %hi1 = index.sub %hi0, %back : index
+        %hidx = index.assume %hi1 [range(%hi1, 0, 2)] : index
+        %hh = view.load %hist[%chan, %hidx] : view<10240x3xf32> -> f32
+        scf.yield %hh : f32
+      }
+      scf.yield %hv : f32
+    }
+    %wk = view.load %w_view[%chan, %tb] : view<10240x4xf32> -> f32
+    %ns = scalar.fmaf %xv, %wk, %sum : f32
+    scf.yield %ns : f32
+  }
+  %act = scalar.siluf<afn> %acc : f32
+  func.return %act : f32
+}

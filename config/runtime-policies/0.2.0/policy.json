@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "profile_id": "hrx-runtime-0.2.0-v1",
+  "runtime_family": "0.2.0",
+  "default_launch": {
+    "pool_backing": "fixed",
+    "memory_bytes": null
+  },
+  "launch_qualification": {
+    "status": "candidate",
+    "reason": "Fixed backing avoids deriving a logical KV capacity from a guessed universal elastic byte allowance. Full inventory and native candidate qualification remain required; individual capacity failures are reported."
+  },
+  "seccomp": {
+    "profile_id": "docker-default-plus-mbind-v1",
+    "source_path": "config/runtime-policies/0.2.0/seccomp-mbind.json",
+    "sha256": "ba256001b5e18ac40ec07c4e2c76174e1e8faed7e2f9d7467ac0eca54ffd22b8",
+    "base_source_path": "config/runtime-policies/0.2.0/seccomp-default.json",
+    "base_sha256": "15434cc9c9037d85b35027a60721bf45f381782b4283b01d94663366e71569f8",
+    "base_source_url": "https://raw.githubusercontent.com/moby/profiles/main/seccomp/default.json",
+    "change": "append unconditional allow rule for mbind only"
+  },
+  "request_profiles": {
+    "profile_id": "hrx-0.2.0-exact-reasoning-none-v1",
+    "overrides": [
+      {
+        "selection": {
+          "repository": "loom-fun/ggml-org-Qwen3-14B-loom",
+          "publication_revision": "4b7f80710c54cb1b282e0b1c6cdb43b74a00a238",
+          "model_id": "Qwen/Qwen3-14B",
+          "preset": "chat",
+          "variant": "gguf",
+          "programs": "source"
+        },
+        "request_fields": {
+          "reasoning_effort": "none"
+        }
+      },
+      {
+        "selection": {
+          "repository": "loom-fun/openbmb-MiniCPM-V-4.7-35B-A3B-loom",
+          "publication_revision": "d2183a71a44a0defe94f53823c674b7be343843d",
+          "model_id": "minicpm-v-4.7-35b-a3b",
+          "preset": "chat",
+          "variant": "gguf",
+          "programs": "source"
+        },
+        "request_fields": {
+          "reasoning_effort": "none"
+        }
+      },
+      {
+        "selection": {
+          "repository": "loom-fun/bartowski-MiniCPM-V-4.7-35B-A3B-loom",
+          "publication_revision": "03376cecc872b32ebe95c90b7044fe362768502a",
+          "model_id": "openbmb/MiniCPM-V-4.7-35B-A3B",
+          "preset": "chat",
+          "variant": "gguf",
+          "programs": "source"
+        },
+        "request_fields": {
+          "reasoning_effort": "none"
+        }
+      }
+    ]
+  }
+}

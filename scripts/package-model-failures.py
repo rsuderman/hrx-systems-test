@@ -42,7 +42,7 @@ def package(attempt, output, archive=None):
             if source.is_symlink(): raise ValueError('symlink preparation evidence')
             if source.is_file():
                 checked = RECORDS.safe_file(root, source.relative_to(root).as_posix())
-                if checked.suffix not in ALLOWED or checked.stat().st_size > MAX_LOG: continue
+                if checked.suffix not in ALLOWED or checked.stat().st_size > (32 * 1024 * 1024 if checked.name == 'selection-snapshot.json' else MAX_LOG): continue
                 target = RECORDS.safe_file(root, 'preparation-evidence/' + relative.as_posix())
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(checked, target)
@@ -67,8 +67,10 @@ def package(attempt, output, archive=None):
                 'inventory.json', 'prepared-inputs.json', 'seed-manifest.json', 'request.json', 'response.json',
                 'serve-result.json', 'pool-reclamation.json', 'capture.json', 'sdk.json',
                 'actions-selection.json', 'resolved-runtime.json', 'target-environment.json',
-                'sdk-error.json', 'sdk-acquisition.json'}
-            if source.suffix == '.json' and source.name not in allowed_names and not source.name.endswith(('.log.capture.json', '.log.metadata.json')):
+                'sdk-error.json', 'sdk-acquisition.json', 'ci-plan.json', 'lane-selection.json',
+                'runtime-policy.json', 'seccomp.json', 'pipeline-upgrade.json', 'publication-card.json',
+                'publication-lock.json', 'selection-snapshot.json', 'runtime-selection.json'}
+            if source.suffix == '.json' and source.name not in allowed_names and not re.fullmatch(r'(?:results/|preparation-evidence/)?config/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.json', reference) and not source.name.endswith(('.log.capture.json', '.log.metadata.json')):
                 raise ValueError('unrecognized evidence JSON; assets/configuration are not copied')
             if source.suffix == '.txt' and source.name not in ('diagnostics.txt', 'error.txt'):
                 raise ValueError('unrecognized text evidence')
@@ -79,7 +81,7 @@ def package(attempt, output, archive=None):
                 return record
             size = source.stat().st_size
             record['original_size'] = size
-            limit = MAX_LOG if source.suffix == '.log' else MAX_FILE
+            limit = 32 * 1024 * 1024 if source.name == 'selection-snapshot.json' else (MAX_LOG if source.suffix == '.log' or source.name == 'runtime-selection.json' else MAX_FILE)
             if count >= MAX_FILES or total + min(size, limit) > MAX_TOTAL:
                 record.update(missing=True, reason='bundle limit reached')
                 return record
@@ -107,7 +109,7 @@ def package(attempt, output, archive=None):
             manifest['evidence_errors'].append(f'{reference}: {error}')
         return record
 
-    shared = ['workflow.json', 'stages.json', 'prepare.log', 'run.log', 'cleanup.log', 'report.log',
+    shared = ['ci-plan.json', 'lane-selection.json', 'results/policies/runtime-policy.json', 'results/policies/seccomp.json', 'workflow.json', 'stages.json', 'prepare.log', 'run.log', 'cleanup.log', 'report.log',
         'results/server.log', 'results/server.log.capture.json', 'results/container.log',
         'results/sdk-runtime/sdk.json', 'results/inventory.json', 'preparation-evidence/inventory.json',
         'preparation-evidence/prepared-suite.json', 'preparation-evidence/image-pull.log', 'preparation-evidence/sdk-acquire.log', 'preparation-evidence/batch-online.log', 'preparation-evidence/batch-offline.log',

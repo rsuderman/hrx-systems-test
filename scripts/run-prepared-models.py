@@ -35,6 +35,9 @@ _PROGRESS_SPEC.loader.exec_module(PROGRESS)
 _CAPTURE_SPEC = importlib.util.spec_from_file_location('evidence_capture', SCRIPT_DIR / 'evidence-capture.py')
 CAPTURE = importlib.util.module_from_spec(_CAPTURE_SPEC)
 _CAPTURE_SPEC.loader.exec_module(CAPTURE)
+_PIPELINE_SPEC = importlib.util.spec_from_file_location('pipeline_preparation', SCRIPT_DIR / 'pipeline-preparation.py')
+PIPELINE = importlib.util.module_from_spec(_PIPELINE_SPEC)
+_PIPELINE_SPEC.loader.exec_module(PIPELINE)
 
 
 def read_json(path):
@@ -117,7 +120,27 @@ def copy_evidence(prepared, output, suite, result):
             raise ValueError('frozen cache inventory changed')
         shutil.copyfile(source, output / 'inventory.json')
         result['evidence'].append('inventory.json')
+    for record in PIPELINE.validate_frozen_inputs(prepared, suite):
+        destination = output / record['path']
+        shutil.copyfile(contained(prepared, record['path']), destination)
+        result['evidence'].append(record['path'])
+    if suite.get('frozen_inputs'):
+        result['frozen_inputs'] = copy.deepcopy(suite['frozen_inputs'])
+    for record in suite.get('policy_files', []):
+        relative = record['path']
+        source = contained(prepared, relative)
+        if source.stat().st_size > MAX_EVIDENCE_BYTES or digest(source) != record['sha256']:
+            raise ValueError('frozen runtime policy evidence changed')
+        destination = output / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        result['evidence'].append(relative)
+    if suite.get('runtime_policy') is not None:
+        result['runtime_policy'] = copy.deepcopy(suite['runtime_policy'])
     for entry, model in zip(suite['entries'], result['models']):
+        for key in ('pipeline_upgrade', 'published_execution', 'effective_execution', 'effective_test_profile'):
+            if key in entry:
+                model[key] = copy.deepcopy(entry[key])
         references = list(entry.get('evidence', []))
         if entry.get('inputs_manifest'):
             references.append(entry['inputs_manifest'])
@@ -550,6 +573,8 @@ def verify_prepared(prepared, suite, inside=False):
         raise ValueError('frozen runtime snapshot changed')
     if identity != runtime['sdk_identity'] or identity['base_image'] != runtime['image']:
         raise ValueError('prepared runtime identity changed')
+    PIPELINE.validate_frozen_inputs(prepared, suite)
+    policy = PIPELINE.validate_policy(prepared, suite)
     payload_root = contained(prepared, runtime['sdk_payloads'])
     helper = sdk_helper()
     verifier = ASSETS.Verifier()
@@ -588,8 +613,16 @@ def verify_prepared(prepared, suite, inside=False):
             raise ValueError('prepared request/assertion changed')
         if (entry_baseline['smoke_request'] != entry['smoke_request'] or
                 entry_baseline['smoke_expected_text'] != entry['smoke_expected_text'] or
-                entry_baseline['published_execution'] != manifest['effective_execution']):
+                entry_baseline.get('effective_execution', entry_baseline['published_execution']) != manifest['effective_execution']):
             raise ValueError('prepared workload differs from frozen baseline')
+        PIPELINE.verify_upgrade(prepared, entry, manifest, entry_baseline, policy)
+        if policy is not None and policy['pipeline_upgrade']['enabled']:
+            report = PIPELINE.read_json(PIPELINE.contained(prepared, manifest['pipeline_upgrade']['report_path']))
+            expected_implementation = suite['source']['files_sha256']['scripts/upgrade-pipelines-0.1.0-to-0.2.0.py']
+            if report['implementation_sha256'] != expected_implementation:
+                raise ValueError('pipeline report implementation differs from preparation source')
+        if policy is not None and entry.get('effective_execution') != manifest['effective_execution']:
+            raise ValueError('prepared executable settings differ from frozen entry')
         for program in manifest['programs']:
             path = contained(prepared, f"models/{entry['id']}/model/{program['path']}")
             if digest(path) != program['sha256']:
@@ -676,13 +709,13 @@ def run_host(args):
     result['started_at'] = host_started_at
     result['source']['execution_runner_sha256'] = digest(Path(__file__))
     result['source']['execution_helpers_sha256'] = {name: digest(SCRIPT_DIR / name) for name in
-        ('asset-verification.py', 'ci-progress.py', 'evidence-capture.py', 'failure-records.py')}
+        ('asset-verification.py', 'ci-progress.py', 'evidence-capture.py', 'failure-records.py', 'pipeline-preparation.py', 'runtime-policy.py')}
     if args.workflow:
         if args.workflow.stat().st_size > 16384:
             raise ValueError('workflow identity file exceeds its size limit')
         workflow = read_json(args.workflow)
         allowed = {'schema_version', 'repository', 'run_id', 'run_attempt', 'ref', 'sha', 'runner', 'run_url',
-                   'event_name', 'schedule', 'schedule_timezone', 'observed_at', 'observed_time_source', 'normalized_inputs'}
+                   'event_name', 'schedule', 'schedule_timezone', 'observed_at', 'observed_time_source', 'normalized_inputs', 'lane_id', 'plan_sha256'}
         normalized = workflow.get('normalized_inputs') if isinstance(workflow, dict) else None
         input_keys = {'selection', 'runtime_source', 'device_uri', 'cycles', 'full_integrity',
                       'runtime_run_id', 'runtime_run_attempt', 'runtime_artifact_id', 'runtime_wheel_sha256'}
@@ -695,6 +728,10 @@ def run_host(args):
             raise ValueError('workflow metadata must be a bounded identity-only object')
         if 'schema_version' in workflow and (type(workflow['schema_version']) is not int or workflow['schema_version'] != 1):
             raise ValueError('unsupported workflow metadata schema')
+        if 'lane_id' in workflow and (not isinstance(workflow['lane_id'], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', workflow['lane_id'])):
+            raise ValueError('workflow lane ID must be a bounded path-safe identity')
+        if 'plan_sha256' in workflow and (not isinstance(workflow['plan_sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', workflow['plan_sha256'])):
+            raise ValueError('workflow paired plan identity must be a SHA256')
         write_json(output / 'workflow.json', workflow)
         result['workflow'] = workflow
         result['evidence'].append('workflow.json')
@@ -734,6 +771,9 @@ def run_host(args):
                 '--mount', f"type=bind,src={prepared / 'models'},dst=/inputs,readonly",
                 '--mount', f'type=bind,src={work},dst=/run',
                 '--mount', f'type=bind,src={output},dst=/results']
+            if suite.get('runtime_policy', {}).get('seccomp') is not None:
+                profile = next(record for record in suite['policy_files'] if record['kind'] == 'seccomp')
+                command += ['--security-opt', 'seccomp=' + str(contained(prepared, profile['path']))]
             for key in ('huggingface', 'loom-assets'):
                 command += ['--mount', f"type=bind,src={suite['cache_roots'][key]['host_path']},dst=/model-cache/{key},readonly"]
             command += [suite['runtime']['image'], 'python', '-u', '-I', '/source/scripts/run-prepared-models.py',
@@ -807,8 +847,12 @@ def inside_container(args):
             result['execution_contract']['pipeline_fresh'] = True
         with socket.socket() as check:
             check.bind(('127.0.0.1', 18080))
-        return execute_lifecycle(suite, result, output,
-            ['/run/venv/bin/loom-serve', '--device=' + args.device_uri, '--listen=127.0.0.1:18080'],
+        server = ['/run/venv/bin/loom-serve', '--device=' + args.device_uri, '--listen=127.0.0.1:18080']
+        if suite.get('runtime_policy') is not None:
+            server += PIPELINE.helper('runtime-policy').server_args(suite['runtime_policy'])
+            result['execution_contract']['runtime_policy_sha256'] = suite['runtime_policy']['policy_sha256']
+        result['server_command'] = server
+        return execute_lifecycle(suite, result, output, server,
             'http://127.0.0.1:18080', args)
     except (Exception, KeyboardInterrupt) as error:
         result.update(status='failed', reason=f'{type(error).__name__}: {error}', ended_at=now())

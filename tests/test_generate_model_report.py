@@ -51,6 +51,20 @@ class ReportTests(unittest.TestCase):
             if not urlsplit(link).scheme and not link.startswith('#'):
                 self.assertTrue((self.root/'report'/unquote(link)).is_file(),link)
         self.assertNotIn('<link ',html)
+    def test_migration_policy_and_publication_evidence_survive_rendering(self):
+        self.raw['runtime_policy']={'policy_id':'hrx-runtime-0.2.0-v1','runtime_family':'0.2.0'}
+        model=self.raw['models'][0]
+        model['pipeline_upgrade']={'status':'applied','migration_id':'0.1.0-to-0.2.0','policy_sha256':'a'*64}
+        model['published_execution']={'pool_capacity':100}
+        model['effective_execution']={'pool_capacity':200}
+        evidence='models/'+model['id']+'/publication-card.json'
+        path=self.results/evidence;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('{"published":true}')
+        model.setdefault('evidence',[]).append(evidence)
+        report,html,md=self.generate()
+        self.assertIn('hrx-runtime-0.2.0-v1',md);self.assertIn('0.1.0-to-0.2.0',html)
+        self.assertEqual(report['models'][0]['published_execution']['pool_capacity'],100)
+        self.assertEqual(report['models'][0]['effective_execution']['pool_capacity'],200)
+        self.assertTrue((self.root/'report'/evidence).is_file())
     def test_two_cycles_only_count_one_model(self):
         cycle=copy.deepcopy(self.raw['models'][0]['cycles'][0]);cycle['incarnation']=2
         self.raw['models'][0]['cycles'].append(cycle)
