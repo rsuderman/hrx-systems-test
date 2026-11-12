@@ -185,8 +185,28 @@ def run_host(args):
     spec = importlib.util.spec_from_file_location("sdk_environment", repo / "scripts/sdk-environment.py")
     sdk_helper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(sdk_helper)
-    baseline_path = (args.baseline or repo / "config/single-model-e2e.json").resolve()
-    baseline, _, _, _ = sdk_helper.load_baseline(baseline_path)
+    config_spec = importlib.util.spec_from_file_location('seed_model_config', repo / 'scripts/model-config.py')
+    config = importlib.util.module_from_spec(config_spec)
+    config_spec.loader.exec_module(config)
+    if args.baseline and getattr(args, 'model', None):
+        raise ValueError('--baseline and --model are mutually exclusive')
+    runtime_path = getattr(args, 'runtime', None)
+    if args.baseline:
+        baseline_path = args.baseline.resolve()
+        baseline, _, _, _ = sdk_helper.load_baseline(baseline_path)
+        lock_path = baseline_path.parent / baseline['sdk']['dependency_lock']
+        if runtime_path:
+            adapter, snapshot, lock_path = config.runtime(runtime_path)
+            if baseline['sdk'] != adapter['sdk'] or baseline['container'] != adapter['container']:
+                raise ValueError('legacy baseline and runtime settings conflict')
+            baseline['resolved_runtime'] = snapshot
+    elif getattr(args, 'model', None):
+        suite = read_json(repo / 'config/cached-model-tests.json')
+        entries = [entry for entry in suite['entries'] if entry['id'] == args.model]
+        if len(entries) != 1: raise ValueError('unknown sample model ID')
+        baseline, lock_path = config.compose(entries[0], runtime_path)
+    else:
+        baseline, lock_path = config.default_baseline(runtime_path)
     root = Path(args.root or os.environ.get("HRX_SYSTEMS_ROOT", Path.home() / ".local/share/hrx-systems-test")).expanduser()
     if root == Path("/") or not root.is_absolute():
         raise ValueError("root must be an absolute directory other than /")
@@ -213,8 +233,9 @@ def run_host(args):
                 work = temporary / "run"
                 work.mkdir()
                 (work / "config").mkdir()
-                shutil.copyfile(baseline_path, work / "config/baseline.json")
-                shutil.copyfile(baseline_path.parent / baseline["sdk"]["dependency_lock"],
+                write_json(work / "config/baseline.json", baseline)
+                baseline_path = work / "config/baseline.json"
+                shutil.copyfile(lock_path,
                                 work / "config" / baseline["sdk"]["dependency_lock"])
                 payloads = temporary / "sdk-payloads"
                 subprocess.run([sys.executable, "-I", str(repo / "scripts/sdk-environment.py"), "acquire",
@@ -278,7 +299,9 @@ def run_host(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--baseline", type=Path, help="legacy composed model baseline")
+    parser.add_argument("--runtime", type=Path, help="shared runtime config")
+    parser.add_argument("--model", help="sample model ID; default first suite entry")
     parser.add_argument("--root", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--seed-manifest", type=Path)

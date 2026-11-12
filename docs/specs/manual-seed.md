@@ -22,8 +22,9 @@ Implementation and operator instructions: [seed the model cache](../seed-models.
 Use one shell entry point and one private Python helper using the installed
 Loom acquisition APIs. Reuse [the existing SDK helper](../sdk-environment.md).
 Do not add a catalog manager, provider plugin framework, scheduler or weight
-store. Inputs come from the existing `config/single-model-e2e.json`: pinned
-image/release and `loom-fun/unsloth-Qwen3.5-0.8B-loom` publication, `chat` preset,
+store. Runtime inputs come from `config/runtime.json`; the first explicit sample
+in `config/cached-model-tests.json` supplies the
+`loom-fun/unsloth-Qwen3.5-0.8B-loom` publication, `chat` preset,
 `gguf` variant and `source` programs. Native card/lock selection determines the
 base Q4_K_M GGUF, vision GGUF and tokenizer; do not duplicate that asset list in
 repository configuration.

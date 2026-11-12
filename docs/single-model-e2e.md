@@ -22,7 +22,8 @@ groundwork, not completion of this epic.
 Start with `loom-fun/unsloth-Qwen3.5-0.8B-loom`, publication
 `f1ba2f23c44400bd0b1f88b406029daf41d7a143`, preset `chat`, variant `gguf`,
 program set `source`. The selected model ID is `Qwen/Qwen3.5-0.8B`.
-`config/single-model-e2e.json` records this choice. The reference asset lock selects:
+`config/cached-model-tests.json` records this choice; runtime pins live in
+`config/runtime.json` and test behavior in `config/model-test-profiles.json`. The reference asset lock selects:
 
 | Asset | Bytes | Reuse policy |
 |---|---:|---|

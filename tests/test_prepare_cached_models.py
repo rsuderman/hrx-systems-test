@@ -99,7 +99,7 @@ class HostContractTests(unittest.TestCase):
             suite = root / 'suite.json'
             suite.write_text(json.dumps({'schema_version': 1, 'entries': [
                 {'id': 'bad-baseline', 'baseline': 'config/missing.json', 'seed_manifest': 'missing.json'},
-                {'id': 'missing-seed', 'baseline': 'config/single-model-e2e.json', 'seed_manifest': 'missing.json'}]}))
+                {**PREP.read_json(ROOT / 'config/cached-model-tests.json')['entries'][0], 'id': 'missing-seed', 'seed_manifest': 'missing.json'}]}))
             args = type('Args', (), {'root': root, 'suite': suite, 'output': root / 'prepared'})()
             with patch.object(PREP.subprocess, 'run'), patch.object(PREP, 'source_identity', return_value={'commit': 'fixture'}):
                 self.assertEqual(PREP.run_host(args), 1)
@@ -107,7 +107,7 @@ class HostContractTests(unittest.TestCase):
             self.assertEqual([e['id'] for e in result['entries']], ['bad-baseline', 'missing-seed'])
             self.assertTrue(all(e['preparation']['status'] == 'failed' for e in result['entries']))
             self.assertEqual(result['entries'][1]['selection']['model_id'], 'Qwen/Qwen3.5-0.8B')
-            self.assertIsNone(result['runtime'])
+            self.assertEqual(result['runtime']['resolved_runtime']['source']['kind'], 'release')
 
 
     def test_interruption_preserves_every_expected_entry(self):
@@ -117,7 +117,7 @@ class HostContractTests(unittest.TestCase):
                 (root / 'cache' / name).mkdir(parents=True)
             suite = root / 'suite.json'
             suite.write_text(json.dumps({'schema_version': 1, 'entries': [
-                {'id': name, 'baseline': 'config/single-model-e2e.json', 'seed_manifest': 'seed-manifest.json'}
+                {**PREP.read_json(ROOT / 'config/cached-model-tests.json')['entries'][0], 'id': name, 'seed_manifest': 'seed-manifest.json'}
                 for name in ('one', 'two', 'three')]}))
             args = type('Args', (), {'root': root, 'suite': suite, 'output': root / 'prepared'})()
             with patch.object(PREP.subprocess, 'run'), patch.object(PREP, 'source_identity', return_value={'commit': 'fixture'}), \

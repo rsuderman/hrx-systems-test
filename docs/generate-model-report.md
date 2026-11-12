@@ -66,3 +66,15 @@ copies only referenced evidence plus raw results; it never scans or recursively
 exports a model/cache directory. HTML uses inline CSS/system fonts and no scripts,
 remote assets or frontend build tools. GitHub uploads the report as a downloadable
 bundle; Actions does not automatically display its HTML inline.
+
+The summary and HTML show an **HRX build** block near coverage: package/version,
+release or upstream build identity, and a source-commit link. The **Harness source**
+label identifies this testing repository separately. Full commits, wheel identity
+and the original runtime object remain in JSON/details. Actions snapshots can also
+show requested main HEAD, the actual tested source and whether its build is behind.
+
+Runtime evidence distinguishes a selected pin from a saved successful installation
+and an exercised server. Early preparation failures show the selected runtime with
+execution unconfirmed; missing metadata stays unavailable. Fixture results remain
+labelled as fixtures. The failure-only fallback uses the same saved identity rules;
+rendering never queries current GitHub HEAD, the model cache or a local SDK.

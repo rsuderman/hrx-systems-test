@@ -116,3 +116,23 @@ GitHub publishes the failure directory as the separate
 artifact already yields one ZIP; it contains no nested ZIP. The job summary
 uses the actual artifact download URL after upload. Packaging/upload failure is
 reported separately and never erases the original model/stage failure.
+
+## Shared runtime and test inputs
+
+`config/runtime.json` owns the pinned container, SDK source and adjacent dependency
+lock. Pass `--runtime FILE` to the combined, preparation, single/batch seeding or
+bulk download command. The default retains the current release exactly. The old
+`--runtime-baseline FILE` cached-only option remains a deprecated adapter for
+external composed baselines and is mutually exclusive with `--runtime`.
+
+`config/cached-model-tests.json` owns the explicit eight-sample selections and
+historical execution settings. `config/model-test-profiles.json` owns text/decision
+default requests and exact-selection overrides; these do not filter cached
+membership or override capacities in hosted cards. The 45-publication download
+catalog and bootstrap version pins remain separate inputs.
+
+Preparation freezes `resolved-runtime.json` once; prepared/raw results embed the
+same snapshot under `runtime.resolved_runtime`. Native adapters derive SDK settings
+from it and reject conflicting identity/dependency metadata. Model/profile changes
+have their own hashes and do not change `runtime_identity_sha256`. A configured
+snapshot is selection evidence, not installation or inference proof.

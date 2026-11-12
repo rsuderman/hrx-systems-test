@@ -24,6 +24,9 @@ MAX_FILES = 4096
 SUMMARY_ROWS = 100
 SUMMARY_DIAGNOSTICS = 20
 SUMMARY_DIAGNOSTIC_CHARS = 2048
+_RUNTIME_SPEC = importlib.util.spec_from_file_location("runtime_summary", Path(__file__).with_name("runtime-summary.py"))
+RUNTIME_SUMMARY = importlib.util.module_from_spec(_RUNTIME_SPEC)
+_RUNTIME_SPEC.loader.exec_module(RUNTIME_SUMMARY)
 LABELS = {"passed": "Passed", "failed": "Failed", "not_run": "Not run", "incomplete": "Incomplete"}
 
 
@@ -45,8 +48,8 @@ def escaped(value):
 
 
 def markdown(value):
-    value = html.escape(text(value), quote=True).replace("\n", " ")
-    return re.sub(r"([\\`|\[\]()*_!#])", r"\\\1", value)
+    value = re.sub(r"([\\`|\[\]()*_!#])", r"\\\1", text(value).replace("\n", " "))
+    return html.escape(value, quote=True)
 
 
 def duration(value):
@@ -337,14 +340,17 @@ def display_name(model):
     return f"{name} · {publisher}" if publisher else name
 
 
-def runtime_source(report):
-    runtime = report["runtime"]
-    sdk = runtime.get("sdk")
-    if not isinstance(sdk, dict):
-        identity = runtime.get("sdk_identity", {})
-        sdk = identity.get("sdk", {}) if isinstance(identity, dict) else {}
-    commit = sdk.get("source_commit") if isinstance(sdk, dict) else None
-    return str(commit)[:12] if isinstance(commit, str) and commit else "Unavailable"
+def runtime_identity(report, root=None):
+    installation = None
+    if root is not None:
+        receipt = root / 'sdk-runtime/sdk.json'
+        if receipt.exists() or receipt.is_symlink():
+            installation = read_json(evidence_path(root, 'sdk-runtime/sdk.json'))
+    try:
+        return RUNTIME_SUMMARY.describe(report['runtime'], server=report.get('server'),
+            installation=installation, mode=report.get('mode'))
+    except ValueError as error:
+        raise ReportError(str(error)) from error
 
 
 def failure_cases(report):
@@ -485,7 +491,7 @@ def render_html(report, root):
     hardware_title = report["hardware"].get("name") or report["hardware"].get("gpu") or report["hardware"].get("device_uri")
     source_title = report["source"].get("commit")
     environment = ''.join(f'<div><h3>{label}</h3><strong class="identity-title">{escaped(value)}</strong><details class="identity-details"><summary>Full identity</summary><pre>{escaped(identity(report[key]))}</pre></details></div>'
-                          for key,label,value in (("runtime","HRX release",runtime_title),("hardware","Hardware",hardware_title),("source","Execution source",source_title)))
+                          for key,label,value in (("runtime","HRX release",runtime_title),("hardware","Hardware",hardware_title),("source","Harness source",source_title)))
     contract = report.get("execution_contract", {})
     claims = [("Cache mounted read-only", contract.get("cache_read_only") is True),
               ("Fresh pinned pipeline staging", contract.get("pipeline_fresh") is True),
@@ -507,9 +513,10 @@ def render_html(report, root):
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'">
 <title>HRX model verification · {escaped(report['attempt_id'])}</title><style>{CSS}</style></head><body><main>
 <header><div class="eyebrow">HRX SYSTEMS / MODEL COVERAGE</div><div class="heading"><div><h1>Model verification</h1><p>Execution results and supporting evidence.</p></div>{badge(status,title)}</div>
-<div class="run-meta"><span>{escaped(report['attempt_id'])}</span><span>{escaped(report.get('started_at'))}</span><span>{duration(report['elapsed_seconds'])}</span><span class="mode">{escaped(mode.upper())}</span><span>Tested HRX {escaped(runtime_source(report))}</span>{header_links}</div></header>
+<div class="run-meta"><span>{escaped(report['attempt_id'])}</span><span>{escaped(report.get('started_at'))}</span><span>{duration(report['elapsed_seconds'])}</span><span class="mode">{escaped(mode.upper())}</span>{header_links}</div></header>
 <section class="notice {status}"><strong>{escaped(title)}</strong><span>{escaped(report.get('reason') or ('Every expected selection and server cleanup passed.' if mode=='real' else 'Synthetic fixture results; this is not proof of real model support.'))}</span></section>
 <section class="tiles">{tiles}</section><p class="caption">{counts['distinct_models']} distinct model IDs · Rows represent configured test entries; repeated cycles increase neither count. Text smoke results cover only the tested text path.</p>
+{RUNTIME_SUMMARY.render_html(report["runtime_summary"])}
 {failure_html(report)}
 {passing}
 {incomplete}
@@ -541,7 +548,7 @@ def render_markdown(report):
     if report.get('selection_mode') == 'cached':
         lines += ['Selection: all published runner-cache selections, deduplicated and frozen before preparation.',
                   'Decision smoke checks the single-choice service contract, not learned decision quality.', '']
-    lines += [f'**Tested HRX commit:** {markdown(runtime_source(report))}', '']
+    lines += RUNTIME_SUMMARY.markdown(report["runtime_summary"])
     lines += failure_markdown(report)
     passed = [model for model in report["models"] if model["status"] == "passed"]
     remaining = [model for model in report["models"] if model["status"] in ("not_run", "incomplete")]
@@ -566,18 +573,6 @@ def render_markdown(report):
         return value if isinstance(value, (str, int, float)) and not isinstance(value, bool) else None
 
     runtime, hardware, source = (report[key] for key in ("runtime", "hardware", "source"))
-    sdk = runtime.get("sdk")
-    if not isinstance(sdk, dict):
-        sdk_identity = runtime.get("sdk_identity", {})
-        sdk = sdk_identity.get("sdk", {}) if isinstance(sdk_identity, dict) else {}
-    package = ' '.join(str(value) for value in (scalar(sdk, "name"), scalar(sdk, "version")) if value is not None)
-    release = scalar(sdk, "release") or scalar(runtime, "release")
-    runtime_label = package or "HRX"
-    if release is not None:
-        runtime_label += f' (release {release})'
-    elif not package:
-        runtime_label = "Unavailable"
-    lines.append(f'- **HRX runtime:** {markdown(runtime_label)}')
     gpu = scalar(hardware, "name") or scalar(hardware, "gpu") or "Unavailable"
     device = scalar(hardware, "device_uri")
     driver = scalar(hardware, "driver")
@@ -591,7 +586,7 @@ def render_markdown(report):
         source_label += ' · local changes'
     elif source.get("dirty") is False:
         source_label += ' · clean checkout'
-    lines.append(f'- **Execution source:** {markdown(source_label)}')
+    lines.append(f'- **Harness source:** {markdown(source_label)}')
     links = github_links(report)
     for label, url in links.items():
         lines.append(f'- [{label}]({url})')
@@ -625,6 +620,8 @@ def generate(results, output, failures=None):
     require(not output.exists() and not output.is_symlink(), "Output directory must not already exist")
     require(not output.resolve().is_relative_to(root), "Output must be outside the saved results directory")
     report = normalize(root)
+    report["runtime_summary"] = runtime_identity(report, root)
+    report["renderer"]["runtime_summary_sha256"] = hashlib.sha256(Path(__file__).with_name("runtime-summary.py").read_bytes()).hexdigest()
     report["failures"] = load_failures(report, root, failures)
     rendered = render_html(report, root)
     summary = render_markdown(report)

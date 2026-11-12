@@ -19,7 +19,8 @@ class SuiteSeedTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.suite = self.root / 'suite.json'
-        self.entries = [{'id': name, 'baseline': 'config/single-model-e2e.json',
+        sample = BATCH.SEED.read_json(ROOT / 'config/cached-model-tests.json')['entries'][0]
+        self.entries = [{**sample, 'id': name,
                          'seed_manifest': f'models/{name}/seed-manifest.json'}
                         for name in ('one', 'two', 'three')]
         self.write_suite(self.entries)
@@ -44,7 +45,8 @@ class SuiteSeedTests(unittest.TestCase):
         for call, entry in zip(child.call_args_list, entries):
             command = call.args[0]
             self.assertEqual(command[:2], ['bash', str(ROOT / 'scripts/seed-models.sh')])
-            self.assertEqual(command[command.index('--baseline') + 1], str(ROOT / entry['baseline']))
+            baseline = Path(command[command.index('--baseline') + 1])
+            self.assertEqual(json.loads(baseline.read_text())['model_id'], entry['selection']['model_id'])
             self.assertEqual(command[command.index('--seed-manifest') + 1],
                              str(self.root / 'cache' / entry['seed_manifest']))
         acl.assert_not_called()

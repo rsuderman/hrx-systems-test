@@ -18,6 +18,9 @@ REPO = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('single_model_seed', REPO / 'scripts/seed-models.py')
 SEED = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(SEED)
+config_spec = importlib.util.spec_from_file_location('suite_model_config', REPO / 'scripts/model-config.py')
+CONFIG = importlib.util.module_from_spec(config_spec)
+config_spec.loader.exec_module(CONFIG)
 
 
 def contained(root, value, *, exists=False):
@@ -48,8 +51,13 @@ def load_entries(suite_path, cache_root):
         if (not isinstance(entry_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', entry_id)
                 or entry_id == 'runtime' or entry_id in ids):
             raise ValueError('suite IDs must be unique path-safe strings other than reserved runtime')
-        baseline = contained(REPO, entry['baseline'], exists=True)
-        SEED.read_json(baseline)
+        baseline = contained(REPO, entry['baseline'], exists=True) if 'baseline' in entry else None
+        if baseline: SEED.read_json(baseline)
+        else:
+            identity = entry.get('selection', {})
+            if any(not isinstance(identity.get(field), str) or not identity[field] for field in CONFIG.FIELDS):
+                raise ValueError('sample selection fields must be nonempty strings')
+            CONFIG.override_for(identity)
         manifest = contained(cache_root, entry['seed_manifest'])
         if manifest in manifests:
             raise ValueError('suite entries must have distinct seed manifest paths')
@@ -100,7 +108,7 @@ def run(args):
     output.mkdir(parents=True, exist_ok=False)
     report = {'schema_version': 1, 'status': 'running', 'suite_sha256': SEED.digest(suite_path),
         'asset_network': args.asset_network, 'reader_user': args.reader_user,
-        'entries': [{'id': entry['id'], 'baseline': entry['baseline'], 'seed_manifest': entry['seed_manifest'],
+        'entries': [{'id': entry['id'], 'selection': entry.get('selection'), 'seed_manifest': entry['seed_manifest'],
                      'seeding': {'status': 'not_run', 'exit_code': None}} for entry, _, _ in entries]}
     report_path = output / 'seed-suite.json'
     SEED.write_json(report_path, report)
@@ -114,9 +122,17 @@ def run(args):
     try:
         for (entry, baseline, manifest), current in zip(entries, report['entries']):
             print(f"Seeding {entry['id']}; log: {output / (entry['id'] + '.log')}", flush=True)
+            if baseline is None:
+                composed, lock_path = CONFIG.compose(entry, getattr(args, 'runtime', None))
+                directory = output / 'config' / entry['id']
+                directory.mkdir(parents=True)
+                baseline = directory / 'baseline.json'
+                SEED.write_json(baseline, composed)
+                shutil.copyfile(lock_path, directory / composed['sdk']['dependency_lock'])
             command = ['bash', str(REPO / 'scripts/seed-models.sh'), '--baseline', str(baseline),
                        '--root', str(root), '--output', str(output / entry['id']),
                        '--seed-manifest', str(manifest), '--asset-network', args.asset_network]
+            if getattr(args, 'runtime', None): command += ['--runtime', str(args.runtime.resolve())]
             try:
                 with (output / (entry['id'] + '.log')).open('w') as log:
                     code = run_child(command, log)
@@ -145,6 +161,7 @@ def run(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--suite', type=Path)
+    parser.add_argument('--runtime', type=Path, help='shared runtime config')
     parser.add_argument('--root', type=Path)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--asset-network', choices=('online', 'offline'), default='online')

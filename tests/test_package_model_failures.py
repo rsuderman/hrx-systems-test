@@ -42,6 +42,16 @@ class FailureBundleTests(unittest.TestCase):
         self.raw['status'] = 'failed'
         self.save()
 
+    def test_actual_host_source_argument_mismatch_is_concise(self):
+        diagnostic = "RuntimeError: {'error': 'argument count mismatch: host expects 11, source declares 10'}"
+        self.assertEqual(RECORDS.summarize(diagnostic),
+                         'Server expects 11 arguments; pipeline declares 10')
+        self.fail(reason=diagnostic)
+        manifest, code = PACKAGE.package(self.root, self.root / 'failures')
+        self.assertEqual(code, 0)
+        self.assertEqual(manifest['cases'][0]['summary'], 'Server expects 11 arguments; pipeline declares 10')
+        self.assertEqual(manifest['cases'][0]['diagnostic'], diagnostic)
+
     def test_all_pass_omits_zip(self):
         manifest, code = PACKAGE.package(self.root, self.root / 'failures', self.root / 'failures.zip')
         self.assertEqual(code, 0)

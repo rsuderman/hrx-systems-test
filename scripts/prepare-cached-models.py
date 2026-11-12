@@ -35,6 +35,8 @@ INVENTORY = helper('cached-inventory')
 ASSETS = helper('asset-verification')
 PROGRESS = helper('ci-progress')
 CAPTURE = helper('evidence-capture')
+CONFIG = helper('model-config')
+ACTIONS = helper('actions-runtime')
 read_json, write_json, digest = SEED.read_json, SEED.write_json, SEED.digest
 
 
@@ -57,7 +59,7 @@ def source_identity(repo):
     return {'commit': commit, 'dirty': bool(subprocess.check_output(
         ['git', '-C', str(repo), 'status', '--porcelain'], text=True).strip()),
         'files_sha256': {f'scripts/{name}': digest(repo / 'scripts' / name) for name in
-                         ('prepare-cached-models.py', 'seed-models.py', 'sdk-environment.py', 'cached-inventory.py', 'asset-verification.py', 'ci-progress.py', 'evidence-capture.py', 'failure-records.py')}}
+                         ('prepare-cached-models.py', 'seed-models.py', 'sdk-environment.py', 'cached-inventory.py', 'asset-verification.py', 'ci-progress.py', 'evidence-capture.py', 'failure-records.py', 'model-config.py', 'actions-runtime.py')}}
 
 
 def indexed_cache(selection, seed, cache_root, work, verifier=None):
@@ -274,7 +276,8 @@ def native_batch(operation):
                     native(operation, record['id'], work, verifier)
             if operation == 'online':
                 baseline, _, _, identity = SDK.load_baseline(Path('/prepared') / record['baseline'])
-                record.update(baseline_sha256=identity['baseline_sha256'],
+                record.update(runtime_identity_sha256=baseline.get('resolved_runtime', {}).get('runtime_identity_sha256'),
+                    baseline_sha256=identity['baseline_sha256'],
                     smoke_request=baseline['smoke_request'], smoke_expected_text=baseline['smoke_expected_text'],
                     effective_execution=baseline['published_execution'], test_kind=baseline.get('test_kind', 'text_smoke'),
                     service_kind=baseline.get('service_kind', 'text'), profile_identity=baseline.get('profile_identity', 'explicit-baseline'))
@@ -295,6 +298,80 @@ def native_batch(operation):
             PROGRESS.emit(label + ': ' + outcome)
 
 
+def container_json(container, code, arguments=(), prepared=None):
+    """Run bounded pure qualification in the selected image, without host packages."""
+    command = ['docker', 'run', '--rm', '--pull=never', '--read-only', '--network', 'none',
+               '--platform', container.get('platform', 'linux/amd64'),
+               '--user', f'{os.getuid()}:{os.getgid()}', '--cap-drop', 'ALL',
+               '--security-opt', 'no-new-privileges', '--tmpfs', '/tmp:rw,size=128m,mode=1777',
+               '--env', 'HOME=/tmp', '--env', 'PYTHONNOUSERSITE=1',
+               '--mount', f'type=bind,src={SCRIPT_DIR},dst=/source/scripts,readonly']
+    if prepared is not None:
+        command += ['--mount', f'type=bind,src={prepared},dst=/prepared,readonly']
+    command += [container['image'], container.get('python', 'python3'), '-I', '-c', code, *arguments]
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=60)
+    if prepared is not None:
+        with (prepared / 'actions-qualification.log').open('a') as log:
+            log.write((completed.stdout + completed.stderr)[:4 * 1024 * 1024])
+    completed.check_returncode()
+    if len(completed.stdout) > 4 * 1024 * 1024:
+        raise ValueError('runtime qualification output exceeds limit')
+    value = json.loads(completed.stdout)
+    if not isinstance(value, dict):
+        raise ValueError('runtime qualification did not return an object')
+    return value
+
+
+def actions_runtime(settings, selector, output, attempt):
+    container = settings['container']
+    attempt['runtime'] = {'image': container['image'], 'platform': container.get('platform'),
+                          'source_selector': selector}
+    write_json(output / 'prepared-suite.json', attempt)
+    PROGRESS.run(['docker', 'pull', '--platform', container.get('platform', 'linux/amd64'), container['image']],
+                 output / 'image-pull.log', label='prepare container image', check=True, timeout=300)
+    with PROGRESS.operation('prepare target Python environment'):
+        environment = container_json(container, """import json,platform,sys
+v=platform.python_version()
+print(json.dumps({'python_version':'.'.join(v.split('.')[:2]),'python_full_version':v,
+'sys_platform':sys.platform,'platform_machine':platform.machine(),'glibc_version':platform.libc_ver()[1],
+'os_name':'posix','platform_system':platform.system(),'platform_python_implementation':platform.python_implementation(),
+'implementation_name':sys.implementation.name,'implementation_version':v,
+'platform_release':platform.release(),'platform_version':platform.version()}))""")
+    write_json(output / 'target-environment.json', environment)
+
+    def qualify(wheel, lock, target, dependency_directory=None):
+        write_json(output / 'actions-qualification-input.json', {'environment': target, 'lock': lock})
+        relative = '/prepared/' + Path(wheel).relative_to(output).as_posix()
+        dependencies = '/prepared/' + dependency_directory.relative_to(output).as_posix() if dependency_directory else ''
+        with PROGRESS.operation('prepare Actions wheel compatibility'):
+            result = container_json(container, """import importlib.util,json,pathlib,sys
+s=importlib.util.spec_from_file_location('actions_qualification','/source/scripts/actions-runtime.py')
+m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+d=json.loads(pathlib.Path('/prepared/actions-qualification-input.json').read_text())
+metadata=m.wheel_metadata(pathlib.Path(sys.argv[1]),environment=d['environment'])
+status=m.validate_dependencies(metadata,d['lock'],environment=d['environment'],
+ dependency_directory=pathlib.Path(sys.argv[2]) if sys.argv[2] else None)
+print(json.dumps({'metadata':metadata,'compatibility_status':status}))""", (relative, dependencies), output)
+        return result['metadata'], result['compatibility_status']
+
+    def observed(source):
+        attempt['runtime'] = {'image': container['image'], 'platform': container.get('platform'),
+                              'source_selection': source}
+        write_json(output / 'prepared-suite.json', attempt)
+        write_json(output / 'actions-selection.json', source)
+
+    with PROGRESS.operation('prepare Actions SDK acquisition'):
+        snapshot, events = SDK.acquire_actions_runtime(settings, output / 'sdk-payloads',
+            selector=selector, environment=environment, qualifier=qualify, observe_source=observed)
+    adapter = SDK.runtime_baseline(settings, snapshot)
+    receipt = output / 'sdk-download'
+    receipt.mkdir()
+    write_json(receipt / 'sdk-acquisition.json', {'schema_version': 1, 'status': 'ready',
+        'payload_policy': 'per_attempt', 'resolved_runtime': snapshot, 'payloads': events,
+        'downloaded_bytes': sum(event['downloaded_bytes'] for event in events)})
+    return adapter, snapshot
+
+
 def run_host(args):
     root = Path(args.root or os.environ.get('HRX_SYSTEMS_ROOT', Path.home() / '.local/share/hrx-systems-test')).expanduser()
     if not root.is_absolute() or root == Path('/'):
@@ -302,6 +379,9 @@ def run_host(args):
     root = root.resolve(strict=True)
     cache_root = root / 'cache'
     cached = getattr(args, 'selection', None) == 'cached'
+    if getattr(args, 'runtime', None) and getattr(args, 'runtime_baseline', None):
+        raise ValueError('--runtime and --runtime-baseline are mutually exclusive')
+    runtime_path = getattr(args, 'runtime', None) or getattr(args, 'runtime_baseline', None)
     if getattr(args, 'runtime_baseline', None) and not cached:
         raise ValueError('--runtime-baseline requires --selection cached')
     if cached and args.suite:
@@ -314,33 +394,88 @@ def run_host(args):
     ids = [entry['id'] for entry in suite['entries']]
     if 'runtime' in ids or len(set(ids)) != len(ids) or any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', value) for value in ids):
         raise ValueError('suite IDs must be unique path-safe strings other than reserved runtime')
-    subprocess.run(['docker', 'info'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     output = (args.output or root / 'runs' / ('prepared-' + uuid.uuid4().hex)).absolute()
     output.mkdir(parents=True, exist_ok=False)
     ASSETS.write_index(output / ASSETS.INDEX_NAME, ASSETS.load_index(cache_root / ASSETS.INDEX_NAME))
     if cached:
         write_json(output / 'inventory.json', inventory)
-        template_path = (getattr(args, 'runtime_baseline', None) or REPO / 'config/single-model-e2e.json').resolve(strict=True)
-        template, _, _, _ = SDK.load_baseline(template_path)
-        generated = output / 'selection-config'
-        generated.mkdir()
-        shutil.copyfile(template_path.parent / template['sdk']['dependency_lock'], generated / template['sdk']['dependency_lock'])
-        for candidate in candidates:
-            baseline = {k: template[k] for k in ('schema_version', 'sdk', 'container')}
-            baseline.update(candidate['selection'], selection_mode='cached',
-                            test_override=INVENTORY.override_for(REPO, candidate['selection']))
+    if runtime_path is None and not cached:
+        for candidate in suite['entries']:
+            if candidate.get('baseline'):
+                try:
+                    runtime_path = contained(REPO, candidate['baseline'])
+                    break
+                except (ValueError, OSError):
+                    continue
+    # Freeze the full denominator before runtime configuration, auth or transfer.
+    attempt = {'schema_version': 1, 'attempt_id': output.name, 'source': source_identity(REPO),
+        'suite_sha256': None if cached else digest(suite_path), 'runtime': None,
+        'selection_mode': 'cached' if cached else 'suite',
+        'inventory_errors': inventory['errors'] if cached else [],
+        'full_integrity': getattr(args, 'full_integrity', False),
+        'entries': [{'id': entry['id'], 'selection': entry.get('selection', {}),
+                     'preparation': {'status': 'failed', 'reason': 'preparation not reached'},
+                     'inputs_manifest': None, 'evidence': []} for entry in suite['entries']]}
+    if cached:
+        attempt.update(inventory_sha256=digest(output / 'inventory.json'), inventory_path='inventory.json')
+    write_json(output / 'prepared-suite.json', attempt)
+    actions_acquired = False
+    try:
+        configured_path = Path(runtime_path or REPO / 'config/runtime.json').resolve(strict=True)
+        settings, _, _, _ = SDK.load_runtime(configured_path)
+        selector = ACTIONS.selector_from_args(args, settings['sdk']['source'])
+        subprocess.run(['docker', 'info'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if selector['kind'] == 'github_actions':
+            template, runtime_snapshot = actions_runtime(settings, selector, output, attempt)
+            lock_path = configured_path.parent / settings['sdk']['dependency_lock']
+            actions_acquired = True
+        else:
+            template, runtime_snapshot, lock_path = CONFIG.runtime(runtime_path)
+    except (ValueError, OSError, KeyError, TypeError, SDK.SdkError, subprocess.SubprocessError) as error:
+        reason = f'runtime setup: {type(error).__name__}: {error}'
+        for record in attempt['entries']:
+            record['preparation'] = {'status': 'failed', 'reason': reason}
+        write_json(output / 'prepared-suite.json', attempt)
+        errors = output / 'sdk-download'
+        errors.mkdir(exist_ok=True)
+        write_json(errors / 'sdk-error.json', {'schema_version': 1, 'status': 'failed',
+                   'stage': 'runtime_setup', 'error_kind': getattr(error, 'kind', 'configuration'),
+                   'error': reason, 'model_executed': False})
+        CAPTURE.preparation_snapshot(output, attempt)
+        PROGRESS.emit('prepare: FAIL ' + reason)
+        return 1
+    generated = output / 'selection-config'
+    generated.mkdir()
+    write_json(output / 'resolved-runtime.json', runtime_snapshot)
+    shutil.copyfile(lock_path, generated / template['sdk']['dependency_lock'])
+    for candidate in suite['entries']:
+        try:
+            if cached:
+                baseline = {**template, **candidate['selection'], 'selection_mode': 'cached',
+                            'test_override': INVENTORY.override_for(REPO, candidate['selection']),
+                            'resolved_runtime': runtime_snapshot}
+            else:
+                baseline, candidate_lock = CONFIG.compose(candidate, runtime_path,
+                    runtime_context=(template, runtime_snapshot, lock_path))
+                if candidate_lock.read_bytes() != lock_path.read_bytes():
+                    raise ValueError('suite entries must share one dependency lock')
             baseline_path = generated / (candidate['id'] + '.json')
             write_json(baseline_path, baseline)
             candidate['_baseline'] = baseline_path
+        except (ValueError, OSError, KeyError, SDK.SdkError) as error:
+            candidate['_compose_error'] = f'{type(error).__name__}: {error}'
     attempt = {'schema_version': 1, 'attempt_id': output.name, 'source': source_identity(REPO),
-        'suite_sha256': None if cached else digest(suite_path), 'runtime': None,
+        'suite_sha256': None if cached else digest(suite_path),
+        'runtime': {'image': template['container']['image'], 'platform': template['container'].get('platform'),
+                    'sdk': template['sdk'], 'resolved_runtime': runtime_snapshot},
         'selection_mode': 'cached' if cached else 'suite',
         'inventory_errors': inventory['errors'] if cached else [],
         'full_integrity': getattr(args, 'full_integrity', False),
         'cache_roots': {name: {'host_path': str((cache_root / name).resolve(strict=True)),
                              'container_path': '/model-cache/' + name}
                         for name in ('huggingface', 'loom-assets')},
-        'entries': [{'id': entry['id'], 'test_kind': 'unresolved' if cached else 'text_smoke',
+        'entries': [{'id': entry['id'], 'selection': entry.get('selection', {}),
+                     'test_kind': 'unresolved' if cached else 'text_smoke',
                      'preparation': {'status': 'failed', 'reason': 'preparation not reached'},
                      'inputs_manifest': None, 'evidence': []} for entry in suite['entries']]}
     if cached:
@@ -358,13 +493,16 @@ def run_host(args):
         for config, record in zip(suite['entries'], attempt['entries']):
             entry_id = config['id']
             try:
+                if config.get('_compose_error'):
+                    raise ValueError(config['_compose_error'])
                 if cached:
                     record['selection'] = config['selection']
                     if config['conflict']:
                         raise ValueError('conflicting_seed_manifests: aliases disagree on immutable asset identities')
-                baseline_path = config['_baseline'] if cached else contained(REPO, config['baseline'])
+                baseline_path = config['_baseline']
                 baseline, lock, _, identity = SDK.load_baseline(baseline_path)
-                record.update(baseline_sha256=identity['baseline_sha256'],
+                record.update(runtime_identity_sha256=baseline.get('resolved_runtime', {}).get('runtime_identity_sha256'),
+                    baseline_sha256=identity['baseline_sha256'],
                     dependency_lock_sha256=identity['dependency_lock_sha256'],
                     selection=selection_identity(baseline), smoke_request=baseline.get('smoke_request'),
                     smoke_expected_text=baseline.get('smoke_expected_text'), effective_execution=baseline.get('published_execution'))
@@ -384,11 +522,16 @@ def run_host(args):
                     shutil.copyfile(seed_path, model_dir / 'seed-manifest.json')
                 record['baseline'] = f'config/{entry_id}/baseline.json'
                 record['evidence'] = [f'models/{entry_id}/seed-manifest.json']
-                if attempt['runtime'] is None:
+                if 'sdk_identity' not in attempt['runtime']:
                     runtime_dir = output / 'config/runtime'
                     shutil.copytree(config_dir, runtime_dir)
-                    attempt['runtime'] = {**runtime_key, 'sdk_identity': identity,
-                        'sdk_payloads': 'sdk-payloads', 'sdk_baseline': 'config/runtime/baseline.json'}
+                    write_json(runtime_dir / 'baseline.json', {key: baseline[key] for key in
+                        ('schema_version', 'sdk', 'container', 'resolved_runtime')})
+                    _, _, _, runtime_identity = SDK.load_baseline(runtime_dir / 'baseline.json')
+                    attempt['runtime'] = {**runtime_key, 'sdk_identity': runtime_identity,
+                        'sdk_payloads': 'sdk-payloads', 'sdk_baseline': 'config/runtime/baseline.json',
+                        'resolved_runtime': baseline['resolved_runtime']}
+                    write_json(output / 'resolved-runtime.json', baseline['resolved_runtime'])
                 elif any(attempt['runtime'][key] != value for key, value in runtime_key.items()):
                     raise ValueError('suite entries must share one pinned image/SDK/dependency identity')
                 contexts.append((record, runtime_key, model_dir))
@@ -401,12 +544,13 @@ def run_host(args):
             try:
                 runtime = attempt['runtime']
                 PROGRESS.emit(f"prepare: SDK {runtime['sdk']['version']} at {runtime['sdk']['source_commit']}")
-                PROGRESS.run(['docker', 'pull', '--platform', runtime['platform'], runtime['image']],
-                    output / 'image-pull.log', label='prepare container image', check=True, timeout=300)
-                PROGRESS.run([sys.executable, '-u', '-I', str(SCRIPT_DIR / 'sdk-environment.py'), 'acquire',
-                    '--baseline', str(output / runtime['sdk_baseline']), '--payload-root', str(output / 'sdk-payloads'),
-                    '--output', str(output / 'sdk-download')], output / 'sdk-acquire.log',
-                    label='prepare SDK acquisition', check=True, timeout=600)
+                if not actions_acquired:
+                    PROGRESS.run(['docker', 'pull', '--platform', runtime['platform'], runtime['image']],
+                        output / 'image-pull.log', label='prepare container image', check=True, timeout=300)
+                    PROGRESS.run([sys.executable, '-u', '-I', str(SCRIPT_DIR / 'sdk-environment.py'), 'acquire',
+                        '--baseline', str(output / runtime['sdk_baseline']), '--payload-root', str(output / 'sdk-payloads'),
+                        '--output', str(output / 'sdk-download')], output / 'sdk-acquire.log',
+                        label='prepare SDK acquisition', check=True, timeout=600)
             except Exception as error:
                 PROGRESS.emit(f'prepare: FAIL common runtime: {type(error).__name__}: {error}')
                 for record, _, _ in contexts:
@@ -467,8 +611,10 @@ def run_host(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    ACTIONS.add_source_arguments(parser)
     parser.add_argument('--suite', type=Path)
     parser.add_argument('--selection', choices=('cached',), help='derive the suite from this runner’s published seed manifests')
+    parser.add_argument('--runtime', type=Path, help='shared runtime configuration; default config/runtime.json')
     parser.add_argument('--runtime-baseline', type=Path, help='shared SDK/image baseline for cached selection')
     parser.add_argument('--full-integrity', action='store_true', help='hash every distinct physical asset once instead of trusting unchanged seed receipts')
     parser.add_argument('--root', type=Path)

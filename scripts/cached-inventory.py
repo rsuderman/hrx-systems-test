@@ -136,16 +136,19 @@ def discover(cache):
     return metadata, candidates
 
 
+def profile_document(repo):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('inventory_model_config', Path(__file__).with_name('model-config.py'))
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    return helper.profiles(repo)
+
+
 def override_for(repo, identity):
-    """Existing profiles supply behavior overrides, never inventory membership."""
-    suite = json.loads((repo / 'config/cached-model-tests.json').read_text())
-    for entry in suite['entries']:
-        baseline_path = (repo / entry['baseline']).resolve(strict=True)
-        if not baseline_path.is_relative_to(repo.resolve()):
-            raise ValueError('profile baseline escapes repository')
-        baseline = json.loads(baseline_path.read_text())
-        if all(baseline.get(k) == identity[k] for k in FIELDS):
-            return {k: baseline[k] for k in ('smoke_request', 'smoke_expected_text')}
+    """Exact-selection test behavior is independent of suite membership."""
+    for entry in profile_document(repo)['overrides']:
+        if all(entry['selection'][field] == identity[field] for field in FIELDS):
+            return {key: entry[key] for key in ('smoke_request', 'smoke_expected_text')}
     return None
 
 
@@ -154,17 +157,11 @@ def workload(baseline, selected):
     execution = selected.settings.get('execution')
     if not isinstance(execution, dict) or not execution:
         raise ValueError('selected preset lacks published execution settings')
-    if kind == 'text':
-        values = {'test_kind': 'text_smoke', 'smoke_expected_text': '4', 'smoke_request': {
-            'messages': [{'role': 'user', 'content': 'What is two plus two? Reply with the digit only.'}],
-            'max_tokens': 256, 'temperature': 0, 'stream': False}}
-        values.update(baseline.get('test_override') or {})
-    elif kind == 'decision':
-        values = {'test_kind': 'decision_smoke', 'smoke_expected_text': 'support', 'smoke_request': {
-            'state': 'A support request.', 'questions': {'route': {'type': 'choice',
-                'instructions': 'Select the available route.',
-                'criteria': {'support': 'Handle the support request.'}}}}}
-    else:
+    if kind not in ('text', 'decision'):
         raise ValueError(f'unsupported_test_kind: {kind}')
+    values = dict(profile_document(Path(__file__).resolve().parents[1])['defaults'][kind])
+    values['test_kind'] = 'text_smoke' if kind == 'text' else 'decision_smoke'
+    if kind == 'text':
+        values.update(baseline.get('test_override') or {})
     return {**values, 'published_execution': execution, 'service_kind': kind,
             'profile_identity': 'cached-smoke-v1'}

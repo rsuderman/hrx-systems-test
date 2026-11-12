@@ -5,7 +5,10 @@ This never fetches model assets or starts a server. Public model/run wrappers
 will call these operations once their respective implementation tasks land.
 """
 import argparse
+import copy
+from datetime import datetime, timezone
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -94,8 +97,161 @@ def acquire_payload(root, kind, payload):
             "downloaded_bytes": count}
 
 
+def runtime_baseline(settings, snapshot=None):
+    """Compose the native adapter only after a concrete wheel has been selected."""
+    source = settings['sdk'].get('source')
+    if source is None:
+        return copy.deepcopy(settings)
+    if snapshot is not None:
+        wheel = snapshot['wheel']
+        resolved = snapshot['source']
+        descriptor = {k: wheel[k] for k in ('filename', 'sha256', 'size_bytes')}
+        descriptor['url'] = wheel['source_url']
+        sdk = {'name': wheel['name'], 'version': wheel['version'],
+               'repository': resolved['repository'], 'release': resolved.get('release'),
+               'source_commit': resolved['tested_sha'], 'asset_id': resolved.get('asset_id'),
+               'wheel': descriptor}
+    elif source['kind'] == 'release':
+        sdk = {k: copy.deepcopy(v) for k, v in source.items() if k != 'kind'}
+        sdk['name'] = settings['sdk']['name']
+    else:
+        raise SdkError('Actions runtime has not been resolved to a verified wheel')
+    sdk['dependency_lock'] = settings['sdk']['dependency_lock']
+    return {'schema_version': 1, 'container': copy.deepcopy(settings['container']), 'sdk': sdk}
+
+
+def load_runtime(path):
+    """Validate source-neutral authored inputs; no downloads or source resolution."""
+    path = Path(path).resolve(strict=True)
+    settings = json.loads(path.read_text())
+    if settings.get('schema_version') != 1:
+        raise SdkError('unsupported runtime schema')
+    image = settings['container']['image']
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9./:_-]*@sha256:[0-9a-f]{64}', image):
+        raise SdkError('base container must be pinned by digest')
+    sdk = settings['sdk']
+    lock_name = sdk['dependency_lock']
+    if Path(lock_name).name != lock_name or '\\' in lock_name:
+        raise SdkError('dependency lock must be adjacent to runtime config')
+    lock_path = path.parent / lock_name
+    lock = json.loads(lock_path.read_text())
+    if lock.get('schema_version') != 1 or not isinstance(lock.get('wheels'), list):
+        raise SdkError('unsupported runtime dependency lock')
+    names = set()
+    for wheel in lock['wheels']:
+        validate_payload(wheel)
+        if wheel['filename'] in names: raise SdkError('duplicate locked wheel filename')
+        names.add(wheel['filename'])
+    source = sdk.get('source')
+    if source is None:
+        # Explicit compatibility input: a legacy full baseline supplies runtime only.
+        source = {'kind': 'release', **{k: v for k, v in sdk.items() if k not in ('name', 'dependency_lock')}}
+        settings = {'schema_version': 1, 'container': settings['container'],
+                    'sdk': {'name': sdk['name'], 'dependency_lock': lock_name, 'source': source}}
+    if source.get('kind') == 'release':
+        validate_payload(source['wheel'])
+        for key in ('repository', 'release', 'source_commit', 'version', 'asset_id'):
+            if key not in source: raise SdkError('release runtime lacks ' + key)
+        if source['wheel']['filename'] in names: raise SdkError('duplicate locked wheel filename')
+    elif source.get('kind') == 'github_actions':
+        if (source.get('repository') != 'ROCm/hrx-system' or source.get('branch') != 'main'
+                or source.get('mode') not in ('latest-successful', 'replay')
+                or source.get('artifact_name') != 'loom-sdk-wheel-linux-Release'):
+            raise SdkError('unsupported Actions source selector')
+    else:
+        raise SdkError('unknown runtime source kind')
+    inputs = {'runtime_config_sha256': sha256(path), 'dependency_lock_sha256': sha256(lock_path)}
+    settings['_dependency_lock'], settings['_input_identity'] = copy.deepcopy(lock), inputs
+    return settings, lock, [('python', p) for p in lock['wheels']], inputs
+
+
+def runtime_identity_sha256(snapshot):
+    """Hash concrete runtime identity, excluding observation times and model data."""
+    semantic = {'container': snapshot['container'],
+        'source': {key: snapshot['source'].get(key) for key in
+                   ('kind', 'repository', 'tested_sha', 'release', 'asset_id', 'workflow_path', 'run_id', 'run_attempt')},
+        'artifact_id': (snapshot['source'].get('artifact') or {}).get('id'),
+        'wheel': {key: snapshot['wheel'][key] for key in ('filename', 'name', 'version', 'size_bytes', 'sha256')},
+        'dependency_lock_sha256': snapshot['dependencies']['lock_sha256']}
+    return hashlib.sha256(json.dumps(semantic, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def resolve_runtime(settings, selector=None, destination=None):
+    """Freeze configured release identity; transfer/install evidence is separate."""
+    inputs = {}
+    if isinstance(settings, (str, Path)):
+        settings, lock, _, inputs = load_runtime(Path(settings))
+    else:
+        settings = copy.deepcopy(settings)
+        lock = settings.pop('_dependency_lock', None)
+        inputs = settings.pop('_input_identity', {})
+    if selector is not None:
+        settings['sdk']['source'] = copy.deepcopy(selector)
+    source = settings['sdk']['source']
+    if source['kind'] != 'release':
+        raise SdkError('Actions source requires the Actions resolver extension')
+    stamp = datetime.now(timezone.utc).isoformat()
+    snapshot = {'schema_version': 1, 'container': copy.deepcopy(settings['container']),
+        'source': {'kind': 'release', 'repository': source['repository'],
+            'requested_head_sha': None, 'tested_sha': source['source_commit'],
+            'relation_to_head': 'not_applicable', 'requested_at': stamp,
+            'build_created_at': None, 'build_completed_at': None, 'build_age_seconds': None,
+            'release': source['release'], 'asset_id': source['asset_id'], 'workflow_path': None,
+            'run_id': None, 'run_attempt': None, 'run_url': None, 'artifact': None},
+        'wheel': {'filename': source['wheel']['filename'], 'name': settings['sdk']['name'],
+            'version': source['version'], 'size_bytes': source['wheel']['size_bytes'],
+            'sha256': source['wheel']['sha256'], 'source_url': source['wheel']['url'],
+            'source_commit_evidence': 'configured_release_pin'},
+        'dependencies': {'lock_sha256': inputs.get('dependency_lock_sha256'),
+            'wheels': copy.deepcopy(lock['wheels']) if lock else [], 'compatibility_status': 'not_checked'},
+        'inputs': inputs}
+    snapshot['runtime_identity_sha256'] = runtime_identity_sha256(snapshot)
+    if destination is not None:
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        write_json(Path(destination), snapshot)
+    return snapshot
+
+
+def acquire_actions_runtime(settings, payload_root, *, selector, environment,
+                            qualifier=None, client=None, observe_source=None):
+    """Stage one Actions wheel and locked dependencies; never redownload the wheel."""
+    spec = importlib.util.spec_from_file_location('sdk_actions_runtime', Path(__file__).with_name('actions-runtime.py'))
+    actions = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(actions)
+    payload_root = Path(payload_root)
+    if payload_root.exists() or payload_root.is_symlink():
+        raise SdkError('Actions payload root must be new per attempt')
+    payload_root.mkdir(parents=True)
+    source = actions.resolve_source(selector, client=client, observe_request=observe_source)
+    if observe_source is not None:
+        observe_source(source)
+    lock = settings['_dependency_lock']
+    acquired = actions.acquire_wheel(source, payload_root / 'hrx', dependency_lock=lock,
+                                     environment=environment, client=client, qualifier=qualifier)
+    events = [{'kind': 'hrx', 'filename': acquired['wheel']['filename'],
+               'sha256': acquired['wheel']['sha256'], 'verified_bytes': acquired['wheel']['size_bytes'],
+               'downloaded_bytes': acquired['source']['artifact']['size_bytes']}]
+    events.extend(acquire_payload(payload_root, 'python', item) for item in lock['wheels'])
+    if qualifier is None:
+        actions.validate_dependencies(acquired['metadata'], lock, environment=environment,
+                                      dependency_directory=payload_root / 'python')
+    else:
+        qualifier(Path(acquired['staged_path']), lock, environment,
+                  dependency_directory=payload_root / 'python')
+    snapshot = {'schema_version': 1, 'container': copy.deepcopy(settings['container']),
+                'source': acquired['source'], 'wheel': acquired['wheel'],
+                'dependencies': {'lock_sha256': settings['_input_identity']['dependency_lock_sha256'],
+                                 'wheels': copy.deepcopy(lock['wheels']),
+                                 'compatibility_status': 'locked_metadata_compatible_pending_offline_install'},
+                'inputs': copy.deepcopy(settings['_input_identity'])}
+    snapshot['runtime_identity_sha256'] = runtime_identity_sha256(snapshot)
+    return snapshot, events
+
+
 def load_baseline(path):
     baseline = json.loads(path.read_text())
+    if "source" in baseline.get("sdk", {}):
+        baseline = runtime_baseline(baseline)
     sdk = baseline["sdk"]
     image = baseline["container"]["image"]
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9./:_-]*@sha256:[0-9a-f]{64}", image):
@@ -107,6 +263,21 @@ def load_baseline(path):
     lock = json.loads(lock_path.read_text())
     if lock["schema_version"] != 1 or baseline["schema_version"] != 1:
         raise SdkError("unsupported baseline/dependency lock version")
+    if 'resolved_runtime' in baseline:
+        snapshot = baseline['resolved_runtime']
+        if not isinstance(snapshot, dict):
+            raise SdkError('frozen runtime snapshot must be an object')
+        if any(key not in snapshot for key in ('container', 'source', 'wheel', 'dependencies', 'runtime_identity_sha256')):
+            raise SdkError('frozen runtime snapshot is incomplete')
+        if snapshot.get('runtime_identity_sha256') != runtime_identity_sha256(snapshot):
+            raise SdkError('frozen runtime identity digest changed')
+        expected = runtime_baseline({'schema_version': 1, 'container': baseline['container'],
+            'sdk': {'name': sdk['name'], 'dependency_lock': sdk['dependency_lock'],
+                    'source': {'kind': 'release'}}}, snapshot)
+        if expected['sdk'] != sdk or snapshot['container'] != baseline['container']:
+            raise SdkError('frozen runtime snapshot disagrees with native adapter')
+        if snapshot['dependencies']['lock_sha256'] != sha256(lock_path):
+            raise SdkError('dependency lock changed after runtime resolution')
     payloads = [("hrx", sdk["wheel"]), *(("python", p) for p in lock["wheels"])]
     names = set()
     for _, payload in payloads:

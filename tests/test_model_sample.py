@@ -7,6 +7,10 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CONFIG_SPEC = importlib.util.spec_from_file_location('test_model_config', ROOT / 'scripts/model-config.py')
+CONFIG = importlib.util.module_from_spec(CONFIG_SPEC)
+CONFIG_SPEC.loader.exec_module(CONFIG)
+
 SPEC = importlib.util.spec_from_file_location('sample_sdk_environment', ROOT / 'scripts/sdk-environment.py')
 SDK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SDK)
@@ -15,8 +19,8 @@ SPEC.loader.exec_module(SDK)
 class ModelSampleTests(unittest.TestCase):
     def setUp(self):
         self.suite = json.loads((ROOT / 'config/cached-model-tests.json').read_text())
-        self.original = json.loads((ROOT / 'config/single-model-e2e.json').read_text())
-        self.profiles = {entry['id']: json.loads((ROOT / entry['baseline']).read_text())
+        self.original = CONFIG.default_baseline()[0]
+        self.profiles = {entry['id']: CONFIG.compose(entry)[0]
                          for entry in self.suite['entries']}
 
     def test_distinct_pinned_entries_have_noncolliding_seed_indices(self):
@@ -24,15 +28,14 @@ class ModelSampleTests(unittest.TestCase):
         self.assertEqual(len(self.suite['entries']), 8)
         self.assertEqual(len(self.profiles), 8)
         self.assertEqual(len({p['model_id'] for p in self.profiles.values()}), 8)
-        self.assertEqual(self.suite['entries'][0], {
-            'id': 'qwen35-08b', 'baseline': 'config/single-model-e2e.json',
-            'seed_manifest': 'seed-manifest.json'})
+        self.assertEqual(self.suite['entries'][0]['id'], 'qwen35-08b')
+        self.assertEqual(self.suite['entries'][0]['seed_manifest'], 'seed-manifest.json')
         manifests = set()
         for entry in self.suite['entries']:
             with self.subTest(entry=entry['id']):
                 self.assertNotIn(entry['seed_manifest'], manifests)
                 manifests.add(entry['seed_manifest'])
-                for key in ('baseline', 'seed_manifest'):
+                for key in ('seed_manifest',):
                     path = Path(entry[key])
                     self.assertFalse(path.is_absolute())
                     self.assertNotIn('..', path.parts)
@@ -44,7 +47,8 @@ class ModelSampleTests(unittest.TestCase):
         with (ROOT / 'catalog/model-size-index.csv').open() as stream:
             inventory = {row['model_repository']: row for row in csv.DictReader(stream)}
         for entry in self.suite['entries']:
-            profile, lock, payloads, identity = SDK.load_baseline(ROOT / entry['baseline'])
+            profile, _ = CONFIG.compose(entry)
+            _, lock, payloads, identity = SDK.load_baseline(ROOT / 'config/runtime.json')
             with self.subTest(entry=entry['id']):
                 row = inventory[profile['repository']]
                 self.assertEqual(profile['publication_revision'], row['publication_revision'])

@@ -12,8 +12,9 @@ writes a planning report. It never downloads weights, launches inference, writes
 model caches or publishes the seeder's ready index. No additional public command
 or configuration format is required by the current epic.
 
-Inputs use the existing `config/single-model-e2e.json` baseline shape: pinned
-selection/request, known SDK/image/dependency identities and effective workload.
+Inputs use the composed prepared selection/workload and shared
+`config/runtime.json` SDK/image/dependency identity; test requests are independent
+profiles, not runtime settings.
 The planner also reads pipeline target requirements, reviewed workload-memory
 recommendations and, when present, `cache/seed-manifest.json` for missing-byte
 estimates. It cannot rewrite the baseline or seed index to make a model fit.
@@ -90,3 +91,15 @@ query/parser is an implementation check: use its supported interface or a
 reviewed versioned support entry, never claim that the current C API is an
 already available Python CLI. Shared-memory usable-capacity measurement and
 pipeline target metadata extraction also require explicit implementation proof.
+
+## Standalone advisory implementation
+
+The bounded implementation is documented in [Hardware advisory](../hardware-advisory.md).
+`qualify-cached-models.sh` reads a frozen prepared suite and optional reviewed
+runtime/workload/hardware evidence, writes JSON/Markdown, and never filters or
+changes model membership. The Linux DRM/KFD observer exposes raw device facts;
+SDK normalization, target catalog and qualified shared-memory pool remain explicit
+unknowns until supported by exact-version evidence. Fixture coverage does not
+certify dogwood or any model's real peak. One coordinated measured profile remains
+a separate validation checkpoint, with precise needs-information permitted when
+interfaces are unavailable. Initial nightly behavior remains independent.

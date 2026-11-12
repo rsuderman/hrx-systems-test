@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Single-selection stage contract. Fixture is runnable; real adapters are pending."""
 import argparse
+import importlib.util
 import hashlib
 import json
 import re
@@ -171,7 +172,7 @@ def fixture_run(selection, report, output, cache, failure):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("fixture", "real"), default="fixture")
-    parser.add_argument("--selection", type=Path, default=Path(__file__).resolve().parents[1] / "config/single-model-e2e.json")
+    parser.add_argument("--selection", type=Path, default=None)
     parser.add_argument("--output", type=Path, required=True, help="new per-attempt output directory")
     parser.add_argument("--cache", type=Path, required=True, help="external cache root")
     parser.add_argument("--image", default="")
@@ -183,7 +184,13 @@ def main(argv=None):
               "started_at": datetime.now(timezone.utc).isoformat(),
               "stages": {name: {"status": "not_run"} for name in STAGES}}
     try:
-        selection = json.loads(args.selection.read_text())
+        if args.selection:
+            selection = json.loads(args.selection.read_text())
+        else:
+            spec = importlib.util.spec_from_file_location('fixture_model_config', Path(__file__).with_name('model-config.py'))
+            config = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(config)
+            selection, _ = config.default_baseline()
         report["selection"] = selection
         report["stages"]["resolve"] = {"status": "passed"}
         write_json(args.output / "plan.json", plan(selection, args.image))

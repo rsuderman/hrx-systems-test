@@ -11,7 +11,7 @@ path; do not introduce another worker, downloader or result protocol.
 - The same pinned base image, known HRX release/dependencies, pipeline revisions,
   read-only model caches and per-attempt state conventions as manual execution.
   A scheduled trigger does not select newer HRX builds or silently update pins.
-  Use `config/single-model-e2e.json` as the baseline input and read the operator's
+  Use shared `config/runtime.json` plus the selected suite and read the operator's
   `$root/cache/seed-manifest.json`; do not create another selection or seed index.
 - A selected UTC schedule, bounded execution window and retained artifact policy.
   The workflow owns triggering and serialization; the validated manual entry point
@@ -20,8 +20,8 @@ path; do not introduce another worker, downloader or result protocol.
 ## Execution and result contract
 
 The proposed workflow adds a scheduled trigger beside manual dispatch and calls
-`bash scripts/run-single-model.sh --baseline config/single-model-e2e.json
---root "$root" --output "$attempt"`, the same wrapper owned by
+`bash scripts/run-cached-models.sh --runtime config/runtime.json
+--selection cached --root "$root" --output "$attempt"`, the same wrapper owned by
 [the workflow task](github-workflow.md). It may pass the shared `--seed-manifest`
 override for an explicitly isolated input set. Use common concurrency group
 `hrx-single-model-hardware` across manual and scheduled runs, independent of

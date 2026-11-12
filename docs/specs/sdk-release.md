@@ -10,7 +10,7 @@ imply successful GPU execution.
 
 ## Inputs and proposed boundary
 
-Extend the single `config/single-model-e2e.json` baseline with base-image digest,
+Extend the single `config/runtime.json` baseline with base-image digest,
 Python executable, SDK
 release repository/tag/asset ID/name/size/SHA256, and a hash-locked acquisition
 dependency list. Initial SDK candidate is `ROCm/hrx-system@v0.1.0`, source

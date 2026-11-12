@@ -6,8 +6,8 @@ From this repository, run:
 bash scripts/seed-models.sh
 ```
 
-The command uses the model in `config/single-model-e2e.json`, currently Qwen3.5
-0.8B. It downloads the selected hosted pipeline, resolves its model card/lock
+The command selects the first entry in `config/cached-model-tests.json`, currently
+Qwen3.5 0.8B, and composes it with `config/runtime.json` and the test profiles. It downloads the selected hosted pipeline, resolves its model card/lock
 through the pinned Loom SDK, verifies the required model assets and publishes
 `cache/seed-manifest.json`. Docker access and writable local storage are required;
 the command does not install host packages or request sudo.
@@ -40,3 +40,9 @@ Optional `--baseline`, `--root`, `--output` and `--seed-manifest` override the
 defaults. An explicit output directory must not already exist. For a gated model,
 provide `HF_TOKEN` in the acquisition environment; auth files are not copied or
 mounted into containers. The default public model needs no token.
+
+Use `--model qwen25-05b` to select another sample, and `--runtime FILE` to use an
+explicit shared runtime. External legacy composed files remain accepted with
+`--baseline FILE`; a conflicting `--runtime` is rejected. `--baseline` and
+`--model` are mutually exclusive. New model selections belong in the suite or
+manual download catalog; model assets still belong in the external cache.

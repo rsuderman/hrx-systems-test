@@ -7,6 +7,8 @@ output=""
 suite=""
 selection=""
 runtime_baseline=""
+runtime=""
+runtime_source_args=()
 device_uri="amdgpu://0"
 cycles=1
 keep_prepared=false
@@ -14,7 +16,9 @@ full_integrity=false
 usage() {
   cat <<'HELP'
 Usage: bash scripts/run-cached-models.sh [--root CACHE_ROOT] [--suite SUITE_JSON | --selection cached]
-       [--runtime-baseline SDK_CONFIG] [--full-integrity]
+       [--runtime RUNTIME_CONFIG | --runtime-baseline SDK_CONFIG] [--full-integrity]
+       [--runtime-source release|actions-main|actions-replay]
+       [--runtime-run-id ID --runtime-run-attempt N --runtime-artifact-id ID --runtime-wheel-sha256 SHA256]
        [--output NEW_ATTEMPT] [--device-uri URI] [--cycles COUNT] [--keep-prepared]
 Runs the same Prepare, Run and Report Bash commands used by GitHub Actions.
 --output should be runner-owned when the model cache belongs to another account.
@@ -22,12 +26,13 @@ HELP
 }
 while (($#)); do
   case "$1" in
-    --root|--suite|--selection|--runtime-baseline|--output|--device-uri|--cycles)
+    --root|--suite|--selection|--runtime|--runtime-baseline|--output|--device-uri|--cycles|--runtime-source|--runtime-run-id|--runtime-run-attempt|--runtime-artifact-id|--runtime-wheel-sha256)
       (($# >= 2)) || { usage >&2; exit 2; }
       case "$1" in
         --root) root="$2";; --suite) suite="$2";; --output) output="$2";;
-        --selection) selection="$2";; --runtime-baseline) runtime_baseline="$2";;
+        --selection) selection="$2";; --runtime) runtime="$2";; --runtime-baseline) runtime_baseline="$2";;
         --device-uri) device_uri="$2";; --cycles) cycles="$2";;
+        --runtime-source|--runtime-run-id|--runtime-run-attempt|--runtime-artifact-id|--runtime-wheel-sha256) runtime_source_args+=("$1" "$2");;
       esac
       shift 2;;
     --keep-prepared) keep_prepared=true; shift;;
@@ -40,6 +45,7 @@ done
 [[ "$cycles" =~ ^[1-9][0-9]*$ ]] || { echo '--cycles must be positive' >&2; exit 2; }
 [[ -z "$selection" || "$selection" = cached ]] || { echo '--selection must be cached' >&2; exit 2; }
 [[ -z "$selection" || -z "$suite" ]] || { echo '--selection and --suite are mutually exclusive' >&2; exit 2; }
+[[ -z "$runtime" || -z "$runtime_baseline" ]] || { echo '--runtime and --runtime-baseline are mutually exclusive' >&2; exit 2; }
 [[ -z "$runtime_baseline" || "$selection" = cached ]] || { echo '--runtime-baseline requires --selection cached' >&2; exit 2; }
 output="${output:-$root/runs/suite-$(date -u +%Y%m%dT%H%M%S)-$$}"
 [[ "$output" = /* && "$output" != / ]] || { echo '--output must be an absolute new directory' >&2; exit 2; }
@@ -71,6 +77,9 @@ run_stage() {
   local name="$1"
   current_stage="$name"
   shift
+  if [[ "$name" != prepare ]]; then
+    set -- env -u HRX_ACTIONS_TOKEN "$@"
+  fi
   echo "Starting $name; log: $output/$name.log"
   python3 -u -I "$script_dir/ci-progress.py" --label "$name" --log "$output/$name.log" -- "$@" &
   child_pid=$!
@@ -84,7 +93,7 @@ run_stage() {
 }
 package_failures() {
   local result=0
-  bash "$script_dir/package-model-failures.sh" --attempt "$output" --output "$output/failures" --zip "$output/model-failures.zip" >>"$output/package.log" 2>&1 || result=$?
+  env -u HRX_ACTIONS_TOKEN bash "$script_dir/package-model-failures.sh" --attempt "$output" --output "$output/failures" --zip "$output/model-failures.zip" >>"$output/package.log" 2>&1 || result=$?
   if ((result != 0)); then
     package_status="$result"
     echo "Failure packaging exited $result; see $output/package.log" >&2
@@ -137,9 +146,10 @@ if value.get('repository') and value.get('run_id'):
 pathlib.Path(sys.argv[1]).write_text(json.dumps(value, indent=2) + '\n')
 PY
 write_status
-prepare_args=(--root "$root" --output "$output/prepared")
+prepare_args=(--root "$root" --output "$output/prepared" "${runtime_source_args[@]}")
 [[ -z "$suite" ]] || prepare_args+=(--suite "$suite")
 [[ -z "$selection" ]] || prepare_args+=(--selection "$selection")
+[[ -z "$runtime" ]] || prepare_args+=(--runtime "$runtime")
 [[ -z "$runtime_baseline" ]] || prepare_args+=(--runtime-baseline "$runtime_baseline")
 [[ "$full_integrity" = false ]] || prepare_args+=(--full-integrity)
 run_stage prepare bash "$script_dir/prepare-cached-models.sh" "${prepare_args[@]}"

@@ -65,7 +65,9 @@ def package(attempt, output, archive=None):
             if source.suffix not in ALLOWED: raise ValueError('unexpected evidence file type')
             allowed_names = {'workflow.json', 'stages.json', 'suite-result.json', 'prepared-suite.json',
                 'inventory.json', 'prepared-inputs.json', 'seed-manifest.json', 'request.json', 'response.json',
-                'serve-result.json', 'pool-reclamation.json', 'capture.json', 'sdk.json'}
+                'serve-result.json', 'pool-reclamation.json', 'capture.json', 'sdk.json',
+                'actions-selection.json', 'resolved-runtime.json', 'target-environment.json',
+                'sdk-error.json', 'sdk-acquisition.json'}
             if source.suffix == '.json' and source.name not in allowed_names and not source.name.endswith(('.log.capture.json', '.log.metadata.json')):
                 raise ValueError('unrecognized evidence JSON; assets/configuration are not copied')
             if source.suffix == '.txt' and source.name not in ('diagnostics.txt', 'error.txt'):
@@ -108,7 +110,10 @@ def package(attempt, output, archive=None):
     shared = ['workflow.json', 'stages.json', 'prepare.log', 'run.log', 'cleanup.log', 'report.log',
         'results/server.log', 'results/server.log.capture.json', 'results/container.log',
         'results/sdk-runtime/sdk.json', 'results/inventory.json', 'preparation-evidence/inventory.json',
-        'preparation-evidence/prepared-suite.json', 'preparation-evidence/image-pull.log', 'preparation-evidence/sdk-acquire.log', 'preparation-evidence/batch-online.log', 'preparation-evidence/batch-offline.log']
+        'preparation-evidence/prepared-suite.json', 'preparation-evidence/image-pull.log', 'preparation-evidence/sdk-acquire.log', 'preparation-evidence/batch-online.log', 'preparation-evidence/batch-offline.log',
+        'preparation-evidence/actions-selection.json', 'preparation-evidence/resolved-runtime.json',
+        'preparation-evidence/target-environment.json', 'preparation-evidence/actions-qualification.log',
+        'preparation-evidence/sdk-download/sdk-error.json', 'preparation-evidence/sdk-download/sdk-acquisition.json']
     if manifest['cases'] or unsafe:
         raw = None
         try: raw = RECORDS.read_document(root, 'results/suite-result.json')
@@ -159,7 +164,19 @@ def package(attempt, output, archive=None):
             lines.append(f"- [{label}]({case['folder']}/result.json): {md(case['phase'])} — {reason}")
         if manifest['evidence_errors']: lines += ['', '## Evidence errors', '', *['- ' + md(error) for error in manifest['evidence_errors']]]
         (output / 'README.md').write_text('\n'.join(lines) + '\n')
-        (output / 'summary.md').write_text(RECORDS.fallback_summary(manifest))
+        context = raw
+        if not context:
+            for relative in ('preparation-evidence/prepared-suite.json', 'prepared/prepared-suite.json'):
+                try:
+                    context = RECORDS.read_document(root, relative)
+                    break
+                except (ValueError, OSError): pass
+        receipt = None
+        try: receipt = RECORDS.read_document(root, 'results/sdk-runtime/sdk.json')
+        except (ValueError, OSError): pass
+        context = context or {}
+        (output / 'summary.md').write_text(RECORDS.fallback_summary(manifest,
+            context.get('runtime'), server=context.get('server'), installation=receipt, mode=context.get('mode')))
     write_json(output / 'failures.json', manifest)
     if archive:
         archive = Path(archive).absolute()

@@ -22,7 +22,7 @@ output=""
 while (($#)); do
   case "$1" in
     --output) output="$2"; shift 2;;
-    --root|--suite|--selection|--runtime-baseline|--prepared|--results|--workflow|--device-uri|--cycles|--failures) shift 2;;
+    --root|--suite|--selection|--runtime|--runtime-baseline|--prepared|--results|--workflow|--device-uri|--cycles|--failures) shift 2;;
     --cleanup|--full-integrity) shift;;
     *) exit 99;;
   esac
@@ -69,7 +69,7 @@ class StageCompositionTests(unittest.TestCase):
         self.script = scripts / 'run-cached-models.sh'
         shutil.copyfile(ROOT / 'scripts/run-cached-models.sh', self.script)
         shutil.copyfile(ROOT / 'scripts/ci-progress.py', scripts / 'ci-progress.py')
-        for helper in ('package-model-failures.sh', 'package-model-failures.py', 'failure-records.py'):
+        for helper in ('package-model-failures.sh', 'package-model-failures.py', 'failure-records.py', 'runtime-summary.py'):
             shutil.copyfile(ROOT / 'scripts' / helper, scripts / helper)
         for name, kind in [('prepare-cached-models.sh', 'prepare'),
                            ('run-prepared-models.sh', 'run'),
@@ -119,6 +119,19 @@ class StageCompositionTests(unittest.TestCase):
         self.assertEqual(arguments[arguments.index('--selection') + 1], 'cached')
         self.assertIn('--full-integrity', arguments)
         self.assertEqual(arguments[arguments.index('--runtime-baseline') + 1], '/explicit/runtime.json')
+
+    def test_shared_runtime_is_forwarded_for_explicit_suite(self):
+        self.command += ['--runtime', '/fixture/runtime.json']
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = (self.arguments / 'prepare').read_bytes().decode().split('\0')
+        self.assertEqual(args[args.index('--runtime') + 1], '/fixture/runtime.json')
+
+    def test_conflicting_runtime_inputs_fail_before_work(self):
+        self.command += ['--selection', 'cached', '--runtime', '/runtime', '--runtime-baseline', '/legacy']
+        result = self.invoke()
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.order(), [])
 
     def test_cached_selection_and_explicit_suite_conflict_before_work(self):
         self.command += ['--selection', 'cached', '--suite', '/explicit/suite.json']

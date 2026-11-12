@@ -9,6 +9,10 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+CONFIG_SPEC = importlib.util.spec_from_file_location('test_model_config', ROOT / 'scripts/model-config.py')
+CONFIG = importlib.util.module_from_spec(CONFIG_SPEC)
+CONFIG_SPEC.loader.exec_module(CONFIG)
+
 SPEC = importlib.util.spec_from_file_location('cached_inventory', ROOT / 'scripts/cached-inventory.py')
 INV = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(INV)
@@ -118,7 +122,7 @@ class InventoryTests(unittest.TestCase):
             INV.workload({}, SimpleNamespace(service={'kind': 'image'}, settings={'execution': {'rows': 1}}))
 
     def test_existing_profile_is_behavior_override_not_membership(self):
-        baseline = json.loads((ROOT / 'config/single-model-e2e.json').read_text())
+        baseline = CONFIG.default_baseline()[0]
         identity = {k: baseline[k] for k in INV.FIELDS}
         self.assertEqual(INV.override_for(ROOT, identity)['smoke_request'], baseline['smoke_request'])
         identity['publication_revision'] = 'f' * 40

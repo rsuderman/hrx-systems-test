@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Derive readable failure cases from saved attempt facts, without execution."""
+import importlib.util
 import hashlib
 import html
 import json
@@ -41,6 +42,8 @@ def summarize(diagnostic, response=None, expected=None):
     literal = ' '.join(str(diagnostic or 'No diagnostic was recorded').split())
     # Native interface diagnostics may contain long nested RuntimeError wrappers.
     arguments = re.search(r'(?:expects?|expected)\s+(\d+)\s+arguments?.*?(?:got|declares?|provided|source[^\d]*)\s*(\d+)', literal, re.I)
+    if arguments is None:
+        arguments = re.search(r'argument count mismatch:\s*host expects\s+(\d+)\s*,\s*source declares\s+(\d+)', literal, re.I)
     if arguments:
         return f'Server expects {arguments[1]} arguments; pipeline declares {arguments[2]}'
     if response and isinstance(response, dict):
@@ -217,7 +220,7 @@ def collect_results(results_dir):
     return collect(results_dir.parent, results_dir=results_dir)
 
 
-def fallback_summary(manifest):
+def fallback_summary(manifest, runtime=None, *, server=None, installation=None, mode=None):
     """Human-readable saved-facts fallback when the full renderer cannot run."""
     def md(value):
         value = html.escape(' '.join(str(value).split()), quote=False)
@@ -227,7 +230,15 @@ def fallback_summary(manifest):
     count = lambda key: counts.get(key) if counts.get(key) is not None else 'unknown'
     lines = ['## Verification incomplete', '', 'The full report is unavailable; retained stage evidence follows.', '',
         f"Expected: **{count('expected')}** · Passed: **{count('passed')}** · Failed: **{count('failed')}** · Not run: **{count('not_run')}** · Incomplete: **{count('incomplete')}**", '',
-        '## Failures', '', '| Model or stage | Operation | Observed detail |', '|---|---|---|']
+]
+    spec = importlib.util.spec_from_file_location('fallback_runtime_summary', Path(__file__).with_name('runtime-summary.py'))
+    summary = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(summary)
+    try:
+        lines += summary.markdown(summary.describe(runtime, server=server, installation=installation, mode=mode))
+    except ValueError as error:
+        lines += ['**HRX identity evidence error:** ' + md(error), '']
+    lines += ['## Failures', '', '| Model or stage | Operation | Observed detail |', '|---|---|---|']
     cases = manifest.get('cases', [])
     for case in cases[:20]:
         lines.append(f"| {md(case.get('display_name', 'Unavailable'))} | {md(case.get('phase', 'Unknown'))} | {md(case.get('summary', 'No diagnostic recorded'))} |")

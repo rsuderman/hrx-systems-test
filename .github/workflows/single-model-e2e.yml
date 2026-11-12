@@ -2,6 +2,23 @@ name: Cached-model verification
 on:
   workflow_dispatch:
     inputs:
+      runtime_source:
+        description: Pinned release or one upstream main Actions SDK (no rebuild)
+        type: choice
+        options: [release, actions-main, actions-replay]
+        default: release
+      runtime_run_id:
+        description: Replay only - upstream Actions run ID
+        type: string
+      runtime_run_attempt:
+        description: Replay only - upstream run attempt
+        type: string
+      runtime_artifact_id:
+        description: Replay only - upstream artifact ID
+        type: string
+      runtime_wheel_sha256:
+        description: Replay only - exact wheel SHA256 from saved provenance
+        type: string
       full_integrity:
         description: Rehash each distinct cached asset once instead of trusting unchanged writer receipts
         type: boolean
@@ -35,6 +52,11 @@ jobs:
       TEST_CYCLES: ${{ inputs.cycles }}
       MODEL_SELECTION: ${{ inputs.selection }}
       FULL_INTEGRITY: ${{ inputs.full_integrity }}
+      RUNTIME_SOURCE: ${{ inputs.runtime_source }}
+      RUNTIME_RUN_ID: ${{ inputs.runtime_run_id }}
+      RUNTIME_RUN_ATTEMPT: ${{ inputs.runtime_run_attempt }}
+      RUNTIME_ARTIFACT_ID: ${{ inputs.runtime_artifact_id }}
+      RUNTIME_WHEEL_SHA256: ${{ inputs.runtime_wheel_sha256 }}
       PYTHONNOUSERSITE: '1'
       PYTHONPATH: ''
     steps:
@@ -61,6 +83,8 @@ jobs:
           PY
       - name: Prepare fresh pipelines and read-only cached assets
         id: prepare
+        env:
+          HRX_ACTIONS_TOKEN: ${{ secrets.HRX_ACTIONS_TOKEN }}
         if: ${{ !cancelled() && steps.initialize.outcome == 'success' }}
         continue-on-error: true
         shell: bash
@@ -68,6 +92,11 @@ jobs:
           set -euo pipefail
           root="${CONFIGURED_CACHE_ROOT:-${HRX_SYSTEMS_ROOT:-$HOME/.local/share/hrx-systems-test}}"
           selection_args=()
+          [[ -z "${RUNTIME_SOURCE:-}" ]] || selection_args+=(--runtime-source "$RUNTIME_SOURCE")
+          for field in run_id run_attempt artifact_id wheel_sha256; do
+            variable="RUNTIME_${field^^}"
+            [[ -z "${!variable:-}" ]] || selection_args+=("--runtime-${field//_/-}" "${!variable}")
+          done
           [[ "${FULL_INTEGRITY:-false}" != true ]] || selection_args+=(--full-integrity)
           if [[ "${MODEL_SELECTION:-suite}" = cached ]]; then
             selection_args+=(--selection cached)

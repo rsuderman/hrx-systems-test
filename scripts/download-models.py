@@ -51,9 +51,9 @@ def run(args):
     print(f'Progress and logs: {output}', flush=True)
     config = output / 'config'
     config.mkdir()
-    template = json.loads((REPO / 'config/single-model-e2e.json').read_text())
+    template, runtime_snapshot, lock_path = SUITE.CONFIG.runtime(getattr(args, 'runtime', None))
     lock = template['sdk']['dependency_lock']
-    shutil.copyfile(REPO / 'config' / lock, config / lock)
+    shutil.copyfile(lock_path, config / lock)
     report = {'schema_version': 1, 'status': 'running', 'root': str(root),
               'reader_user': reader_user, 'entries': []}
     for entry in entries:
@@ -69,6 +69,7 @@ def run(args):
         for number, entry in enumerate(report['entries'], 1):
             name = entry['model_repository'].split('/')[-1]
             baseline = {k: template[k] for k in ('schema_version', 'container', 'sdk')}
+            baseline['resolved_runtime'] = runtime_snapshot
             baseline.update(repository=entry['model_repository'], publication_revision=entry['publication_revision'],
                             model_id=entry['model_id'], preset=entry['preset'], variant=entry['variant'], programs='source')
             baseline_path = config / (name + '.json')
@@ -124,6 +125,7 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--runtime', type=Path, help='shared runtime config')
     parser.add_argument('--root', type=Path, help='shared cache root; otherwise HRX_SYSTEMS_ROOT or user default')
     parser.add_argument('--output', type=Path, help='new directory for progress, logs and seed reports')
     parser.add_argument('--dry-run', action='store_true', help='list selection without downloading or writing files')

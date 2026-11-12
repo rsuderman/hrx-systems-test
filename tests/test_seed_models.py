@@ -11,6 +11,10 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CONFIG_SPEC = importlib.util.spec_from_file_location('test_model_config', ROOT / 'scripts/model-config.py')
+CONFIG = importlib.util.module_from_spec(CONFIG_SPEC)
+CONFIG_SPEC.loader.exec_module(CONFIG)
+
 SPEC = importlib.util.spec_from_file_location("seed_models", ROOT / "scripts/seed-models.py")
 SEED = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SEED)
@@ -31,7 +35,7 @@ class NativeSeedTests(unittest.TestCase):
         self.cache = self.root / "cache"
         for name in ("huggingface", "loom-assets"):
             (self.cache / name).mkdir(parents=True)
-        self.baseline = json.loads((ROOT / "config/single-model-e2e.json").read_text())
+        self.baseline = CONFIG.default_baseline()[0]
         card = {"schema_version": 1, "model": {"id": self.baseline["model_id"], "name": "Tiny fixture"},
             "programs": {"source": {"inputs": ["control.loom"], "libraries": []}},
             "services": {"chat": {"kind": "text", "version": 1}},

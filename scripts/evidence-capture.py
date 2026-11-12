@@ -81,7 +81,9 @@ def drain_log(pipe, path, limit=MAX_LOG):
 def preparation_snapshot(prepared, suite):
     """Capture compact diagnostics in prepared/failure-evidence for publication."""
     output = prepared / 'failure-evidence'
-    references = ['prepared-suite.json', 'inventory.json', 'image-pull.log', 'sdk-acquire.log', 'batch-online.log', 'batch-offline.log']
+    references = ['prepared-suite.json', 'inventory.json', 'image-pull.log', 'sdk-acquire.log', 'batch-online.log', 'batch-offline.log',
+                  'actions-selection.json', 'resolved-runtime.json', 'target-environment.json',
+                  'actions-qualification.log', 'sdk-download/sdk-error.json', 'sdk-download/sdk-acquisition.json']
     references += [name + '.metadata.json' for name in references if name.endswith('.log')]
     for entry in suite.get('entries', []): references.extend(entry.get('evidence', []))
     errors, retained = [], 0

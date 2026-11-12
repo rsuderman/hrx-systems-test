@@ -240,7 +240,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn('<details><summary>Passed (1)</summary>',md)
         self.assertNotIn('## Failures',md)
         self.assertIn('**HRX runtime:** hrx-loom 0.1.0',md)
-        self.assertIn('release v0.1.0',md)
+        self.assertIn('**Release:** v0.1.0',md)
         self.assertIn('**GPU:** AMD GPU',md)
         self.assertIn('amdgpu://0',md);self.assertIn('linux/amd64',md)
         self.assertIn('faaa58382503 · clean checkout',md)

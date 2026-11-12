@@ -21,13 +21,13 @@ GitHub invoke these exact stages, not separate implementations.
 
 ## Small suite input
 
-The testing repository authors a small `config/cached-model-tests.json` list.
-Each entry has a unique `id`, a repository-relative baseline config path and a
-cache-root-relative seed-manifest path. For the current model these reference
-`config/single-model-e2e.json` and `seed-manifest.json`. Baseline configs remain
-the authority for publication/preset, release pins, request and assertion; seed
-manifests remain the authority for verified asset locations. Do not copy either
-set of fields into the suite list or infer models from HF blob filenames.
+The testing repository authors `config/cached-model-tests.json`, an explicit sample
+suite with unique IDs, immutable selections, historical execution settings and
+cache-relative seed manifest paths. Shared runtime pins live in `config/runtime.json`;
+requests/assertions live in `config/model-test-profiles.json`. Cached discovery uses
+published runner seed manifests as membership and hosted model cards for capacities;
+test overrides never whitelist it. Seed manifests locate verified assets. Do not
+infer model membership from HF blob filenames.
 
 Additional models use their own checked-in baseline config and a distinct seed
 manifest, such as `models/<id>/seed-manifest.json`, created with the existing

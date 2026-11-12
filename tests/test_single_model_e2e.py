@@ -7,6 +7,10 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CONFIG_SPEC = importlib.util.spec_from_file_location('test_model_config', ROOT / 'scripts/model-config.py')
+CONFIG = importlib.util.module_from_spec(CONFIG_SPEC)
+CONFIG_SPEC.loader.exec_module(CONFIG)
+
 SPEC = importlib.util.spec_from_file_location("single_model_e2e", ROOT / "scripts/single-model-e2e.py")
 E2E = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(E2E)
@@ -19,7 +23,7 @@ class SingleModelSkeletonTests(unittest.TestCase):
         return code, json.loads((output / "report.json").read_text())
 
     def test_selection_matches_inventory_and_preserves_published_context(self):
-        selection = json.loads((ROOT / "config/single-model-e2e.json").read_text())
+        selection = CONFIG.default_baseline()[0]
         with (ROOT / "catalog/model-size-index.csv").open() as stream:
             row = next(row for row in csv.DictReader(stream) if row["model_repository"] == selection["repository"])
         self.assertEqual(row["publication_revision"], selection["publication_revision"])

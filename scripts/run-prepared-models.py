@@ -546,6 +546,8 @@ def verify_prepared(prepared, suite, inside=False):
     runtime = suite['runtime']
     baseline_path = contained(prepared, runtime['sdk_baseline'])
     baseline, _, payloads, identity = sdk_helper().load_baseline(baseline_path)
+    if runtime.get('resolved_runtime') != baseline.get('resolved_runtime'):
+        raise ValueError('frozen runtime snapshot changed')
     if identity != runtime['sdk_identity'] or identity['base_image'] != runtime['image']:
         raise ValueError('prepared runtime identity changed')
     payload_root = contained(prepared, runtime['sdk_payloads'])
