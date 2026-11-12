@@ -209,6 +209,7 @@ class NativePreparationTests(unittest.TestCase):
         baseline = {k: v for k, v in self.baseline.items()
                     if k not in ('published_execution', 'smoke_request', 'smoke_expected_text')}
         baseline['selection_mode'] = 'cached'
+        baseline.update(PREP.INVENTORY.freeze_test_policy(ROOT, PREP.selection_identity(baseline)))
         work, output = self.root / 'cached-work', self.root / 'cached-output'
         work.mkdir(); output.mkdir()
         count = len(self.fixture.requests)
@@ -227,6 +228,7 @@ class NativePreparationTests(unittest.TestCase):
         baseline = {k: v for k, v in self.baseline.items()
                     if k not in ('published_execution', 'smoke_request', 'smoke_expected_text')}
         baseline['selection_mode'] = 'cached'
+        baseline.update(PREP.INVENTORY.freeze_test_policy(ROOT, PREP.selection_identity(baseline)))
         work, output = self.root / 'decision-work', self.root / 'decision-output'
         work.mkdir(); output.mkdir()
         normalized = PREP.online(baseline, seed, self.cache, work, location=self.fixture.url)

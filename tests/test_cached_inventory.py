@@ -109,17 +109,40 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual({e['path'] for e in metadata['errors']}, {'seed-manifest.json', 'models/catalog'})
 
     def test_workload_derives_native_settings_without_profile_whitelist(self):
+        baseline = INV.freeze_test_policy(ROOT, self.seed['selection'])
         selected = SimpleNamespace(service={'kind': 'text'}, settings={'execution': {'rows': 3}})
-        result = INV.workload({}, selected)
+        result = INV.workload(baseline, selected)
         self.assertEqual(result['published_execution'], {'rows': 3})
         self.assertEqual(result['smoke_expected_text'], '4')
-        decision = INV.workload({}, SimpleNamespace(service={'kind': 'decision'},
+        decision = INV.workload(baseline, SimpleNamespace(service={'kind': 'decision'},
                                                     settings={'execution': {'pending_requests': 64}}))
         self.assertEqual(decision['test_kind'], 'decision_smoke')
         self.assertEqual(decision['smoke_request']['questions']['route']['criteria'],
                          {'support': 'Handle the support request.'})
         with self.assertRaisesRegex(ValueError, 'unsupported_test_kind'):
             INV.workload({}, SimpleNamespace(service={'kind': 'image'}, settings={'execution': {'rows': 1}}))
+
+    def test_native_policy_uses_only_frozen_defaults_and_selected_override(self):
+        default = INV.freeze_test_policy(ROOT, self.seed['selection'])
+        selected = SimpleNamespace(service={'kind': 'text'}, settings={'execution': {'rows': 3}})
+        baseline = CONFIG.default_baseline()[0]
+        override = INV.freeze_test_policy(ROOT, {key: baseline[key] for key in INV.FIELDS})
+        self.assertEqual(set(default), {'test_defaults', 'test_override'})
+        self.assertEqual(set(default['test_defaults']), {'text', 'decision'})
+        self.assertIsNone(default['test_override'])
+        with patch.object(INV, 'profile_document', side_effect=FileNotFoundError('config not mounted')):
+            result = INV.workload(default, selected)
+            self.assertEqual(result['smoke_expected_text'], '4')
+            self.assertEqual(result['published_execution'], {'rows': 3})
+            matched = INV.workload(override, selected)
+            self.assertEqual(matched['smoke_request'], baseline['smoke_request'])
+            self.assertEqual(matched['published_execution'], {'rows': 3})
+            decision = INV.workload(override, SimpleNamespace(service={'kind': 'decision'},
+                settings={'execution': {'pending_requests': 64}}))
+            self.assertEqual(decision['smoke_expected_text'], 'support')
+            self.assertEqual(decision['published_execution'], {'pending_requests': 64})
+            with self.assertRaisesRegex(ValueError, 'lacks frozen'):
+                INV.workload({}, selected)
 
     def test_existing_profile_is_behavior_override_not_membership(self):
         baseline = CONFIG.default_baseline()[0]

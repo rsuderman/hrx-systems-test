@@ -452,7 +452,7 @@ def run_host(args):
         try:
             if cached:
                 baseline = {**template, **candidate['selection'], 'selection_mode': 'cached',
-                            'test_override': INVENTORY.override_for(REPO, candidate['selection']),
+                            **INVENTORY.freeze_test_policy(REPO, candidate['selection']),
                             'resolved_runtime': runtime_snapshot}
             else:
                 baseline, candidate_lock = CONFIG.compose(candidate, runtime_path,

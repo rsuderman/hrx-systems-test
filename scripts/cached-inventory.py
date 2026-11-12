@@ -1,5 +1,6 @@
 """Bounded seed-receipt discovery and repository-owned smoke test policy."""
 from datetime import datetime, timezone
+import copy
 import hashlib
 import json
 import os
@@ -152,6 +153,23 @@ def override_for(repo, identity):
     return None
 
 
+def freeze_test_policy(repo, identity):
+    """Snapshot only test behavior needed after the host/container boundary."""
+    document = profile_document(repo)
+    defaults = {}
+    for kind in ('text', 'decision'):
+        value = document['defaults'].get(kind)
+        if (not isinstance(value, dict) or not isinstance(value.get('smoke_request'), dict)
+                or not isinstance(value.get('smoke_expected_text'), str)):
+            raise ValueError(f'invalid {kind} smoke test defaults')
+        defaults[kind] = {key: copy.deepcopy(value[key]) for key in
+                          ('smoke_request', 'smoke_expected_text')}
+    override = next((entry for entry in document['overrides'] if all(
+        entry['selection'][field] == identity[field] for field in FIELDS)), None)
+    return {'test_defaults': defaults, 'test_override': None if override is None else
+            {key: copy.deepcopy(override[key]) for key in ('smoke_request', 'smoke_expected_text')}}
+
+
 def workload(baseline, selected):
     kind = selected.service.get('kind')
     execution = selected.settings.get('execution')
@@ -159,9 +177,12 @@ def workload(baseline, selected):
         raise ValueError('selected preset lacks published execution settings')
     if kind not in ('text', 'decision'):
         raise ValueError(f'unsupported_test_kind: {kind}')
-    values = dict(profile_document(Path(__file__).resolve().parents[1])['defaults'][kind])
+    defaults = baseline.get('test_defaults')
+    if not isinstance(defaults, dict) or not isinstance(defaults.get(kind), dict):
+        raise ValueError('cached model baseline lacks frozen smoke test defaults')
+    values = copy.deepcopy(defaults[kind])
     values['test_kind'] = 'text_smoke' if kind == 'text' else 'decision_smoke'
     if kind == 'text':
-        values.update(baseline.get('test_override') or {})
+        values.update(copy.deepcopy(baseline.get('test_override') or {}))
     return {**values, 'published_execution': execution, 'service_kind': kind,
             'profile_identity': 'cached-smoke-v1'}
