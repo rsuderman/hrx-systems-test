@@ -584,7 +584,11 @@ class LifecycleTests(unittest.TestCase):
         workflow = {'schema_version': 1, 'repository': 'rsuderman/hrx-systems-test',
             'run_id': '123', 'run_attempt': '1', 'ref': 'refs/heads/main',
             'sha': 'abc123', 'runner': 'fixture-runner',
-            'run_url': 'https://github.com/rsuderman/hrx-systems-test/actions/runs/123'}
+            'run_url': 'https://github.com/rsuderman/hrx-systems-test/actions/runs/123',
+            'event_name': 'schedule', 'schedule': '0 4 * * *', 'schedule_timezone': 'America/Los_Angeles',
+            'observed_at': '2026-11-12T12:00:00+00:00', 'observed_time_source': 'runner initialization clock',
+            'normalized_inputs': {'selection': 'cached', 'runtime_source': 'actions-main',
+                                  'cycles': 2, 'device_uri': 'amdgpu://0', 'full_integrity': False}}
         RUN.write_json(self.root / 'workflow.json', workflow)
         args = argparse.Namespace(prepared=prepared, output=self.root / 'raw', device_uri='amdgpu://0',
                                   workflow=self.root / 'workflow.json')
@@ -603,6 +607,18 @@ class LifecycleTests(unittest.TestCase):
         RUN.write_json(path, {'programs': [{'sha256': 'changed'}]})
         with self.assertRaisesRegex(ValueError, 'manifest digest changed'):
             RUN.input_manifest(self.root, entry)
+
+    def test_workflow_normalized_inputs_remain_bounded_scalar_metadata(self):
+        prepared = self.root / 'prepared'
+        prepared.mkdir()
+        RUN.write_json(prepared / 'prepared-suite.json', self.suite)
+        for number, value in enumerate((None, [], {'unknown': 'value'}, {'cycles': {'nested': True}})):
+            workflow = self.root / 'workflow.json'
+            RUN.write_json(workflow, {'schema_version': 1, 'normalized_inputs': value})
+            args = argparse.Namespace(prepared=prepared, output=self.root / f'bad-workflow-{number}',
+                                      device_uri='amdgpu://0', workflow=workflow)
+            with self.assertRaisesRegex(ValueError, 'normalized inputs'):
+                RUN.run_host(args)
 
     def test_cleanup_refuses_container_without_matching_ownership(self):
         name, _ = RUN.owned_container(self.root)

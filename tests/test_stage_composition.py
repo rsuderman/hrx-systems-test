@@ -100,6 +100,95 @@ class StageCompositionTests(unittest.TestCase):
     def status(self, stage):
         return json.loads((self.output / 'stages.json').read_text())['stages'][stage]
 
+    def initialize_workflow(self, event, inputs=None):
+        number = getattr(self, 'initializations', 0) + 1
+        self.initializations = number
+        env_file = self.root / 'github-env'
+        env_file.write_text('')
+        environment = {**self.env, 'RUNNER_TEMP': str(self.root / 'runner-temp'),
+            'GITHUB_ENV': str(env_file), 'GITHUB_EVENT_NAME': event,
+            'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_RUN_ID': str(number),
+            'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_REF': 'refs/heads/main',
+            'GITHUB_SHA': 'a' * 40, 'RUNNER_NAME': 'fixture-runner',
+            'GITHUB_SERVER_URL': 'https://github.com',
+            'RAW_DISPATCH_INPUTS': json.dumps({} if inputs is None else inputs),
+            'TRIGGER_SCHEDULE': '0 4 * * *' if event == 'schedule' else '',
+            'GITHUB_TOKEN': 'secret-not-to-copy'}
+        result = subprocess.run(['bash', '-c', workflow_run_block('Initialize runner-owned attempt and workflow identity')],
+            env=environment, capture_output=True, text=True, timeout=15)
+        exported = dict(line.split('=', 1) for line in env_file.read_text().splitlines())
+        identity_file = Path(exported['E2E_OUTPUT']) / 'workflow.json'
+        identity = json.loads(identity_file.read_text()) if identity_file.exists() else None
+        return result, exported, identity
+
+    def test_all_trigger_types_normalize_defaults_before_stages(self):
+        for event in ('workflow_dispatch', 'push', 'schedule'):
+            result, exported, identity = self.initialize_workflow(event)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(exported['MODEL_SELECTION'], 'cached')
+            self.assertEqual(exported['RUNTIME_SOURCE'], 'actions-main')
+            self.assertEqual(exported['DEVICE_URI'], 'amdgpu://0')
+            self.assertEqual(exported['TEST_CYCLES'], '2')
+            self.assertEqual(exported['FULL_INTEGRITY'], 'false')
+            self.assertEqual(identity['event_name'], event)
+            self.assertEqual(identity['normalized_inputs']['cycles'], 2)
+            self.assertIn('+00:00', identity['observed_at'])
+            self.assertEqual(identity['observed_time_source'], 'runner initialization clock')
+            self.assertNotIn('secret-not-to-copy', json.dumps(identity))
+            if event == 'schedule':
+                self.assertEqual(identity['schedule'], '0 4 * * *')
+                self.assertEqual(identity['schedule_timezone'], 'America/Los_Angeles')
+            else:
+                self.assertNotIn('schedule', identity)
+
+    def test_automatic_events_do_not_use_manual_overrides(self):
+        for event in ('push', 'schedule'):
+            result, exported, _ = self.initialize_workflow(event, {
+                'selection': 'suite', 'runtime_source': 'release', 'cycles': 0, 'full_integrity': True})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(exported['MODEL_SELECTION'], 'cached')
+            self.assertEqual(exported['RUNTIME_SOURCE'], 'actions-main')
+            self.assertEqual(exported['TEST_CYCLES'], '2')
+            self.assertEqual(exported['FULL_INTEGRITY'], 'false')
+
+    def test_manual_release_sample_and_explicit_options_are_preserved(self):
+        result, exported, identity = self.initialize_workflow('workflow_dispatch', {
+            'selection': 'suite', 'runtime_source': 'release', 'cycles': '3',
+            'full_integrity': True, 'device_uri': 'amdgpu://1'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(exported['MODEL_SELECTION'], 'suite')
+        self.assertEqual(exported['RUNTIME_SOURCE'], 'release')
+        self.assertEqual(exported['TEST_CYCLES'], '3')
+        self.assertEqual(exported['DEVICE_URI'], 'amdgpu://1')
+        self.assertEqual(exported['FULL_INTEGRITY'], 'true')
+        self.assertIs(identity['normalized_inputs']['full_integrity'], True)
+
+    def test_manual_replay_identifiers_are_normalized(self):
+        result, exported, identity = self.initialize_workflow('workflow_dispatch', {
+            'runtime_source': 'actions-replay', 'runtime_run_id': '123', 'runtime_run_attempt': '2',
+            'runtime_artifact_id': '456', 'runtime_wheel_sha256': 'b' * 64})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(exported['RUNTIME_SOURCE'], 'actions-replay')
+        self.assertEqual(exported['RUNTIME_RUN_ID'], '123')
+        self.assertEqual(identity['normalized_inputs']['runtime_artifact_id'], '456')
+
+    def test_invalid_manual_values_fail_instead_of_using_defaults(self):
+        for inputs in ({'cycles': 0}, {'cycles': False}, {'cycles': -1}, {'cycles': 1.5},
+                       {'selection': 'unknown'}, {'runtime_source': 'unknown'},
+                       {'device_uri': 'amdgpu://0\nINJECT=value'}, {'full_integrity': 'yes'},
+                       {'runtime_run_id': '123'}, {'runtime_source': 'actions-replay'}):
+            result, exported, identity = self.initialize_workflow('workflow_dispatch', inputs)
+            self.assertNotEqual(result.returncode, 0, inputs)
+            self.assertIsNone(identity)
+            self.assertNotIn('TEST_CYCLES', exported)
+
+    def test_workflow_declares_main_push_and_local_time_nightly(self):
+        workflow = (ROOT / '.github/workflows/single-model-e2e.yml').read_text()
+        self.assertIn('  push:\n    branches: [main]', workflow)
+        self.assertIn("- cron: '0 4 * * *'\n      timezone: America/Los_Angeles", workflow)
+        self.assertIn('RAW_DISPATCH_INPUTS: ${{ toJSON(inputs) }}', workflow)
+        self.assertNotIn('TEST_CYCLES: ${{ inputs.cycles', workflow)
+
     def test_success_composes_stages_and_preserves_raw_results(self):
         result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)

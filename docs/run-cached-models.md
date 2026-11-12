@@ -8,6 +8,28 @@ bash scripts/run-prepared-models.sh --prepared "$attempt/prepared" --output "$at
 bash scripts/generate-model-report.sh --results "$attempt/results" --output "$attempt/report"
 ```
 
+## GitHub triggers and defaults
+
+The same workflow runs on pushes to this testing repository's `main`, daily at
+4 a.m. in `America/Los_Angeles`, and by manual dispatch. Its default is every
+published cached selection, the latest available successful upstream main Actions
+SDK, two cycles, `amdgpu://0` and normal unchanged-asset receipts. Manual controls
+retain explicit release/replay, sample suite, device, cycle and full-integrity
+overrides. Invalid manual values fail; zero cycles is not replaced by a default.
+
+Initialization normalizes inputs before preparation or execution. `workflow.json`
+records the event, schedule/timezone when applicable, normalized inputs and a UTC
+runner-observation time. That time is not a claimed exact scheduled firing time.
+The runtime snapshot independently identifies the actual upstream SDK run/wheel
+and tested commit, requested HEAD and behind-HEAD relation. Schedules can be delayed.
+
+All triggers use the existing hardware concurrency group, without canceling a
+running verification. Operators must still keep manual seeders, downloads and
+cache maintenance idle during verification; GitHub concurrency does not coordinate
+unrelated local processes. See [nightly behavior](specs/later-nightly.md).
+
+## Local commands
+
 For convenience, run all three through the same thin Bash composition:
 
 ```sh
@@ -121,7 +143,8 @@ reported separately and never erases the original model/stage failure.
 
 `config/runtime.json` owns the pinned container, SDK source and adjacent dependency
 lock. Pass `--runtime FILE` to the combined, preparation, single/batch seeding or
-bulk download command. The default retains the current release exactly. The old
+bulk download command. Local CLI defaults retain the current release exactly;
+GitHub explicitly selects Actions main by default. The old
 `--runtime-baseline FILE` cached-only option remains a deprecated adapter for
 external composed baselines and is mutually exclusive with `--runtime`.
 

@@ -2,8 +2,11 @@
 
 Tools and design for validating published Hugging Face Loom model packages.
 Model assets are manually seeded and reused read-only; hosted pipelines and the
-pinned HRX release are prepared per attempt. Local commands and the manual GitHub
-workflow use the same stages, with one server hot-loading/unloading models.
+pinned HRX inputs are prepared per attempt. Local commands and GitHub use the same
+stages, with one server hot-loading/unloading models. GitHub tests the latest
+available successful upstream main SDK on pushes to this repository's `main` and
+daily at 4 a.m. America/Los_Angeles. Manual controls retain release/sample replay;
+see [workflow scheduling](docs/specs/later-nightly.md).
 
 ## Run locally
 
@@ -102,6 +105,6 @@ a fresh pipeline and installs the exact selected HRX SDK in a new venv inside a
 pinned base container. The first acquisition spike permits an explicit
 download-only probe without claiming GPU suitability or model execution.
 
-Automatic memory qualification, broader coverage policy, nightly scheduling and
-distributed hardware execution remain later work. The current suite assumes
+Automatic memory qualification and distributed hardware execution remain later
+work. The current suite assumes
 operator-selected compatible models/device and reports actual failures explicitly.

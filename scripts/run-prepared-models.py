@@ -681,9 +681,17 @@ def run_host(args):
         if args.workflow.stat().st_size > 16384:
             raise ValueError('workflow identity file exceeds its size limit')
         workflow = read_json(args.workflow)
-        allowed = {'schema_version', 'repository', 'run_id', 'run_attempt', 'ref', 'sha', 'runner', 'run_url'}
+        allowed = {'schema_version', 'repository', 'run_id', 'run_attempt', 'ref', 'sha', 'runner', 'run_url',
+                   'event_name', 'schedule', 'schedule_timezone', 'observed_at', 'observed_time_source', 'normalized_inputs'}
+        normalized = workflow.get('normalized_inputs') if isinstance(workflow, dict) else None
+        input_keys = {'selection', 'runtime_source', 'device_uri', 'cycles', 'full_integrity',
+                      'runtime_run_id', 'runtime_run_attempt', 'runtime_artifact_id', 'runtime_wheel_sha256'}
+        if isinstance(workflow, dict) and 'normalized_inputs' in workflow and (not isinstance(normalized, dict) or set(normalized) - input_keys or
+                any(not isinstance(value, (str, int, bool)) or len(str(value)) > 2048 for value in normalized.values())):
+            raise ValueError('workflow normalized inputs must be bounded scalar execution inputs')
         if (not isinstance(workflow, dict) or set(workflow) - allowed or
-                any(not isinstance(value, (str, int)) or len(str(value)) > 2048 for value in workflow.values())):
+                any(not isinstance(value, (str, int)) or len(str(value)) > 2048
+                    for key, value in workflow.items() if key != 'normalized_inputs')):
             raise ValueError('workflow metadata must be a bounded identity-only object')
         if 'schema_version' in workflow and (type(workflow['schema_version']) is not int or workflow['schema_version'] != 1):
             raise ValueError('unsupported workflow metadata schema')

@@ -1,12 +1,17 @@
 name: Cached-model verification
 on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 4 * * *'
+      timezone: America/Los_Angeles
   workflow_dispatch:
     inputs:
       runtime_source:
         description: Pinned release or one upstream main Actions SDK (no rebuild)
         type: choice
-        options: [release, actions-main, actions-replay]
-        default: release
+        options: [actions-main, release, actions-replay]
+        default: actions-main
       runtime_run_id:
         description: Replay only - upstream Actions run ID
         type: string
@@ -27,7 +32,7 @@ on:
         description: Explicit proven suite or all selections seeded on this runner
         type: choice
         options: [suite, cached]
-        default: suite
+        default: cached
       device_uri:
         description: Explicit device for the operator-selected compatible suite
         type: string
@@ -44,19 +49,12 @@ concurrency:
 jobs:
   verify:
     runs-on: [self-hosted, linux, hrx-systems-test-bootstrap]
-    # Includes the eight-model smoke suite plus preparation, reporting and cleanup.
+    # Includes all cached selections plus preparation, reporting and cleanup.
     timeout-minutes: 60
     env:
       CONFIGURED_CACHE_ROOT: ${{ vars.HRX_SYSTEMS_ROOT }}
-      DEVICE_URI: ${{ inputs.device_uri }}
-      TEST_CYCLES: ${{ inputs.cycles }}
-      MODEL_SELECTION: ${{ inputs.selection }}
-      FULL_INTEGRITY: ${{ inputs.full_integrity }}
-      RUNTIME_SOURCE: ${{ inputs.runtime_source }}
-      RUNTIME_RUN_ID: ${{ inputs.runtime_run_id }}
-      RUNTIME_RUN_ATTEMPT: ${{ inputs.runtime_run_attempt }}
-      RUNTIME_ARTIFACT_ID: ${{ inputs.runtime_artifact_id }}
-      RUNTIME_WHEEL_SHA256: ${{ inputs.runtime_wheel_sha256 }}
+      RAW_DISPATCH_INPUTS: ${{ toJSON(inputs) }}
+      TRIGGER_SCHEDULE: ${{ github.event.schedule }}
       PYTHONNOUSERSITE: '1'
       PYTHONPATH: ''
     steps:
@@ -73,12 +71,73 @@ jobs:
           mkdir -- "$output"
           printf 'E2E_OUTPUT=%s\n' "$output" >> "$GITHUB_ENV"
           python3 -I - "$output/workflow.json" <<'PY'
-          import json, os, pathlib, sys
+          import json, os, pathlib, re, sys
+          from datetime import datetime, timezone
+          event = os.environ['GITHUB_EVENT_NAME']
+          if event not in ('push', 'schedule', 'workflow_dispatch'):
+              sys.exit('Unsupported verification event')
+          raw = json.loads(os.environ.get('RAW_DISPATCH_INPUTS') or '{}')
+          if raw is None:
+              raw = {}
+          if not isinstance(raw, dict):
+              sys.exit('Dispatch inputs must be a JSON object')
+          defaults = {'selection': 'cached', 'runtime_source': 'actions-main',
+                      'device_uri': 'amdgpu://0', 'cycles': 2, 'full_integrity': False,
+                      'runtime_run_id': '', 'runtime_run_attempt': '',
+                      'runtime_artifact_id': '', 'runtime_wheel_sha256': ''}
+          if set(raw) - set(defaults):
+              sys.exit('Unknown verification input')
+          values = {**defaults, **raw} if event == 'workflow_dispatch' else defaults
+          if values['selection'] not in ('suite', 'cached'):
+              sys.exit('selection must be suite or cached')
+          if values['runtime_source'] not in ('release', 'actions-main', 'actions-replay'):
+              sys.exit('Invalid runtime source')
+          if not isinstance(values['device_uri'], str) or not re.fullmatch(r'amdgpu://[0-9]+', values['device_uri']):
+              sys.exit('device_uri must be amdgpu://INDEX')
+          def positive(value, label):
+              if type(value) is int and value > 0:
+                  return value
+              if isinstance(value, str) and re.fullmatch(r'[1-9][0-9]*', value):
+                  return int(value)
+              sys.exit(label + ' must be a positive integer')
+          values['cycles'] = positive(values['cycles'], 'cycles')
+          integrity = values['full_integrity']
+          if type(integrity) is bool:
+              pass
+          elif isinstance(integrity, str) and integrity in ('true', 'false'):
+              values['full_integrity'] = integrity == 'true'
+          else:
+              sys.exit('full_integrity must be boolean')
+          replay_keys = ('runtime_run_id', 'runtime_run_attempt', 'runtime_artifact_id', 'runtime_wheel_sha256')
+          if values['runtime_source'] == 'actions-replay':
+              for key in replay_keys[:-1]:
+                  values[key] = str(positive(values[key], key))
+              checksum = values['runtime_wheel_sha256']
+              if not isinstance(checksum, str) or not re.fullmatch(r'[0-9a-f]{64}', checksum):
+                  sys.exit('Replay requires the exact lowercase wheel SHA256')
+          elif any(values[key] not in ('', None) for key in replay_keys):
+              sys.exit('Replay identifiers require actions-replay')
+          else:
+              for key in replay_keys:
+                  values[key] = ''
+          exports = {'MODEL_SELECTION': values['selection'], 'RUNTIME_SOURCE': values['runtime_source'],
+                     'DEVICE_URI': values['device_uri'], 'TEST_CYCLES': str(values['cycles']),
+                     'FULL_INTEGRITY': str(values['full_integrity']).lower(),
+                     **{key.upper(): values[key] for key in replay_keys}}
+          with pathlib.Path(os.environ['GITHUB_ENV']).open('a') as stream:
+              for key, value in exports.items():
+                  stream.write(f'{key}={value}\n')
           names = {'repository': 'GITHUB_REPOSITORY', 'run_id': 'GITHUB_RUN_ID',
                    'run_attempt': 'GITHUB_RUN_ATTEMPT', 'ref': 'GITHUB_REF',
                    'sha': 'GITHUB_SHA', 'runner': 'RUNNER_NAME'}
           identity = {'schema_version': 1, **{key: os.environ[name] for key, name in names.items()}}
           identity['run_url'] = f"{os.environ['GITHUB_SERVER_URL']}/{identity['repository']}/actions/runs/{identity['run_id']}"
+          identity.update(event_name=event, normalized_inputs=values,
+                          observed_at=datetime.now(timezone.utc).isoformat(),
+                          observed_time_source='runner initialization clock')
+          if event == 'schedule':
+              identity.update(schedule=os.environ.get('TRIGGER_SCHEDULE') or '0 4 * * *',
+                              schedule_timezone='America/Los_Angeles')
           pathlib.Path(sys.argv[1]).write_text(json.dumps(identity, indent=2) + '\n')
           PY
       - name: Prepare fresh pipelines and read-only cached assets

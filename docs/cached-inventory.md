@@ -9,9 +9,10 @@ bash scripts/run-cached-models.sh --root "$HRX_SYSTEMS_ROOT" --selection cached
 The preparation stage discovers this runner's published seed manifests and
 freezes the expected selection before downloading pipelines or starting models.
 Different runners can have different cached subsets without editing a shared
-model list. GitHub's manual **Cached-model verification** workflow has the same
-`selection: cached` control. The default `suite` option preserves the proven
-eight-model suite; `--suite FILE` remains available locally for explicit suites.
+model list. GitHub's **Cached-model verification** workflow defaults to cached
+selection for pushes to `main`, its daily schedule and manual dispatch. A manual
+`selection: suite` preserves the proven eight-model sample. Local commands keep
+their sample-suite default; `--suite FILE` remains available for explicit suites.
 
 Inventory locations, relative to `$HRX_SYSTEMS_ROOT/cache`, are:
 

@@ -1,69 +1,66 @@
-# Later: nightly scheduling and model coverage
+# Nightly scheduling and model coverage
 
-Bead: `hst-qcw`. Implement after the basic end-to-end epic `hst-utq` passes.
-This is not a prerequisite for that epic. Reuse its validated manual execution
-path; do not introduce another worker, downloader or result protocol.
+Bead: `hst-qcw`. The existing Cached-model verification workflow runs on pushes
+to this testing repository's `main`, daily at **4 a.m. America/Los_Angeles**, and
+manual dispatch. The schedule uses cron `0 4 * * *` with the named timezone, so
+it follows local daylight-saving changes rather than a fixed UTC offset. GitHub
+can delay scheduled jobs; no exact-time or missing-run monitor is promised.
 
 ## Inputs and ownership
 
-- A reviewed expected list of model/preset/test selections and assigned hardware.
-  Begin with the proven selection; expand explicitly rather than enabling all 60.
-- The same pinned base image, known HRX release/dependencies, pipeline revisions,
-  read-only model caches and per-attempt state conventions as manual execution.
-  A scheduled trigger does not select newer HRX builds or silently update pins.
-  Use shared `config/runtime.json` plus the selected suite and read the operator's
-  `$root/cache/seed-manifest.json`; do not create another selection or seed index.
-- A selected UTC schedule, bounded execution window and retained artifact policy.
-  The workflow owns triggering and serialization; the validated manual entry point
-  continues to own preparation, readiness, inference, assertions and cleanup.
+Push and schedule events have no dispatch inputs. Initialization explicitly sets
+all published cached selections, `actions-main`, two cycles, `amdgpu://0`, and
+normal unchanged-asset receipts. Manual dispatch uses these same defaults and
+retains explicit sample-suite, release/replay, device, cycle and full-integrity
+options. Invalid manual inputs fail before preparation, including zero cycles;
+missing-input defaults do not hide an explicitly invalid value.
 
-## Execution and result contract
+The shared `config/runtime.json` retains the local pinned-release route. GitHub
+passes an explicit runtime source; it does not rewrite that configuration. One
+upstream main SDK is frozen per attempt, with verified artifact/wheel identities,
+actual tested source, requested HEAD, build age and a visible behind-HEAD relation.
+There is no rebuild, per-model source resolution or silent release fallback.
+The prepare step alone receives the upstream Actions-read credential.
 
-The proposed workflow adds a scheduled trigger beside manual dispatch and calls
-`bash scripts/run-cached-models.sh --runtime config/runtime.json
---selection cached --root "$root" --output "$attempt"`, the same wrapper owned by
-[the workflow task](github-workflow.md). It may pass the shared `--seed-manifest`
-override for an explicitly isolated input set. Use common concurrency group
-`hrx-single-model-hardware` across manual and scheduled runs, independent of
-workflow/ref, with cancellation disabled. Do not overlap the assigned GPU.
+## Membership and execution
 
-Snapshot the full expected job set before execution. Each selection must end in
-the planned result vocabulary: passed, failed, blocked or not run, with a reason.
-Missing seeded assets, incompatible/unknown capacity, busy hardware, timeouts and
-inference failures remain in the denominator. Continue independent models after
-a model-specific failure when the host is safe to use; otherwise mark remaining
-work not run. There is no automatic model-cache repair or write mount.
+Runner-local published seed manifests define the expected inventory. Discovery
+deduplicates immutable six-field selections, freezes the denominator before SDK
+acquisition and retains inventory/preparation errors. Models still downloading
+without a published manifest enter a future attempt; a blob or an old progress
+file does not count as coverage. No sample-list or hardware-profile whitelist
+filters cached membership. Hardware qualification remains advisory.
 
-Consume the parent contract's per-attempt bundle: workflow-owned `plan.json`,
-aggregate `report.json`, `summary.md` and `workflow.json`; serving-owned
-`serve-result.json`, `request.json`, `response.json` and bounded logs; plus the
-small seed/prepared-input and stage-specific SDK receipts needed for provenance.
-The nightly layer does not overwrite stage or aggregate reports. Compare pinned
-artifact/dependency identities, not physical `/run/venv` instances across containers.
-Add a small coverage summary: expected, attempted, passed and incomplete
-counts plus per-selection outcomes and artifact references. Record the intended
-night and actual start so a delayed run is distinguishable from a missing one.
-Preserve exact source, input and runtime identities; retries get distinct attempts.
-Upload compact reports/logs on failure too, never cache payloads. Report upload
-failure separately from model failure and retain the local evidence for recovery.
+All events invoke the same independent Bash Prepare, Run and Report commands.
+Model assets are read-only and verified through unchanged writer receipts;
+pipelines are fetched at their seeded publication revision. One preparation SDK
+and one serving server are shared across the batch. Continue after a model failure
+only when unload/quiescence is confirmed; unsafe cleanup leaves later entries
+explicitly not run. No automatic model download, cache repair or upstream fix is
+introduced. Existing `passed`, `failed`, `not_run`, `incomplete` statuses remain.
 
-Completion is green only when every required expected check passes and its
-results are published. Any required blocked/not-run/missing result is partial
-coverage and fails the nightly gate by default; explicit catalog exclusions stay
-visible. This policy does not silently shrink the catalog to models that ran.
+`workflow.json` records event name, normalized inputs and UTC observation time at
+runner initialization. Schedule events also record cron and timezone. This clock
+is labelled as observation time, not an invented exact nominal trigger timestamp.
+The same metadata travels into saved raw results and report artifacts. Harness
+identity remains distinct from upstream SDK source/build identity.
 
-## Acceptance and remaining decisions
+## Concurrency, results and acceptance
 
-Show manual and scheduled triggers invoking the same proven path and pins;
-overlap attempts serialize. A fixture matrix containing pass, failure, cache miss
-and timeout yields the correct full-denominator summary and non-success gate.
-Demonstrate retained failure artifacts and a real scheduled run of the proven
-single model before expanding coverage. Choose the clock time, execution window
-and log/artifact retention before enabling the schedule; inherit the manual
-workflow's retention policy until a reviewed override is selected. Automatic seeding,
-latest-build tracking and head-node fanout are separate future work.
+Push, schedule and manual jobs share `hrx-single-model-hardware`, with
+`cancel-in-progress: false`. The existing 60-minute timeout and seven-day compact
+report/failure artifact retention remain. GitHub serialization does not lock out
+local seeders, downloads or cache maintenance: operators must keep those idle
+before allowing verification. This feature adds no cache lease service.
 
-Contract source: [shared epic](basic-e2e.md), [manual workflow](github-workflow.md),
-[validation](validation.md) and [results/coverage design](../design.md#results-and-coverage).
-Manual seeding and its offline warm-reuse proof remain operator work; scheduled
-read-only input verification is not a substitute for that seeder proof.
+Failures, incomplete coverage, empty inventory and publication failures cannot
+produce all-success. Collection runs before reporting and packaging again after
+rendering; both report and nonempty failure downloads are published independently,
+including on red model outcomes. Scheduled execution does not fork that path.
+
+Focused fixtures execute the actual workflow initialization block for all three
+events, default and explicit options, replay and invalid values. Existing serving,
+composition, failure and artifact fixtures remain applicable. Enabling source and
+observing a push trigger establish wiring; an actual scheduled firing and its
+model/report cleanup remain runtime acceptance to inspect when the time arrives.
+No additional local model/SDK/GPU run is required merely to check event defaults.

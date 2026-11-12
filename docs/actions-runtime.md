@@ -1,7 +1,9 @@
 # Test an upstream HRX Actions SDK
 
-The default runtime remains the pinned release. To exercise an available upstream
-main build without rebuilding HRX, select Actions mode during preparation:
+Local commands retain the pinned-release default. GitHub defaults to an available
+successful upstream main SDK on push, daily schedule and manual dispatch; manual
+controls still allow a pinned release or exact Actions replay. To select the same
+main-build route locally without rebuilding HRX:
 
 ```sh
 bash scripts/run-cached-models.sh --selection cached \
