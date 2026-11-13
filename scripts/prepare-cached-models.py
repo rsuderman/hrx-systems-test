@@ -373,7 +373,14 @@ def run_host(args):
             actions_acquired = True
         else:
             template, runtime_snapshot, lock_path = CONFIG.runtime(runtime_path)
+        publication_abi = None
+        policy_helper = helper('runtime-policy')
+        if policy_helper.needs_publication_abi(runtime_snapshot, getattr(args, 'pipeline_upgrade', 'auto')):
+            with PROGRESS.operation('prepare SDK publication ABI evidence'):
+                publication_abi = BOOTSTRAP.load_internal('pipelines/publication_abi.py').stage(
+                    output, runtime_snapshot, ACTIONS.GitHubClient())
         runtime_policy, policy_files = PIPELINE.freeze_policy(output, runtime_snapshot,
+            publication_abi=publication_abi,
             pipeline_upgrade=getattr(args, 'pipeline_upgrade', 'auto'),
             pool_backing=getattr(args, 'pool_backing', None), memory_bytes=getattr(args, 'memory_bytes', None))
     except (ValueError, OSError, KeyError, TypeError, SDK.SdkError, subprocess.SubprocessError) as error:

@@ -25,6 +25,7 @@ preserved. Regular GGUF, safetensors and binary payloads cannot be copied.
 | [Vector constants](vector-constant.md) | Select integer or floating literal splat operations |
 | [Command operations](command-program.md) | Rename the three legacy command operations |
 | [Text-service ABI](text-service-abi.md) | Migrate verified provider/export closures together |
+| [Epoch publication ABI](epoch-publication-abi.md) | Forward retained control state for a verified 13-argument SDK contract |
 | [Weight-key ranges](weights-input-abi.md) | Add explicit full-buffer key ranges |
 | [Convolution indexing](convolution-index-assumption.md) | Make the token-bound guard explicit |
 | [Finite decision batches](decision-batch-export.md) | Adapt the verified one-shot provider to retained batches |
@@ -34,12 +35,16 @@ preserved. Regular GGUF, safetensors and binary payloads cannot be copied.
 
 ## Plan API and evidence
 
-`plan(source)` returns `(changes, report)`. `changes` maps source-relative filenames
+`plan(source, *, epoch_publication_abi='legacy-12')` returns `(changes, report)`. `changes` maps source-relative filenames
 to complete replacement bytes and performs no writes. `write_derivative(source,
-output)` writes one separate audited copy and returns `(report, report_path)`.
+output, *, epoch_publication_abi='legacy-12')` writes one separate audited copy and returns `(report, report_path)`.
 Preparation can use the plan API after verifying original acquisition and before
 sealing executable hashes. Execution verifies the resulting frozen bundle; it
 must not perform migration or reinterpret the derivative as original publication.
+
+Automatic preparation passes the target verified from the selected SDK explicitly.
+Standalone callers can use `--epoch-publication-abi control-state-13`; the default
+preserves the historical 12-argument publication contract.
 
 The report includes:
 

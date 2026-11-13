@@ -186,6 +186,9 @@ jobs:
             ${{ env.E2E_OUTPUT }}/results/config/*/*.json
             ${{ env.E2E_OUTPUT }}/results/policies/runtime-policy.json
             ${{ env.E2E_OUTPUT }}/results/policies/seccomp.json
+            ${{ env.E2E_OUTPUT }}/results/policies/publication-abi/receipt.json
+            ${{ env.E2E_OUTPUT }}/results/policies/publication-abi/control.c.txt
+            ${{ env.E2E_OUTPUT }}/results/policies/publication-abi/model.c.txt
             ${{ env.E2E_OUTPUT }}/results/models/*/pipeline-cache-entry.json
             ${{ env.E2E_OUTPUT }}/results/models/*/pipeline-cache-read.json
             ${{ env.E2E_OUTPUT }}/results/models/*/pipeline-upgrade.json

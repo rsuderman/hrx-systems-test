@@ -19,7 +19,7 @@ import tempfile
 
 
 MIGRATION_ID = 'hrx-pipelines-0.1.0-to-0.2.0'
-IMPLEMENTATION_REVISION = 1
+IMPLEMENTATION_REVISION = 2
 REPORT_SCHEMA_VERSION = 1
 MAX_DIFF_BYTES = 64 * 1024
 MAX_RECORDED_EDITS = 1024
@@ -592,13 +592,97 @@ def validate_source_directories(source, card):
             raise ValueError('linked program source requires manual review')
 
 
-def plan(source):
+EPOCH_PARAMS = '%plan: buffer, %media_plan: buffer, %count: i32, %first_media_count: i32, %next_media_count: i32, %verified: i32, %continues: i32, %next_speculative: buffer, %ordinary: buffer, %first_results: buffer, %next_results: buffer, %progress: buffer'
+EPOCH_VALUES = ', '.join(part.split(':')[0] for part in EPOCH_PARAMS.split(', '))
+EPOCH_TYPES = ', '.join(part.split(': ')[1] for part in EPOCH_PARAMS.split(', '))
+EPOCH_STATE = '%fixup_epoch_control_state'
+
+
+def epoch_publication_updates(programs, target):
+    """Migrate one complete publication closure; never infer an SDK from source."""
+    views = {}
+    for path, text in programs.items():
+        lines, in_block = [], False
+        for line in text.splitlines(keepends=True):
+            code, in_block = masked_line(line, in_block)
+            if line.endswith('\n'):
+                code = code[:-1] + '\n'
+            lines.append(code)
+        views[path] = ''.join(lines)
+    symbols = ('publish_epoch', 'text_publish_epoch', 'text_publish_epoch_v1', 'sequence_publish_epoch_v1')
+    if not any(re.search(r'@(?:' + '|'.join(symbols) + r')\(', text) for text in views.values()):
+        return {}
+    if target is None:
+        raise ValueError('epoch publication ABI unavailable; cannot migrate text publication closure')
+    if target not in ('legacy-12', 'control-state-13'):
+        raise ValueError('unsupported epoch publication ABI target')
+
+    def closure(state):
+        params = (EPOCH_STATE + ': buffer, ' if state else '') + EPOCH_PARAMS
+        values = (EPOCH_STATE + ', ' if state else '') + EPOCH_VALUES
+        types = ('buffer, ' if state else '') + EPOCH_TYPES
+        call = f'  func.call @publish_epoch({values}) : ({types})'
+        return [f'func.def public @publish_epoch({params}) {{',
+                f'func.decl @publish_epoch({params})',
+                *[f'func.def public @{symbol}({params}) {{\n{call}\n  func.return\n}}' for symbol in symbols[1:]]]
+
+    states = []
+    for state in (False, True):
+        sites = []
+        for pattern in closure(state):
+            matches = [(path, match.start()) for path, text in views.items()
+                       for match in re.finditer(re.escape(pattern), text)]
+            if len(matches) != 1:
+                break
+            sites.append((matches[0][0], matches[0][1], pattern))
+        else:
+            # Every publication reference belongs to this provider, declaration,
+            # aliases and their calls. Extra uses/definitions are not a known closure.
+            expected = {'publish_epoch': 5, **{s: 1 for s in symbols[1:]}}
+            if all(sum(len(re.findall(r'@' + symbol + r'\(', text)) for text in views.values()) == count
+                   for symbol, count in expected.items()):
+                states.append((state, sites))
+    if len(states) != 1:
+        raise ValueError('partial or unfamiliar epoch publication closure; review manually')
+    state, sites = states[0]
+    if state and target == 'legacy-12':
+        raise ValueError('epoch publication source/target ABI mismatch; reverse migration is unsupported')
+    if state or target == 'legacy-12':
+        return {}
+    # The added parameter must not capture any preexisting name in the provider.
+    if any(EPOCH_STATE in text for text in views.values()):
+        raise ValueError('epoch publication control-state parameter already exists')
+    # Verify provider is balanced, while preserving its complete existing body.
+    provider_path = sites[0][0]
+    if function_block(programs[provider_path], 'publish_epoch') is None:
+        raise ValueError('missing epoch publication provider body')
+    replacements, updates = {}, {}
+    for (path, start, old), new in zip(sites, closure(True)):
+        replacements.setdefault(path, []).append((start, old, new))
+    for path, edits in replacements.items():
+        text, records = programs[path], []
+        for start, old, new in sorted(edits, reverse=True):
+            if text[start:start + len(old)] != old:
+                raise ValueError('commented epoch publication closure requires manual review')
+            line = programs[path][:start].count('\n') + 1
+            records.append({'line': line, 'kind': 'epoch_publication_abi', 'change': 'prepend retained control-state buffer'})
+            if '\n' in old:
+                records.append({'line': line + 1, 'kind': 'epoch_publication_abi', 'change': 'forward retained control-state buffer'})
+            text = text[:start] + new + text[start + len(old):]
+        updates[path] = (text, sorted(records, key=lambda edit: edit['line']))
+    return updates
+
+
+def plan(source, *, epoch_publication_abi='legacy-12'):
     """Plan a derivative without writing; keys and identity paths are source-relative."""
+    if epoch_publication_abi not in ('legacy-12', 'control-state-13', None):
+        raise ValueError('unsupported epoch publication ABI target')
     source = Path(source).resolve(strict=True)
     changes, report = {}, {'schema_version': REPORT_SCHEMA_VERSION, 'migration_id': MIGRATION_ID,
         'implementation_revision': IMPLEMENTATION_REVISION,
         'implementation_sha256': sha(Path(__file__).read_bytes()),
         'source_contract': '0.1.0', 'target_contract': '0.2.0',
+        'epoch_publication_abi': epoch_publication_abi,
         'source': str(source), 'files': [],
         'publication_ready': False, 'locks_modified': False,
         'source_pool_constraints': [],
@@ -617,11 +701,16 @@ def plan(source):
     source_data = {str(p.relative_to(source)): p.read_bytes() for p in identity_paths}
     report['source_files'] = [file_identity(name, data) for name, data in source_data.items()]
     programs = {p: source_data[str(p.relative_to(source))].decode('utf-8') for p in paths[1:]}
-    service_updates = legacy_service_updates(programs)
-    decision_updates = legacy_decision_updates(programs)
+    epoch_updates = epoch_publication_updates(programs, epoch_publication_abi)
+    intermediates = {path: epoch_updates.get(path, (text, []))[0] for path, text in programs.items()}
+    service_updates = legacy_service_updates(intermediates)
+    decision_updates = legacy_decision_updates(intermediates)
     if service_updates.keys() & decision_updates.keys():
         raise ValueError('overlapping service migrations require manual review')
     service_updates.update(decision_updates)
+    for path, (text, edits) in epoch_updates.items():
+        updated, additional = service_updates.get(path, (text, []))
+        service_updates[path] = (updated, edits + additional)
     for path in paths:
         if path.is_symlink():
             raise ValueError(f'linked source requires manual review: {path}')
@@ -657,13 +746,14 @@ def plan(source):
     report['decision_batch_abi_edits'] = sum(e.get('kind') == 'decision_batch_abi' for f in report['files'] for e in f['edits'])
     report['reasoning_output_edits'] = sum(e.get('kind') == 'reasoning_output' for f in report['files'] for e in f['edits'])
     report['reasoning_selection_edits'] = sum(e.get('kind') == 'reasoning_selection' for f in report['files'] for e in f['edits'])
+    report['epoch_publication_abi_edits'] = sum(e.get('kind') == 'epoch_publication_abi' for f in report['files'] for e in f['edits'])
     report['status'] = 'applied' if changes else 'unchanged'
     report['output_files'] = [file_identity(name, changes.get(name, data)) for name, data in source_data.items()]
     report['operation_counts'] = {'pool_capacity': report['pool_fields_removed'],
         **{kind: sum(e.get('kind') == kind for f in report['files'] for e in f['edits'])
            for kind in ('vector_literal', 'command_operation', 'text_service_abi',
                         'weight_key_range', 'gdn_convolution_guard', 'decision_batch_abi',
-                        'reasoning_output', 'reasoning_selection')}}
+                        'reasoning_output', 'reasoning_selection', 'epoch_publication_abi')}}
     report['changed_file_count'] = len(changes)
     for record in report['files']:
         encoded = json.dumps(record['edits'], sort_keys=True, separators=(',', ':')).encode()
@@ -688,10 +778,10 @@ def bounded_diff(diff):
             'diff_truncated': truncated, 'diff_limit_bytes': MAX_DIFF_BYTES}
 
 
-def write_derivative(source, output):
+def write_derivative(source, output, *, epoch_publication_abi='legacy-12'):
     """Write one audited derivative; never overwrite input, output or its receipt."""
     source, output = Path(source).resolve(strict=True), Path(output).absolute()
-    changes, report = plan(source)
+    changes, report = plan(source, epoch_publication_abi=epoch_publication_abi)
     report_path = output.with_name(output.name + '.upgrade.json')
     if any(p.exists() or p.is_symlink() for p in (output, report_path)):
         raise ValueError('output and adjacent upgrade report must not already exist')
@@ -713,7 +803,7 @@ def write_derivative(source, output):
                 raise ValueError('source changed during migration')
         for relative, data in changes.items():
             (tree / relative).write_bytes(data)
-        if plan(tree)[0]:
+        if plan(tree, epoch_publication_abi=epoch_publication_abi)[0]:
             raise ValueError('migration is not idempotent')
         report['output'] = str(output)
         # Reserve the destination exclusively before publishing. Replacing this empty
@@ -747,14 +837,16 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--check', action='store_true', help='print a migration report without writing')
     mode.add_argument('--output', type=Path, help='new derivative directory; never the original')
+    parser.add_argument('--epoch-publication-abi', choices=('legacy-12', 'control-state-13'), default='legacy-12',
+                        help='explicit target SDK publication contract; default preserves historical standalone output')
     args = parser.parse_args()
     try:
         source = args.source.resolve(strict=True)
         if args.check:
-            _, report = plan(source)
+            _, report = plan(source, epoch_publication_abi=args.epoch_publication_abi)
             print(json.dumps(report, indent=2))
             return 0
-        report, report_path = write_derivative(source, args.output)
+        report, report_path = write_derivative(source, args.output, epoch_publication_abi=args.epoch_publication_abi)
         print(f"{MIGRATION_ID}: {report['status']}; {report['changed_file_count']} changed files")
         print(f"Operation counts: {json.dumps(report['operation_counts'], sort_keys=True)}")
         print(f'Output: {args.output.absolute()}\nReport: {report_path}')

@@ -20,6 +20,10 @@ VERSION = re.compile(r'0\.(1|2)\.0(?:(?:a|b|rc|\.dev|\.post)[0-9]+)*(?:\+[a-zA-Z
 _SPEC = importlib.util.spec_from_file_location('policy_sdk_environment', Path(__file__).with_name('sdk-environment.py'))
 SDK = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(SDK)
+_BOOTSTRAP_SPEC = importlib.util.spec_from_file_location('policy_bootstrap', Path(__file__).with_name('_bootstrap.py'))
+_BOOTSTRAP = importlib.util.module_from_spec(_BOOTSTRAP_SPEC)
+_BOOTSTRAP_SPEC.loader.exec_module(_BOOTSTRAP)
+PUBLICATION_ABI = _BOOTSTRAP.load_internal('pipelines/publication_abi.py')
 
 
 def _canonical(value):
@@ -158,10 +162,20 @@ def _upgrade(mode, family):
             'reason': 'explicit-none' if mode == 'none' else 'target-' + family}
 
 
-def resolve(snapshot, pipeline_upgrade='auto', pool_backing=None, memory_bytes=None):
+def needs_publication_abi(snapshot, pipeline_upgrade='auto'):
+    return _upgrade(pipeline_upgrade, _runtime(snapshot)[2])['enabled']
+
+
+def resolve(snapshot, pipeline_upgrade='auto', pool_backing=None, memory_bytes=None, publication_abi=None):
     """Select policy after SDK metadata verification; read repository config once."""
     runtime_id, version, family = _runtime(snapshot)
     upgrade = _upgrade(pipeline_upgrade, family)
+    if upgrade['enabled']:
+        if publication_abi is None:
+            raise ValueError('automatic 0.2 upgrading requires frozen publication ABI evidence')
+        publication_abi = PUBLICATION_ABI.validate_descriptor(publication_abi, snapshot)
+    elif publication_abi is not None:
+        raise ValueError('unchanged pipeline policy must not acquire publication ABI evidence')
     config = _configuration() if family == '0.2.0' else None
     if config is None:
         if pool_backing is not None or memory_bytes is not None:
@@ -178,6 +192,8 @@ def resolve(snapshot, pipeline_upgrade='auto', pool_backing=None, memory_bytes=N
               'runtime_identity_sha256': runtime_id, 'runtime_version': version, 'runtime_family': family,
               'pipeline_upgrade': upgrade, 'launch': launch, 'seccomp': seccomp,
               'request_profiles': profiles, 'configuration': config}
+    if upgrade['enabled']:
+        policy.update(schema_version=2, publication_abi=publication_abi)
     policy['policy_sha256'] = digest(policy)
     return policy
 
@@ -187,11 +203,17 @@ def validate(policy, snapshot):
     try:
         value = copy.deepcopy(policy)
         recorded = _sha(value.pop('policy_sha256'))
-        if recorded != digest(value) or value['schema_version'] != 1:
+        if recorded != digest(value) or value['schema_version'] not in (1, 2):
             raise ValueError('frozen runtime policy identity changed')
         runtime_id, version, family = _runtime(snapshot)
         if (value['runtime_identity_sha256'], value['runtime_version'], value['runtime_family']) != (runtime_id, version, family):
             raise ValueError('runtime policy does not match the selected SDK')
+        if value['schema_version'] == 2:
+            if not value['pipeline_upgrade']['enabled'] or family != '0.2.0':
+                raise ValueError('publication ABI policy requires automatic 0.2 upgrade')
+            PUBLICATION_ABI.validate_descriptor(value['publication_abi'], snapshot)
+        elif 'publication_abi' in value:
+            raise ValueError('legacy runtime policy cannot carry new publication ABI evidence')
         if value['pipeline_upgrade'] != _upgrade(value['pipeline_upgrade']['mode'], family):
             raise ValueError('frozen pipeline upgrade decision changed')
         if family == '0.2.0':

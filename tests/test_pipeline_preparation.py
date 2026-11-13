@@ -23,6 +23,7 @@ PIPE = load('pipeline-preparation')
 PREP = load('prepare-cached-models')
 RUN = load('run-prepared-models')
 SDK = PREP.SDK
+from _publication_fixture import publication_abi
 
 
 def runtime(version):
@@ -33,7 +34,7 @@ def runtime(version):
 
 
 class PipelinePreparationTests(unittest.TestCase):
-    def fixture(self, root, version='0.2.0.dev0', upgrade='auto'):
+    def fixture(self, root, version='0.2.0.dev0', upgrade='auto', *, abi_profile='legacy', abi_client=None, epoch=False, snapshot_override=None):
         work, destination = root / 'work', root / 'models/one'
         work.mkdir(); (destination / 'model/program').mkdir(parents=True)
         card = {'schema_version': 1, 'presets': {'chat': {'execution': {'rows': 4, 'pool_capacity': 32}}}}
@@ -41,11 +42,17 @@ class PipelinePreparationTests(unittest.TestCase):
         for path in (work / 'model.json', destination / 'model/model.json'):path.write_text(text)
         (work / 'model.json.lock').write_text('{"source":"verified-original"}\n')
         (destination / 'model/program/main.loom').write_text('%v = vector.constant 7 : vector<4xi32>\n')
+        if epoch:
+            import shutil
+            source = ROOT / 'tests/fixtures/pipeline-upgrade-0.1.0-to-0.2.0/legacy-epoch-publication'
+            for name in ('control.loom', 'service.loom'):
+                shutil.copyfile(source / name, destination / 'model/program' / name)
         asset = root / 'payload.gguf'; asset.write_bytes(b'checkpoint bytes never transformed')
         (destination / 'model/weights.gguf').symlink_to(asset)
         seed = {'card_sha256': PIPE.digest(work / 'model.json'), 'lock_sha256': PIPE.digest(work / 'model.json.lock')}
-        snapshot = runtime(version)
-        policy, files = PIPE.freeze_policy(root, snapshot, pipeline_upgrade=upgrade)
+        snapshot = copy.deepcopy(snapshot_override) if snapshot_override is not None else runtime(version)
+        abi = publication_abi(snapshot, root, abi_profile, client=abi_client) if PREP.helper('runtime-policy').needs_publication_abi(snapshot, upgrade) else None
+        policy, files = PIPE.freeze_policy(root, snapshot, pipeline_upgrade=upgrade, publication_abi=abi)
         identity = {'repository': 'example/model', 'publication_revision': 'a'*40,
                     'model_id': 'Example', 'preset': 'chat', 'variant': 'gguf', 'programs': 'source'}
         baseline = {**identity, 'smoke_request': {'max_tokens': 256}, 'smoke_expected_text': '4',

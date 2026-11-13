@@ -350,7 +350,7 @@ class UpgradeReceiptTests(unittest.TestCase):
             before = {p.name:p.read_bytes() for p in root.iterdir()}
             changes, report = fixup.plan(root)
             self.assertEqual(report['migration_id'], 'hrx-pipelines-0.1.0-to-0.2.0')
-            self.assertEqual(report['implementation_revision'], 1)
+            self.assertEqual(report['implementation_revision'], 2)
             self.assertEqual(report['implementation_sha256'], hashlib.sha256(SCRIPT.read_bytes()).hexdigest())
             self.assertEqual(report['status'], 'applied')
             self.assertEqual(report['operation_counts']['vector_literal'], 1)

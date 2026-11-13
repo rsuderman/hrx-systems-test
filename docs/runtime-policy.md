@@ -5,8 +5,8 @@ and metadata have been verified. It returns a policy bound to that exact runtime
 Execution validates the frozen policy and copied seccomp bytes; it does not reread
 mutable repository configuration or choose new request/server settings.
 
-The helper is being integrated under `hst-7x3.2`. Its public preparation flags are
-owned by that integration task; this document describes the policy contract.
+The public preparation command owns policy acquisition; this helper performs pure
+resolution and validates the frozen policy without fetching new inputs.
 
 | Resolved SDK | Source upgrade | Request/server/container settings |
 | --- | --- | --- |
@@ -95,3 +95,23 @@ from that embedded content. A changed live config has no effect on an existing
 prepared run. The harness must additionally bind the complete policy and copied
 files into its trusted prepared-input manifest; a hash is not a signature or a
 replacement for the existing source/manifest integrity boundary.
+
+## SDK-specific publication ABI
+
+New automatic 0.2 inputs use policy schema 2. After selecting the exact SDK,
+preparation acquires the two fixed native publication source files at its tested
+commit and freezes a recognized 12/13-argument contract or an explicit unknown
+result. The receipt is bound to the existing runtime identity and wheel hash;
+backing, request and seccomp policy stay unchanged. The resolved SDK snapshot
+schema and runtime identity calculation do not change.
+
+`resolve(..., publication_abi=descriptor)` requires this evidence for automatic
+0.2 upgrading. `validate` preserves already sealed schema-1 policy behavior,
+while schema-2 prepared verification requires the receipt/source closure and
+an explicit matching target in the derivative report. Valid unavailable or
+unsupported evidence is a model-local compatibility result; corrupted evidence
+is an integrity failure. Offline preparation, execution and rendering perform
+no source lookups. Release 0.1.0 and explicit `none` bypass acquisition.
+
+See [epoch publication migration](pipeline-upgrades/0.1.0-to-0.2.0/epoch-publication-abi.md)
+for the exact closure, standalone CLI and source-association limits.

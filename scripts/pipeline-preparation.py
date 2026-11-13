@@ -62,9 +62,9 @@ def read_json(path):
     return json.loads(path.read_text())
 
 
-def freeze_policy(prepared, snapshot, *, pipeline_upgrade='auto', pool_backing=None, memory_bytes=None):
+def freeze_policy(prepared, snapshot, *, pipeline_upgrade='auto', pool_backing=None, memory_bytes=None, publication_abi=None):
     policy = helper('runtime-policy').resolve(snapshot, pipeline_upgrade=pipeline_upgrade,
-                                              pool_backing=pool_backing, memory_bytes=memory_bytes)
+                                              pool_backing=pool_backing, memory_bytes=memory_bytes, publication_abi=publication_abi)
     files = []
     destination = Path(prepared) / 'policies/runtime-policy.json'
     write_json(destination, policy)
@@ -77,6 +77,10 @@ def freeze_policy(prepared, snapshot, *, pipeline_upgrade='auto', pool_backing=N
         target = Path(prepared) / 'policies/seccomp.json'
         shutil.copyfile(source, target)
         files.append({'kind': 'seccomp', 'path': 'policies/seccomp.json', 'sha256': descriptor['sha256']})
+    if policy['schema_version'] == 2:
+        abi = BOOTSTRAP.load_internal('pipelines/publication_abi.py')
+        abi.validate(prepared, policy['publication_abi'], snapshot)
+        files.extend(abi.files(policy['publication_abi']))
     return policy, files
 
 
@@ -90,18 +94,24 @@ def validate_policy(prepared, suite):
     records = suite.get('policy_files')
     if not isinstance(records, list):
         raise ValueError('frozen runtime policy lacks file identities')
-    expected = {'runtime_policy'} | ({'seccomp'} if policy['seccomp'] else set())
-    if {record.get('kind') for record in records} != expected or len(records) != len(expected):
+    if not records or not isinstance(records[0], dict) or not re.fullmatch('[0-9a-f]{64}', records[0].get('sha256', '')):
+        raise ValueError('frozen runtime policy file identity is invalid')
+    expected = [{'kind': 'runtime_policy', 'path': 'policies/runtime-policy.json',
+                 'sha256': records[0]['sha256']}]
+    if policy['seccomp']:
+        expected.append({'kind': 'seccomp', 'path': 'policies/seccomp.json', 'sha256': policy['seccomp']['sha256']})
+    if policy['schema_version'] == 2:
+        abi = BOOTSTRAP.load_internal('pipelines/publication_abi.py')
+        abi.validate(prepared, policy['publication_abi'], suite['runtime']['resolved_runtime'])
+        expected.extend(abi.files(policy['publication_abi']))
+    if records != expected:
         raise ValueError('frozen runtime policy file closure changed')
     for record in records:
         target = contained(prepared, record['path'])
         if target.is_symlink() or digest(target) != record['sha256']:
             raise ValueError('frozen runtime policy file changed')
-        if record['kind'] == 'runtime_policy':
-            if read_json(target) != policy:
-                raise ValueError('frozen runtime policy disagrees with its receipt')
-        elif record['sha256'] != policy['seccomp']['sha256']:
-            raise ValueError('frozen seccomp file disagrees with runtime policy')
+    if read_json(contained(prepared, 'policies/runtime-policy.json')) != policy:
+        raise ValueError('frozen runtime policy disagrees with its receipt')
     return policy
 
 
@@ -173,7 +183,14 @@ def seal_upgrade(destination, work, seed, policy, entry_id):
         retained = destination / 'model-original'
         original.rename(retained)
         upgrader = helper('upgrade-pipelines-0.1.0-to-0.2.0')
-        report, adjacent = upgrader.write_derivative(retained, original)
+        target = policy.get('publication_abi', {}).get('receipt', {}).get('profile', 'legacy-12')
+        try:
+            report, adjacent = upgrader.write_derivative(retained, original, epoch_publication_abi=target)
+        except ValueError as error:
+            if target is None:
+                receipt = policy['publication_abi']['receipt']
+                raise ValueError('SDK ' + receipt['tested_sha'] + ': ' + receipt['reason'] + '; ' + str(error)) from error
+            raise
         report['source'], report['output'] = 'model-original', 'model'
         adjacent.unlink()
         source_tree = f'models/{entry_id}/model-original'
@@ -227,6 +244,10 @@ def verify_upgrade(prepared, entry, manifest, baseline, policy):
             report.get('runtime_identity_sha256') != policy['runtime_identity_sha256']):
         raise ValueError('pipeline report runtime/migration identity changed')
     if policy['pipeline_upgrade']['enabled']:
+        target = policy.get('publication_abi', {}).get('receipt', {}).get('profile', 'legacy-12')
+        if ((policy['schema_version'] == 2 and 'epoch_publication_abi' not in report) or
+                report.get('epoch_publication_abi', 'legacy-12') != target):
+            raise ValueError('pipeline report publication ABI target differs from frozen policy')
         if (type(report.get('implementation_revision')) is not int or report['implementation_revision'] < 1 or
                 not isinstance(report.get('implementation_sha256'), str) or
                 not re.fullmatch('[0-9a-f]{64}', report['implementation_sha256'])):

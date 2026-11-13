@@ -13,9 +13,10 @@ improve their boundaries.
 | Native selection, indexed assets and installation | `prepare-cached-models.py` online/offline passes | `lib/hrx_systems/pipelines/preparation.py` |
 | Preparation orchestration and SDK installation | public prepare/composite commands; both CI workers | `prepare-cached-models.py` composes native preparation, SDK and source seals |
 | Runtime selection/acquisition | preparation and paired planner | existing `sdk-environment.py`, `release-runtime.py`, `actions-runtime.py` |
+| Pinned native publication ABI evidence | preparation and offline policy verification | `lib/hrx_systems/pipelines/publication_abi.py` |
 | Runtime-qualified request/launch policy | preparation and execution preflight | existing `runtime-policy.py` |
 | Original/derived source seals | preparation and execution preflight | existing `pipeline-preparation.py` |
-| Pure source rewriting | source-seal helper and standalone CLI | unchanged `upgrade-pipelines-0.1.0-to-0.2.0.py` |
+| Pure source rewriting | source-seal helper and standalone CLI | `upgrade-pipelines-0.1.0-to-0.2.0.py` |
 | Execution lifecycle | public runner and CI worker | existing `run-prepared-models.py` |
 | Paired CI sequencing and publication | workflows and `paired-ci.py` | existing CI helpers/workflows |
 | Saved-results rendering and bounded evidence | public report/package commands | existing report/evidence helpers |

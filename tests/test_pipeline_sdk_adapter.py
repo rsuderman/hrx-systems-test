@@ -62,6 +62,16 @@ class FrozenSdkAdapterTests(unittest.TestCase):
                 adapter = SDK.runtime_baseline(settings, snapshot)
                 self.assertEqual(adapter['sdk']['source_commit'], frozen['source']['tested_sha'])
                 self.assertEqual(adapter['sdk']['release'], 'v0.2.0' if kind == 'release' else None)
+                # Compose the real verified acquisition fixture with frozen ABI
+                # policy, the migration adapter and offline prepared verification.
+                from test_pipeline_preparation import PipelinePreparationTests, PIPE
+                composed = Path(temporary) / 'prepared'; composed.mkdir()
+                dest, policy, manifest, baseline, entry, suite = PipelinePreparationTests().fixture(
+                    composed, snapshot_override=snapshot, abi_profile='state' if kind == 'actions' else 'legacy', epoch=True)
+                self.assertEqual(policy['publication_abi']['receipt']['runtime_identity_sha256'], snapshot['runtime_identity_sha256'])
+                with patch('urllib.request.urlopen', side_effect=AssertionError('offline verification must not acquire anything')):
+                    PIPE.verify_upgrade(composed, entry, manifest, baseline, PIPE.validate_policy(composed, suite))
+                self.assertEqual(policy['publication_abi']['receipt']['profile'], 'control-state-13' if kind == 'actions' else 'legacy-12')
 
 
 if __name__ == '__main__':

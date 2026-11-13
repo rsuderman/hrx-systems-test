@@ -1,0 +1,26 @@
+{
+  "legacy-control.c": {
+    "commit": "7bf1bd93a235aa7c74766498e3b146a4d0dfbcd7",
+    "upstream_path": "loom/src/loom/serve/service/text/control.c",
+    "full_source_sha256": "7ba118518f979894d330084fa10b66ae3ea0d0b6267d805b799f43481a25ac74",
+    "fixture_sha256": "7b111e31684af52fa9e7e05e9114614acff770e3574a6edbe8bd105bc67b3b5f"
+  },
+  "legacy-model.c": {
+    "commit": "7bf1bd93a235aa7c74766498e3b146a4d0dfbcd7",
+    "upstream_path": "loom/src/loom/serve/service/text/model.c",
+    "full_source_sha256": "db0cfb81f8b43d07ae9f987177c21e893652720f1680ac1a942fc66fa1631032",
+    "fixture_sha256": "a1c8db96b749a9122453ca41e4a9c643a8e57a89d98aa26a2b57aa3a022e9b03"
+  },
+  "state-control.c": {
+    "commit": "31cf5242e606c6cb654eabf063600e38f9e6f1f8",
+    "upstream_path": "loom/src/loom/serve/service/text/control.c",
+    "full_source_sha256": "f4c6cefc609068f3225d6ce8e2c9ffc924b7e019168091ba9d08db6dbf6dfbc5",
+    "fixture_sha256": "6da1d780fe3d6e7c516c80fb966189e409ba0921b31eba0a80afd83ea6a9300e"
+  },
+  "state-model.c": {
+    "commit": "31cf5242e606c6cb654eabf063600e38f9e6f1f8",
+    "upstream_path": "loom/src/loom/serve/service/text/model.c",
+    "full_source_sha256": "1fb756893bb342986bfc689f2b645dec0f415b7b325dd7eee40c0e751a4ff479",
+    "fixture_sha256": "5fcbd4f1003966fee2c9494d7f5add2f300497753716f4deb097ad1b127e5286"
+  }
+}
