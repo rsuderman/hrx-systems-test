@@ -244,7 +244,6 @@ def initialize(plan_path, lane_id, output, previous_safe=True):
     if workflow.get('repository') and workflow.get('run_id'):
         workflow['run_url'] = 'https://github.com/' + workflow['repository'] + '/actions/runs/' + workflow['run_id']
     workflow['normalized_inputs'] = {**values, 'runtime_source': lane['runtime_source']}
-    workflow['model_selection'] = {'enabled': len(enabled), 'excluded_entries': excluded}
     workflow['event_name'] = os.environ.get('GITHUB_EVENT_NAME', 'workflow_dispatch')
     workflow['observed_at'] = datetime.now(timezone.utc).isoformat()
     workflow['observed_time_source'] = 'runner initialization clock'
@@ -262,7 +261,9 @@ def initialize(plan_path, lane_id, output, previous_safe=True):
                    'preparation':{'status':'not_run','reason':reason}, 'cycles':[], 'evidence':[]} for e in enabled]
         raw = {'schema_version':1,'attempt_id':output.name,'mode':'real','status':'failed','reason':reason,
                'source':{'commit':workflow.get('sha')},'runtime':{},'hardware':{},'expected_entries':enabled,
-               'models':models,'server':{k:{'status':'not_run','elapsed_seconds':None,'reason':reason} for k in ('start','shutdown','cleanup')},'evidence':[]}
+               'models':models,'server':{k:{'status':'not_run','elapsed_seconds':None,'reason':reason} for k in ('start','shutdown','cleanup')},
+               'workflow':workflow,'evidence':['workflow.json']}
+        write(output / 'results/workflow.json', workflow)
         write(output / 'results/suite-result.json',raw)
     return {'E2E_OUTPUT':str(output),'MODEL_SELECTION':values['selection'],'DEVICE_URI':values['device_uri'],
             'TEST_CYCLES':str(values['cycles']),'FULL_INTEGRITY':str(values['full_integrity']).lower(),

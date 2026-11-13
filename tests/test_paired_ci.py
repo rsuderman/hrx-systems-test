@@ -1,7 +1,11 @@
 import copy
+import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -240,5 +244,55 @@ class TemporaryExclusionTests(unittest.TestCase):
             with self.assertRaises(ValueError): M.exclusion_policy(policy)
         policy = copy.deepcopy(self.policy); policy['entries'].append(policy['entries'][0])
         with self.assertRaisesRegex(ValueError, 'duplicate'): M.exclusion_policy(policy)
+
+    def initialize_and_publish(self, lane, *, safe):
+        path, plan = self.make_plan('plan-' + lane)
+        out = self.root / ('actual-worker-' + lane)
+        identity = {'GITHUB_REPOSITORY': 'rsuderman/hrx-systems-test', 'GITHUB_RUN_ID': '43379530677',
+                    'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_SHA': 'a'*40, 'GITHUB_REF': 'refs/heads/main',
+                    'RUNNER_NAME': 'fixture-runner', 'GITHUB_EVENT_NAME': 'push'}
+        with patch.dict(os.environ, identity): M.initialize(path, lane, out, safe)
+        if safe:
+            # Exercise real host validation without SDK, Docker or model execution.
+            enabled = M.read(out / 'lane-selection.json')['expected_entries']
+            prepared = out / 'prepared'
+            M.write(prepared / 'prepared-suite.json', {'attempt_id': 'metadata-regression', 'source': {},
+                    'entries': [dict(e, preparation={'status': 'failed', 'reason': 'intentional fixture cache miss'})
+                                for e in enabled]})
+            runner = M.helper('run-prepared-models')
+            args = argparse.Namespace(prepared=prepared, output=out / 'results', device_uri='amdgpu://0',
+                                      workflow=out / 'workflow.json')
+            with patch.object(runner.subprocess, 'run', side_effect=AssertionError('must not invoke Docker')):
+                self.assertEqual(runner.run_host(args), 1)
+        raw = M.read(out / 'results/suite-result.json')
+        self.assertEqual(len(raw['expected_entries']), 51 if lane == 'latest-release' else 60)
+        M.helper('generate-model-report').generate(out / 'results', out / 'report')
+        source = (ROOT / '.github/workflows/_model-verification-worker.yml').read_text()
+        section = source.split('      - name: Publish readable summary and report download\n', 1)[1]
+        lines = []
+        for line in section.split('        run: |\n', 1)[1].splitlines():
+            if line and not line.startswith('          '): break
+            lines.append(line[10:])
+        summary = out / 'github-summary.md'
+        env = {**os.environ, 'E2E_OUTPUT': str(out), 'GITHUB_STEP_SUMMARY': str(summary),
+               'ARTIFACT_URL': 'https://github.com/rsuderman/hrx-systems-test/actions/runs/43379530677/artifacts/123',
+               'UPLOAD_OUTCOME': 'success', 'COLLECT_OUTCOME': 'success', 'PACKAGE_OUTCOME': 'success',
+               'HAS_FAILURES': 'false', 'PREPARE_OUTCOME': 'failure' if safe else 'skipped',
+               'RUN_OUTCOME': 'failure' if safe else 'skipped', 'CLEANUP_OUTCOME': 'success', 'REPORT_OUTCOME': 'success'}
+        published = subprocess.run(['bash', '-c', '\n'.join(lines) + '\n'], env=env,
+                                   capture_output=True, text=True, timeout=10)
+        self.assertEqual(published.returncode, 0, published.stderr)
+        self.assertEqual(raw['workflow'], M.read(out / 'workflow.json'))
+        self.assertNotIn('model_selection', raw['workflow'])
+        self.assertIn(raw['workflow']['run_url'], summary.read_text())
+        self.assertNotIn('](index.html)', summary.read_text())
+        self.assertEqual(len(M.read(out / 'lane-selection.json')['excluded_entries']), 9 if lane == 'latest-release' else 0)
+
+    def test_initialized_lane_workflows_reach_runner_and_github_publisher(self):
+        for lane in ('latest-release', 'latest-ci'):
+            with self.subTest(lane=lane): self.initialize_and_publish(lane, safe=True)
+
+    def test_blocked_lane_saved_report_publishes_github_links(self):
+        self.initialize_and_publish('latest-ci', safe=False)
 
 if __name__=='__main__':unittest.main()
