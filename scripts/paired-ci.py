@@ -95,12 +95,62 @@ def resolution_failure(selector, error):
             'error': {'kind': 'resolution', 'message': message.encode()[:4000].decode(errors='ignore')}}
 
 
+def exclusion_policy(value):
+    """Only exact published selections on one explicitly affected stable release."""
+    if (not isinstance(value, dict) or set(value) != {'schema_version', 'lane', 'release', 'evidence_url', 'entries'}
+            or value['schema_version'] != 1 or value['lane'] != 'latest-release'
+            or not isinstance(value['release'], str) or not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', value['release'])
+            or not isinstance(value['evidence_url'], str)
+            or not re.fullmatch(r'https://github.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+/attempts/[0-9]+', value['evidence_url'])
+            or not isinstance(value['entries'], list) or len(value['entries']) > 4096):
+        raise ValueError('invalid temporary CI exclusion policy')
+    inventory = helper('cached-inventory'); seen = set()
+    for row in value['entries']:
+        if (not isinstance(row, dict) or set(row) != {'selection', 'reason'}
+                or not isinstance(row['selection'], dict) or set(row['selection']) != set(inventory.FIELDS)
+                or not isinstance(row['reason'], str) or not row['reason'].strip() or len(row['reason']) > 4096):
+            raise ValueError('temporary CI exclusions require exact selections and reasons')
+        identity = inventory.selection({'schema_version': 1, 'selection': row['selection']})
+        key = inventory.fingerprint(identity)
+        if key in seen: raise ValueError('duplicate temporary CI exclusion')
+        seen.add(key)
+    return value
+
+
+def lane_snapshot(common, lane_id, runtime, policy):
+    """Partition the frozen inventory, preserving all metadata and inventory errors."""
+    source = runtime.get('source', {})
+    rules = policy['entries'] if (lane_id == policy['lane'] and source.get('kind') == 'release'
+                                 and source.get('release') == policy['release']) else []
+    snapshot, kept, excluded = copy.deepcopy(common), [], []
+    for record in snapshot['entries']:
+        rule = next((rule for rule in rules if record['selection'] == rule['selection']), None)
+        if rule is None:
+            kept.append(record)
+        else:
+            excluded.append({'id': record['entry']['id'], 'selection': record['selection'],
+                             'reason': rule['reason'], 'release': policy['release'],
+                             'evidence_url': policy['evidence_url']})
+    snapshot['entries'] = kept
+    if snapshot.get('inventory') is not None:
+        snapshot['inventory']['entries'] = [record['entry'] for record in kept]
+    if not kept and excluded: raise ValueError('temporary CI exclusions leave the lane empty')
+    return snapshot, excluded
+
+
+def expected_entries(snapshot):
+    return [{'id': row['entry']['id'], 'selection': row['selection']} for row in snapshot['entries']]
+
+
 def plan(root, output, values, *, repo=REPO, freezer=None):
     root, output, repo = Path(root), Path(output), Path(repo)
     output.mkdir(parents=True, exist_ok=False)
     S, A, R, SDK = helper('selection-snapshot'), helper('actions-runtime'), helper('release-runtime'), helper('sdk-environment')
     selection = S.freeze(values['selection'], root / 'cache', repo)
     write(output / 'selection-snapshot.json', selection)
+    policy_path = repo / 'config/ci-model-exclusions.json'
+    policy = exclusion_policy(read(policy_path)) if policy_path.exists() else None
+    if policy is not None: write(output / 'ci-model-exclusions.json', policy)
     settings_path = repo / 'config/runtime.json'
     settings, _, _, _ = SDK.load_runtime(settings_path)
     modes = ['release-latest', 'actions-main'] if values['runtime_source'] == 'both' else [values['runtime_source']]
@@ -126,12 +176,21 @@ def plan(root, output, values, *, repo=REPO, freezer=None):
                 item['resolution_status'] = 'failed'
             name = 'runtime-selection-' + lane_id + '.json'; write(output / name, frozen)
             item.update(runtime_selection=name, runtime_selection_sha256=sha(output / name))
+        if policy is not None:
+            selected = frozen if mode != 'release' else {}
+            snapshot, excluded = lane_snapshot(selection, lane_id, selected, policy)
+            name = 'selection-snapshot-' + lane_id + '.json'; write(output / name, snapshot)
+            item.update(selection_snapshot=name, selection_snapshot_sha256=sha(output / name),
+                        expected_entries=expected_entries(snapshot), excluded_entries=excluded)
         lanes.append(item)
     document = {'schema_version': 1, 'selected_at': datetime.now(timezone.utc).isoformat(),
                 'inputs': values, 'selection_snapshot': 'selection-snapshot.json',
                 'selection_snapshot_sha256': sha(output / 'selection-snapshot.json'),
-                'expected_entries': [{'id': x['entry']['id'], 'selection': x['selection']} for x in selection['entries']],
+                'expected_entries': expected_entries(selection),
                 'lanes': lanes}
+    if policy is not None:
+        document.update(exclusion_policy='ci-model-exclusions.json',
+                        exclusion_policy_sha256=sha(output / 'ci-model-exclusions.json'))
     write(output / 'ci-plan.json', document)
     return document
 
@@ -141,11 +200,18 @@ def load_plan(path):
     if value.get('schema_version') != 1 or not isinstance(value.get('lanes'), list) or not value['lanes'] or len(value['lanes']) > 2:
         raise ValueError('invalid paired CI plan')
     references = {value['selection_snapshot']: value['selection_snapshot_sha256']}
+    if 'exclusion_policy' in value: references[value['exclusion_policy']] = value['exclusion_policy_sha256']
     ids = set()
     for lane in value['lanes']:
         if lane['id'] not in ('latest-release', 'latest-ci', 'pinned-release', 'ci-replay') or lane['id'] in ids:
             raise ValueError('invalid/duplicate lane identity')
         ids.add(lane['id'])
+        fields = ('selection_snapshot', 'selection_snapshot_sha256', 'expected_entries', 'excluded_entries')
+        if ('exclusion_policy' in value) != all(field in lane for field in fields) or (
+                'exclusion_policy' not in value and any(field in lane for field in fields)):
+            raise ValueError('lane selection requires a frozen exclusion policy')
+        if 'exclusion_policy' in value:
+            references[lane['selection_snapshot']] = lane['selection_snapshot_sha256']
         if 'runtime_selection' in lane: references[lane['runtime_selection']] = lane['runtime_selection_sha256']
         else:
             references[lane['runtime_config']] = lane['runtime_config_sha256']
@@ -153,8 +219,16 @@ def load_plan(path):
     for name, expected in references.items():
         if sha(contained(path.parent, name)) != expected: raise ValueError('frozen plan input digest changed: ' + name)
     snapshot = read(contained(path.parent, value['selection_snapshot']))
-    expected = [{'id': x['entry']['id'], 'selection': x['selection']} for x in snapshot['entries']]
+    expected = expected_entries(snapshot)
     if value['expected_entries'] != expected: raise ValueError('plan denominator differs from frozen selection')
+    if 'exclusion_policy' in value:
+        policy = exclusion_policy(read(contained(path.parent, value['exclusion_policy'])))
+        for lane in value['lanes']:
+            runtime = read(contained(path.parent, lane['runtime_selection'])) if 'runtime_selection' in lane else {}
+            selected, excluded = lane_snapshot(snapshot, lane['id'], runtime, policy)
+            if (read(contained(path.parent, lane['selection_snapshot'])) != selected
+                    or lane['expected_entries'] != expected_entries(selected) or lane['excluded_entries'] != excluded):
+                raise ValueError('lane selection or exclusions differ from frozen policy')
     return value
 
 
@@ -162,12 +236,15 @@ def initialize(plan_path, lane_id, output, previous_safe=True):
     document = load_plan(plan_path); lane = next(x for x in document['lanes'] if x['id'] == lane_id)
     output = Path(output); output.mkdir(parents=True, exist_ok=False)
     values = document['inputs']
+    enabled = lane.get('expected_entries', document['expected_entries'])
+    excluded = lane.get('excluded_entries', [])
     workflow = {'schema_version': 1, 'lane_id': lane_id, 'plan_sha256': sha(plan_path)}
     for key, env in {'repository':'GITHUB_REPOSITORY','run_id':'GITHUB_RUN_ID','run_attempt':'GITHUB_RUN_ATTEMPT','ref':'GITHUB_REF','sha':'GITHUB_SHA','runner':'RUNNER_NAME'}.items():
         if os.environ.get(env): workflow[key] = os.environ[env]
     if workflow.get('repository') and workflow.get('run_id'):
         workflow['run_url'] = 'https://github.com/' + workflow['repository'] + '/actions/runs/' + workflow['run_id']
     workflow['normalized_inputs'] = {**values, 'runtime_source': lane['runtime_source']}
+    workflow['model_selection'] = {'enabled': len(enabled), 'excluded_entries': excluded}
     workflow['event_name'] = os.environ.get('GITHUB_EVENT_NAME', 'workflow_dispatch')
     workflow['observed_at'] = datetime.now(timezone.utc).isoformat()
     workflow['observed_time_source'] = 'runner initialization clock'
@@ -176,14 +253,15 @@ def initialize(plan_path, lane_id, output, previous_safe=True):
     write(output / 'workflow.json', workflow); write(output / 'ci-plan.json', document)
     selected = read(contained(Path(plan_path).parent, lane['runtime_selection'])) if 'runtime_selection' in lane else read(contained(Path(plan_path).parent, lane['runtime_config']))
     write(output / 'lane-selection.json', {'schema_version':1, 'lane_id':lane_id, 'selection':selected,
-                                         'selection_snapshot_sha256':document['selection_snapshot_sha256']})
+                                         'selection_snapshot_sha256':lane.get('selection_snapshot_sha256', document['selection_snapshot_sha256']),
+                                         'expected_entries': enabled, 'excluded_entries': excluded})
     write(output / 'worker-state.json', {'schema_version':1, 'lane_id':lane_id, 'run_invoked':False, 'blocked':not previous_safe})
     if not previous_safe:
         reason = 'Previous lane GPU cleanup was not confirmed; no second GPU server started.'
         models = [{'id':e['id'], 'selection':e['selection'], 'status':'not_run', 'reason':reason,
-                   'preparation':{'status':'not_run','reason':reason}, 'cycles':[], 'evidence':[]} for e in document['expected_entries']]
+                   'preparation':{'status':'not_run','reason':reason}, 'cycles':[], 'evidence':[]} for e in enabled]
         raw = {'schema_version':1,'attempt_id':output.name,'mode':'real','status':'failed','reason':reason,
-               'source':{'commit':workflow.get('sha')},'runtime':{},'hardware':{},'expected_entries':document['expected_entries'],
+               'source':{'commit':workflow.get('sha')},'runtime':{},'hardware':{},'expected_entries':enabled,
                'models':models,'server':{k:{'status':'not_run','elapsed_seconds':None,'reason':reason} for k in ('start','shutdown','cleanup')},'evidence':[]}
         write(output / 'results/suite-result.json',raw)
     return {'E2E_OUTPUT':str(output),'MODEL_SELECTION':values['selection'],'DEVICE_URI':values['device_uri'],
@@ -217,10 +295,12 @@ def finish(attempt, stages, report_url=None, failure_url=None):
     safe, reason = cleanup_safe(attempt, stages)
     raw_path = attempt / 'results/suite-result.json'
     raw = read(raw_path) if raw_path.exists() else {}
+    selection = read(attempt / 'lane-selection.json')
     counts = raw.get('counts')
     if not counts:
         models = raw.get('models', []); counts = {s:sum(m.get('status')==s for m in models) for s in ('passed','failed','not_run')}
-        counts['expected'] = len(raw.get('expected_entries', []))
+        counts['expected'] = len(selection['expected_entries'])
+        if not raw: counts['not_run'] = counts['expected']
     required = ('prepare','run','cleanup','report','collect','package','upload','summary')
     passed = not state['blocked'] and raw.get('status') == 'passed' and all(stages.get(k)=='success' for k in required)
     def url(value): return value if isinstance(value,str) and re.fullmatch(r'https://[A-Za-z0-9./_%?=&:+~-]+',value) else None
@@ -228,6 +308,11 @@ def finish(attempt, stages, report_url=None, failure_url=None):
              'cleanup_safe':safe,'cleanup_reason':reason,'counts':counts,'runtime':raw.get('runtime',{}),
              'stages':stages,'report_url':url(report_url),'failure_url':url(failure_url),
              'workflow':read(attempt/'workflow.json'),'selected_runtime':read(attempt/'lane-selection.json')}
+    value['excluded_entries'] = selection.get('excluded_entries', [])
+    observed = [{'id': entry.get('id'), 'selection': entry.get('selection')}
+                for entry in raw.get('expected_entries', [])]
+    if raw and observed != selection.get('expected_entries'):
+        value.update(status='failed', reason='execution denominator differs from the frozen lane selection')
     if stages.get('upload')=='success' and not value['report_url']: value['status']='failed'
     write(attempt/'lane-result.json',value)
     return value
@@ -243,15 +328,21 @@ def aggregate(plan_path, results_root, output):
         if row.get('status') not in ('passed','failed','blocked') or type(row.get('cleanup_safe')) is not bool:
             raise ValueError('invalid lane outcome')
         if any(type(n) is not int or n < 0 for n in row.get('counts',{}).values()): raise ValueError('invalid lane counts')
+        lane = next(lane for lane in plan['lanes'] if lane['id'] == identity)
+        if 'expected_entries' in lane:
+            if row.get('excluded_entries') != lane['excluded_entries']:
+                raise ValueError('lane result exclusions differ from frozen plan')
+            if row.get('counts', {}).get('expected') != len(lane['expected_entries']):
+                raise ValueError('lane result denominator differs from frozen plan')
         if row.get('report_url') and not re.fullmatch(r'https://[A-Za-z0-9./_%?=&:+~-]+',row['report_url']): raise ValueError('invalid report URL')
         rows[identity]=row
     ordered=[]
     for lane in plan['lanes']:
-        ordered.append(rows.get(lane['id'],{'lane_id':lane['id'],'status':'not_run','counts':{'expected':len(plan['expected_entries'])},'cleanup_safe':False,'cleanup_reason':'No lane result artifact was retained'}))
+        ordered.append(rows.get(lane['id'],{'lane_id':lane['id'],'status':'not_run','counts':{'expected':len(lane.get('expected_entries', plan['expected_entries']))},'excluded_entries':lane.get('excluded_entries', []),'cleanup_safe':False,'cleanup_reason':'No lane result artifact was retained'}))
     passed=all(x['status']=='passed' and x.get('cleanup_safe') for x in ordered)
     value={'schema_version':1,'status':'passed' if passed else 'failed','plan_sha256':sha(plan_path),'selected_at':plan['selected_at'],'lanes':ordered}
     write(output/'paired-result.json',value)
-    lines=['# Release and CI model verification','',f"Overall: **{value['status']}**. Runtime selections frozen at {plan['selected_at']}.",'','| Lane | SDK version / source | Result | Passed | Failed | Not run | Cleanup | Report |','| --- | --- | --- | ---: | ---: | ---: | --- | --- |']
+    lines=['# Release and CI model verification','',f"Overall: **{value['status']}**. Runtime selections frozen at {plan['selected_at']}.",'','| Lane | SDK version / source | Result | Enabled | Excluded | Passed | Failed | Not run | Cleanup | Report |','| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |']
     for row in ordered:
         c=row.get('counts',{});link='[Download report]('+row['report_url']+')' if row.get('report_url') else 'Unavailable'
         selected = row.get('selected_runtime',{}).get('selection',{})
@@ -259,7 +350,16 @@ def aggregate(plan_path, results_root, output):
         identity = row.get('runtime',{}).get('sdk_identity',{}).get('version') or row.get('runtime',{}).get('resolved_runtime',{}).get('wheel',{}).get('version') or source.get('version') or source.get('release') or source.get('release_tag') or source.get('tag') or source.get('tested_sha') or source.get('commit') or source.get('run_id') or 'Unresolved'
         provenance = ' '.join(str(source[key]) for key in ('tested_sha','run_id','run_attempt','artifact_id') if source.get(key) is not None)
         identity = (str(identity) + (' / ' + provenance if provenance else '')).replace('|','&#124;').replace('\n',' ')
-        lines.append(f"| {row['lane_id']} | {identity} | {row['status']} | {c.get('passed',0)} | {c.get('failed',0)} | {c.get('not_run',0)} | {'confirmed' if row.get('cleanup_safe') else 'unconfirmed'} | {link} |")
+        lines.append(f"| {row['lane_id']} | {identity} | {row['status']} | {c.get('expected',0)} | {len(row.get('excluded_entries',[]))} | {c.get('passed',0)} | {c.get('failed',0)} | {c.get('not_run',0)} | {'confirmed' if row.get('cleanup_safe') else 'unconfirmed'} | {link} |")
+    excluded = [(row['lane_id'], entry) for row in ordered for entry in row.get('excluded_entries', [])]
+    if excluded:
+        lines += ['', '## Temporary exclusions', '', 'Excluded entries were not prepared or executed and are not counted as passes.', '',
+                  '| Lane | Pipeline | Release | Reason | Evidence |', '| --- | --- | --- | --- | --- |']
+        def cell(text): return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('|', '&#124;').replace('\r', ' ').replace('\n', ' ')
+        for lane, entry in excluded:
+            selected = entry['selection']
+            label = selected['repository'] + '@' + selected['publication_revision'][:12] + ' / ' + selected['variant']
+            lines.append(f"| {lane} | {cell(label)} | {entry['release']} | {cell(entry['reason'])} | [Source run]({entry['evidence_url']}) |")
     (output/'summary.md').write_text('\n'.join(lines)+'\n')
     return value
 
@@ -280,7 +380,7 @@ def main():
         outputs(args.github_env,initialize(args.plan,args.lane,args.output,args.previous_safe=='true'));return 0
     if args.command=='prepare-args':
         value=load_plan(args.plan);lane=next(x for x in value['lanes'] if x['id']==args.lane);base=args.plan.parent
-        values=['--selection-snapshot',str(contained(base,value['selection_snapshot']))]
+        values=['--selection-snapshot',str(contained(base,lane.get('selection_snapshot',value['selection_snapshot'])))]
         if 'runtime_selection' in lane:values+=['--runtime-selection',str(contained(base,lane['runtime_selection']))]
         else:values+=['--runtime',str(contained(base,lane['runtime_config'])),'--runtime-source','release']
         for value in values:sys.stdout.buffer.write(value.encode()+b'\0')

@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "lane": "latest-release",
+  "release": "v0.1.0",
+  "evidence_url": "https://github.com/rsuderman/hrx-systems-test/actions/runs/43326545175/attempts/2",
+  "entries": [
+    {
+      "selection": {
+        "repository": "loom-fun/unsloth-flint-loom",
+        "publication_revision": "3056984db80b3904d341c4038913be5d1e0965b6",
+        "model_id": "unsloth/flint-GGUF",
+        "preset": "chat",
+        "variant": "q8_0",
+        "programs": "source"
+      },
+      "reason": "Text service ABI mismatch: v0.1.0 host expects 11 arguments, published source declares 10."
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/unsloth-Qwen3-Coder-30B-A3B-Instruct-loom",
+        "publication_revision": "d663de1e24f986456f6e668475da5d1b31fa9a12",
+        "model_id": "Qwen3-Coder-30B-A3B-Instruct",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "reason": "Text service ABI mismatch: v0.1.0 host expects 11 arguments, published source declares 10."
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/openbmb-MiniCPM-V-4.7-35B-A3B-loom",
+        "publication_revision": "d2183a71a44a0defe94f53823c674b7be343843d",
+        "model_id": "minicpm-v-4.7-35b-a3b",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "reason": "Text service ABI mismatch: v0.1.0 host expects 11 arguments, published source declares 10."
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/LiquidAI-LFM3-Audio-2B-loom",
+        "publication_revision": "2e04065815f5184c8c1d64eab19fe7a036aaf607",
+        "model_id": "LFM3-Audio-2B",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "reason": "Text service ABI mismatch: v0.1.0 host expects 11 arguments, published source declares 10."
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/openbmb-MiniCPM-OCR-1.0-loom",
+        "publication_revision": "303ca82ba438568fabcfdad6cdcbb35506daf4f2",
+        "model_id": "minicpm-ocr-1.0",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "reason": "v0.1.0 compilation rejects the published GDN convolution index.assume range."
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/unsloth-Qwen3.6-35B-A3B-loom",
+        "publication_revision": "cc069cc42f7864126c2dd49325468b6464b296f7",
+        "model_id": "Qwen3.6-35B-A3B",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "reason": "Text service ABI mismatch: v0.1.0 host expects 11 arguments, published source declares 10."
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/unsloth-Qwen3.8-27B-loom",
+        "publication_revision": "2ade9e68feb42a115ad1ecea775a0b90ba717225",
+        "model_id": "qwen3.8-27b",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "reason": "v0.1.0 compilation rejects the published GDN convolution index.assume range."
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/ggml-org-Qwen3-14B-loom",
+        "publication_revision": "4b7f80710c54cb1b282e0b1c6cdb43b74a00a238",
+        "model_id": "Qwen/Qwen3-14B",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "reason": "v0.1.0 response did not satisfy the configured exact-text assertion."
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/bartowski-MiniCPM-V-4.7-35B-A3B-loom",
+        "publication_revision": "03376cecc872b32ebe95c90b7044fe362768502a",
+        "model_id": "openbmb/MiniCPM-V-4.7-35B-A3B",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "reason": "v0.1.0 response did not satisfy the configured exact-text assertion."
+    }
+  ]
+}

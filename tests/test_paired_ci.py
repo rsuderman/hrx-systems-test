@@ -88,4 +88,157 @@ class PairedTests(unittest.TestCase):
         self.assertIn('cancel-in-progress: false',outer);self.assertNotIn('concurrency:',worker)
         self.assertIn("env.BLOCKED != 'true'",worker);self.assertIn('LANE_UPLOAD',worker)
 
+class TemporaryExclusionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name); self.repo = self.root / 'repo'
+        (self.repo / 'config').mkdir(parents=True)
+        for name in ('runtime.json', 'sdk-requirements.lock.json', 'ci-model-exclusions.json'):
+            (self.repo / 'config' / name).write_bytes((ROOT / 'config' / name).read_bytes())
+        self.policy = M.read(self.repo / 'config/ci-model-exclusions.json')
+        self.assertEqual(len(self.policy['entries']), 9)
+        self.selections = [entry['selection'] for entry in self.policy['entries']]
+        self.selections += [{'repository': 'loom-fun/example', 'publication_revision': 'a'*40,
+                             'model_id': 'enabled-' + str(n), 'preset': 'chat', 'variant': 'gguf',
+                             'programs': 'source'} for n in range(51)]
+        for n, selection in enumerate(self.selections):
+            directory = self.root / 'cache/models' / str(n); directory.mkdir(parents=True)
+            M.write(directory / 'seed-manifest.json', {
+                'schema_version': 1, 'selection': selection, 'card_sha256': 'b'*64, 'lock_sha256': 'c'*64,
+                'files': [{'installation_path': 'parameter/model.gguf', 'cache_root': 'loom-assets',
+                           'cache_path': 'blob/' + 'd'*64, 'verified': True, 'roles': ['parameter'],
+                           'origin': '@checkpoint/model.gguf', 'resolved': None, 'size': 4, 'sha256': 'd'*64}]})
+        self.release = 'v0.1.0'
+        self.stages = {key: 'success' for key in ('prepare','run','cleanup','report','collect','package','upload','summary')}
+
+    def make_plan(self, name='plan', runtime_source='both', fail_release=False):
+        def freezer(selector):
+            if selector['kind'] == 'release_latest':
+                if fail_release: raise ValueError('release metadata unavailable')
+                return {'schema_version': 1, 'source': {'kind': 'release', 'release': self.release}}
+            return {'schema_version': 1, 'source': {'kind': 'github_actions', 'tested_sha': 'e'*40}}
+        values = M.normalize('workflow_dispatch', {'runtime_source': runtime_source})
+        path = self.root / name / 'ci-plan.json'
+        M.plan(self.root, path.parent, values, repo=self.repo, freezer=freezer)
+        return path, M.load_plan(path)
+
+    def result(self, plan, lane, *, safe=True, missing=False, stages=None):
+        out = self.root / ('worker-' + lane)
+        M.initialize(plan, lane, out, safe)
+        if safe and not missing:
+            enabled = M.read(out / 'lane-selection.json')['expected_entries']
+            suite = {'attempt_id': 'metadata-test', 'entries': [dict(e, preparation={'status': 'ready', 'reason': None},
+                     smoke_expected_text='4') for e in enabled]}
+            raw = M.helper('run-prepared-models').initial_results(suite, {})
+            raw['status'] = 'passed'
+            for model in raw['models']: model['status'] = 'passed'
+            M.write(out / 'results/suite-result.json', raw)
+        return out, M.finish(out, stages or self.stages, 'https://github.com/a/b/actions/artifacts/123')
+
+    def test_exact_nine_release_exclusions_and_preparation_snapshots(self):
+        path, plan = self.make_plan()
+        self.assertEqual(len(plan['expected_entries']), 60)
+        release, ci = plan['lanes']
+        self.assertEqual([len(row['expected_entries']) for row in plan['lanes']], [51, 60])
+        self.assertEqual([len(row['excluded_entries']) for row in plan['lanes']], [9, 0])
+        self.assertEqual({row['selection']['repository'] for row in release['excluded_entries']},
+                         {row['selection']['repository'] for row in self.policy['entries']})
+        snapshot_module = M.helper('selection-snapshot')
+        for lane in (release, ci):
+            # Exercise the actual CLI argument boundary consumed by the worker.
+            import subprocess, sys
+            command = subprocess.check_output([sys.executable, '-I', str(ROOT / 'scripts/paired-ci.py'),
+                'prepare-args', '--plan', str(path), '--lane', lane['id']]).split(b'\0')
+            snapshot = Path(command[1].decode())
+            self.assertEqual(snapshot.name, lane['selection_snapshot'])
+            _, inventory, candidates = snapshot_module.load(snapshot, self.root / 'cache', self.repo)
+            self.assertEqual(len(candidates), len(lane['expected_entries']))
+            self.assertEqual(len(inventory['entries']), len(candidates))
+
+    def test_new_release_pinned_release_and_replay_remain_enabled(self):
+        self.release = 'v0.2.0'
+        _, plan = self.make_plan('new-release')
+        self.assertEqual([len(row['expected_entries']) for row in plan['lanes']], [60, 60])
+        _, pinned = self.make_plan('pinned', 'release')
+        self.assertEqual(pinned['lanes'][0]['excluded_entries'], [])
+        common = M.read(self.root / 'new-release/selection-snapshot.json')
+        for lane in ('latest-ci', 'ci-replay', 'pinned-release'):
+            selected, excluded = M.lane_snapshot(common, lane, {'source': {'kind': 'release', 'release': 'v0.1.0'}}, self.policy)
+            self.assertEqual(len(selected['entries']), 60); self.assertEqual(excluded, [])
+        changed = copy.deepcopy(common)
+        changed['entries'][0]['selection']['publication_revision'] = 'f'*40
+        _, excluded = M.lane_snapshot(changed, 'latest-release', {'source': {'kind': 'release', 'release': 'v0.1.0'}}, self.policy)
+        self.assertEqual(len(excluded), 8)
+
+    def test_resolution_failure_does_not_activate_exclusions(self):
+        _, plan = self.make_plan(fail_release=True)
+        self.assertEqual(plan['lanes'][0]['resolution_status'], 'failed')
+        self.assertEqual(len(plan['lanes'][0]['expected_entries']), 60)
+        self.assertEqual(plan['lanes'][0]['excluded_entries'], [])
+
+    def test_frozen_policy_subset_and_metadata_tampering_are_rejected(self):
+        path, plan = self.make_plan()
+        lane = plan['lanes'][0]; snapshot = path.parent / lane['selection_snapshot']
+        original = snapshot.read_bytes(); changed = M.read(snapshot); changed['entries'].pop()
+        M.write(snapshot, changed)
+        with self.assertRaisesRegex(ValueError, 'digest'): M.load_plan(path)
+        lane['selection_snapshot_sha256'] = M.sha(snapshot); M.write(path, plan)
+        with self.assertRaisesRegex(ValueError, 'frozen policy'): M.load_plan(path)
+        snapshot.write_bytes(original); lane['selection_snapshot_sha256'] = M.sha(snapshot)
+        lane['excluded_entries'][0]['reason'] = 'tampered'; M.write(path, plan)
+        with self.assertRaisesRegex(ValueError, 'frozen policy'): M.load_plan(path)
+        path, plan = self.make_plan('policy-tamper')
+        M.write(path.parent / plan['exclusion_policy'], {})
+        with self.assertRaisesRegex(ValueError, 'digest'): M.load_plan(path)
+        path, plan = self.make_plan('repo-tamper')
+        (self.repo / 'config/ci-model-exclusions.json').write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'configuration changed'):
+            M.helper('selection-snapshot').load(path.parent / plan['lanes'][0]['selection_snapshot'], self.root / 'cache', self.repo)
+
+    def test_blocked_and_missing_execution_keep_only_enabled_denominator(self):
+        path, _ = self.make_plan()
+        out, row = self.result(path, 'latest-release', safe=False)
+        self.assertEqual(row['status'], 'blocked'); self.assertEqual(row['counts'], {'passed': 0, 'failed': 0, 'not_run': 51, 'expected': 51})
+        self.assertEqual(len(row['excluded_entries']), 9)
+        raw = M.read(out / 'results/suite-result.json')
+        self.assertEqual(len(raw['models']), 51)
+        out, row = self.result(path, 'latest-ci', missing=True)
+        self.assertEqual(row['status'], 'failed'); self.assertEqual(row['counts']['expected'], 60)
+        self.assertEqual(row['counts']['not_run'], 60); self.assertEqual(row['excluded_entries'], [])
+
+    def test_results_and_summary_separate_enabled_excluded_and_passed(self):
+        path, plan = self.make_plan()
+        _, release = self.result(path, 'latest-release')
+        _, ci = self.result(path, 'latest-ci')
+        self.assertEqual(release['counts']['passed'], 51); self.assertEqual(ci['counts']['passed'], 60)
+        result = M.aggregate(path, self.root, self.root / 'comparison')
+        self.assertEqual(result['status'], 'passed')
+        summary = (self.root / 'comparison/summary.md').read_text()
+        self.assertIn('| Enabled | Excluded |', summary)
+        self.assertIn('| passed | 51 | 9 | 51 |', summary)
+        self.assertIn('| passed | 60 | 0 | 60 |', summary)
+        self.assertIn('not counted as passes', summary)
+        for entry in self.policy['entries']: self.assertIn(entry['reason'], summary)
+        release['excluded_entries'] = []
+        M.write(self.root / 'worker-latest-release/lane-result.json', release)
+        with self.assertRaisesRegex(ValueError, 'exclusions'): M.aggregate(path, self.root, self.root / 'comparison')
+
+    def test_exclusions_do_not_hide_stage_or_execution_failures(self):
+        path, _ = self.make_plan()
+        out, row = self.result(path, 'latest-release', stages={**self.stages, 'prepare': 'failure'})
+        self.assertEqual(row['status'], 'failed'); self.assertEqual(row['counts']['expected'], 51)
+        row = M.finish(out, {**self.stages, 'cleanup': 'failure'}, 'https://github.com/a/b/actions/artifacts/123')
+        self.assertEqual(row['status'], 'failed'); self.assertFalse(row['cleanup_safe'])
+        raw = M.read(out / 'results/suite-result.json'); raw['expected_entries'].pop()
+        M.write(out / 'results/suite-result.json', raw)
+        row = M.finish(out, self.stages, 'https://github.com/a/b/actions/artifacts/123')
+        self.assertEqual(row['status'], 'failed'); self.assertIn('denominator', row['reason'])
+
+    def test_policy_rejects_broad_duplicate_and_unexplained_rules(self):
+        for field, value in [('selection', {'model_id': 'qwen*'}), ('reason', '')]:
+            policy = copy.deepcopy(self.policy); policy['entries'][0][field] = value
+            with self.assertRaises(ValueError): M.exclusion_policy(policy)
+        policy = copy.deepcopy(self.policy); policy['entries'].append(policy['entries'][0])
+        with self.assertRaisesRegex(ValueError, 'duplicate'): M.exclusion_policy(policy)
+
 if __name__=='__main__':unittest.main()
