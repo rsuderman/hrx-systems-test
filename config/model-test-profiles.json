@@ -389,6 +389,52 @@
         "stream": false
       },
       "smoke_expected_text": "4"
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/ggml-org-Qwen3-14B-loom",
+        "publication_revision": "17207bf1c898e0996b4bdcdf2a685f95fd42b511",
+        "model_id": "Qwen/Qwen3-14B",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "smoke_expected_text": "4",
+      "smoke_request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is two plus two? Reply with the digit only."
+          }
+        ],
+        "max_tokens": 256,
+        "temperature": 0,
+        "stream": false,
+        "reasoning_effort": "none"
+      }
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/bartowski-MiniCPM-V-4.7-35B-A3B-loom",
+        "publication_revision": "0b87ba7fb6fb8cebfc378a148696d4f586c1ff12",
+        "model_id": "openbmb/MiniCPM-V-4.7-35B-A3B",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "smoke_expected_text": "4",
+      "smoke_request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is two plus two? Reply with the digit only."
+          }
+        ],
+        "max_tokens": 256,
+        "temperature": 0,
+        "stream": false,
+        "reasoning_effort": "none"
+      }
     }
   ]
 }

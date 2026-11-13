@@ -268,7 +268,7 @@
     },
     {
       "model_repository": "loom-fun/ggml-org-Qwen3-14B-loom",
-      "publication_revision": "4b7f80710c54cb1b282e0b1c6cdb43b74a00a238",
+      "publication_revision": "17207bf1c898e0996b4bdcdf2a685f95fd42b511",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3-14B",

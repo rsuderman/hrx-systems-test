@@ -78,6 +78,41 @@ class RuntimePolicyTests(unittest.TestCase):
                 self.assertEqual(POLICY.request_profile(policy, other, base, '4')['smoke_request'], base)
         self.assertEqual(base, original)
 
+    def test_new_release_profiles_survive_frozen_policy_and_both_runtime_lanes(self):
+        from types import SimpleNamespace
+        from hrx_systems.selection import configuration as CONFIG, inventory as INV
+        targets = [
+            ('loom-fun/ggml-org-Qwen3-14B-loom', 'Qwen/Qwen3-14B',
+             '17207bf1c898e0996b4bdcdf2a685f95fd42b511'),
+            ('loom-fun/bartowski-MiniCPM-V-4.7-35B-A3B-loom', 'openbmb/MiniCPM-V-4.7-35B-A3B',
+             '0b87ba7fb6fb8cebfc378a148696d4f586c1ff12')]
+        defaults = CONFIG.profiles()['defaults']['text']
+        selected = SimpleNamespace(service={'kind': 'text'}, settings={'execution': {'rows': 4}})
+        for repository, model, revision in targets:
+            identity = dict(repository=repository, model_id=model, publication_revision=revision,
+                            preset='chat', variant='gguf', programs='source')
+            with self.subTest(model=model):
+                authored = CONFIG.override_for(identity)
+                self.assertIsNotNone(authored)
+                self.assertEqual(authored, {**defaults,
+                    'smoke_request': {**defaults['smoke_request'], 'reasoning_effort': 'none'}})
+                self.assertEqual(authored['smoke_request']['max_tokens'], 256)
+                frozen = INV.freeze_test_policy(ROOT, identity)
+                with patch.object(INV, 'profile_document', side_effect=AssertionError('live config read')):
+                    workload = INV.workload(frozen, selected)
+                self.assertEqual(workload['smoke_request'], authored['smoke_request'])
+                for version, origin in [('0.1.0', 'release'), ('0.2.0.dev0', 'github_actions')]:
+                    policy = resolve(snapshot(version, origin))
+                    effective = POLICY.request_profile(policy, identity, workload['smoke_request'],
+                                                       workload['smoke_expected_text'])
+                    self.assertEqual(effective['smoke_request'], authored['smoke_request'])
+                    self.assertEqual(effective['smoke_expected_text'], '4')
+                for field in INV.FIELDS:
+                    other = {**identity, field: identity[field] + '-different'}
+                    self.assertIsNone(CONFIG.override_for(other))
+                    self.assertIsNone(INV.freeze_test_policy(ROOT, other)['test_override'])
+        self.assertNotIn('reasoning_effort', defaults['smoke_request'])
+
     def historical_config(self):
         config = json.loads((ROOT / POLICY.CONFIG_PATH).read_text())
         unique = {}

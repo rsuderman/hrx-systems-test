@@ -23,3 +23,29 @@ an explicit `reasoning_effort: none` request. That request profile is separate
 runtime-qualified configuration: this source command does not inject it. Qwen3
 14B and the newer MiniCPM publication also need their qualified request profiles
 for the recorded numeric smoke test, using existing source support.
+
+
+## Base profiles for supported release publications
+
+The exact newer publications below already implement root `reasoning_effort:
+none` on release v0.1.0. Their numeric smoke request selects that field in
+`config/model-test-profiles.json`, so both runtime lanes receive it before any
+0.2 runtime-policy override. The prompt, temperature0, max_tokens256 and exact
+final-answer assertion4 remain unchanged.
+
+| Publication | Model | Revision |
+| --- | --- | --- |
+| `loom-fun/ggml-org-Qwen3-14B-loom` | `Qwen/Qwen3-14B` | `17207bf1c898e0996b4bdcdf2a685f95fd42b511` |
+| `loom-fun/bartowski-MiniCPM-V-4.7-35B-A3B-loom` | `openbmb/MiniCPM-V-4.7-35B-A3B` | `0b87ba7fb6fb8cebfc378a148696d4f586c1ff12` |
+
+An unchanged release request reproduces two distinct failures: Qwen spends all
+256 completion tokens in reasoning; MiniCPM stops after two tokens with reasoning
+`4` and empty final content. Selecting none returns final `4` with normal stop and
+two completion tokens. This is an explicit smoke-request contract, not a repair of
+default thinking or permission to treat reasoning as a final answer.
+
+Qwen's catalog pin advances to the revision above. MiniCPM exceeds the catalog's
+20GB limit and stays outside that catalog; its exact base-profile selection and
+host-owned seed alias identify the revision. Historical profiles and release
+exclusions remain tied to their older exact revisions. This change neither
+applies a pipeline rewrite to v0.1.0 nor changes runtime memory/security settings.
