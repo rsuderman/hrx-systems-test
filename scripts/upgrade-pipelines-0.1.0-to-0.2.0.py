@@ -205,6 +205,10 @@ func.def @fixup_checked_offset(%buf: buffer, %position: offset, %width: offset) 
 
 def masked_line(line, in_block):
     """Hide comments and strings, retaining columns for precise token edits."""
+    # Ordinary code cannot open a comment or string without these delimiters.
+    # An existing block comment still needs masking, even on a plain line.
+    if not in_block and '/' not in line and '"' not in line:
+        return line, False
     chars = list(line)
     i = 0
     while i < len(line):

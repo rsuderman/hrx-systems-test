@@ -20,6 +20,42 @@ spec.loader.exec_module(fixup)
 
 
 class FixupTests(unittest.TestCase):
+    def test_masked_line_preserves_columns_and_comment_state(self):
+        cases = [
+            ('', False, '', False),
+            ('  %value = scalar.constant 1 : i32\n', False,
+             '  %value = scalar.constant 1 : i32\n', False),
+            ('plain text\n', True, ' ' * len('plain text\n'), True),
+            ('%ratio = scalar.divf %a, %b : f32 / 2\n', False,
+             '%ratio = scalar.divf %a, %b : f32 / 2\n', False),
+            ('before /* hidden', False, 'before ' + ' ' * len('/* hidden'), True),
+            ('hidden */ after', True, ' ' * len('hidden */') + ' after', False),
+            ('code // hidden\n', False, 'code ' + ' ' * len('// hidden\n'), False),
+        ]
+        quoted = '"escaped \\\" quote /* not a comment */"'
+        cases.append(('prefix ' + quoted + ' suffix', False,
+                      'prefix ' + ' ' * len(quoted) + ' suffix', False))
+        for line, in_block, expected, next_block in cases:
+            with self.subTest(line=line, in_block=in_block):
+                self.assertEqual(fixup.masked_line(line, in_block), (expected, next_block))
+
+    def test_migration_crosses_plain_lines_inside_block_comments(self):
+        source = ('/* comment begins\n'
+                  'command.program.unknown @hidden()\n'
+                  '%hidden = vector.constant invalid : vector<4xi32>\n'
+                  '*/ command.program.launch @child()\n'
+                  '%value = vector.constant 7 : vector<4xi32>\n'
+                  '"escaped \\\" command.program.unknown vector.constant"\n')
+        expected = source.replace('*/ command.program.launch', '*/ command.launch').replace(
+            '%value = vector.constant', '%value = vector.splati')
+        result, edits = fixup.migrate_program(source)
+        self.assertEqual(result, expected)
+        self.assertEqual([(edit['line'], edit['kind']) for edit in edits],
+                         [(4, 'command_operation'), (5, 'vector_literal')])
+        self.assertEqual(fixup.migrate_program(result), (result, []))
+        with self.assertRaisesRegex(ValueError, 'source.loom:7: unsupported command'):
+            fixup.migrate_program(source + 'command.program.unknown @visible()\n', 'source.loom')
+
     def test_legacy_minicpm_honors_explicit_no_reasoning_request(self):
         text = (FIXTURES / 'legacy-minicpm-reasoning.loom').read_text()
         result, edits = fixup.migrate_program(text)
