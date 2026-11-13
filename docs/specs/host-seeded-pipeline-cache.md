@@ -16,6 +16,12 @@ Commit/push/main integration and GitHub dispatch require separate delivery
 authorization. Model inference, sweeps, tuning and privileged host changes remain
 outside scope. Beads owns current status and dependencies.
 
+The cache implementation is now reviewed, committed as `1344d96`, and seeded for
+all 60 selections on this host. The user has continued managed local cleanup and
+CI evidence reconciliation with **no push**. Cleanup may use that accepted commit
+as its local baseline before remote deployment; it remains a separate change and
+must preserve the cache behavior. Its isolated worktree is `script-responsibilities`.
+
 ## Existing behavior and boundaries
 
 `scripts/prepare-cached-models.py` currently downloads publication card/lock files
@@ -214,7 +220,7 @@ GitHub metadata response caching and automatic refresh jobs are excluded.
 | `hst-d8f.1` | Explicit seeding, verified storage and atomic manifests | None |
 | `hst-d8f.2` | Read-only consumption through public preparation and both lanes | `.1` |
 | `hst-d8f.3` | Focused integration evidence and operator documentation | `.2` |
-| `hst-gjs` | Separate script responsibilities after cache delivery | `hst-d8f` |
+| `hst-gjs` | Separate script responsibilities after local cache acceptance | `hst-d8f.2`, `hst-d8f.3`, accepted cache commit |
 
 Check a representative explicit cold seed and warm preparation, with native
 preparation on the applicable SDK paths. Prove zero pipeline network requests
@@ -242,15 +248,18 @@ full-inventory sweep, model-pass quota or universal memory-policy gate is requir
    Populate the deployment host cache explicitly before any new preparation
    consumer is activated; do not push a consumer requiring an unseeded host.
    Preserve the existing model denominator and scheduled/manual/public behavior.
-5. Only after cache delivery, start `hst-gjs` cleanup. It is not a prerequisite or
-   bundled hidden dependency of cache delivery.
+5. After local cache review, commit and verified host seeding, start `hst-gjs`
+   cleanup from the accepted cache commit. Remote push is not a prerequisite for
+   this reversible local work. Keep separate cache and cleanup commits; cleanup
+   is not a prerequisite or bundled hidden dependency of cache delivery. The
+   current no-push instruction remains in force.
 
 The native SDK seam must be checked during `.1`/`.2`; it is a bounded engineering
 check, not a reason to invent a new planning task or require model qualification.
 
 ## Subsequent script cleanup
 
-After cache delivery, refine the caller map below against that delivered source.
+After local cache acceptance, refine the caller map below against that accepted source.
 Use thin existing public script entrypoints and focused implementation modules.
 Suggested internal package root is `scripts/lib/hrx_systems/`; final file names
 may change, but the following responsibility boundaries are the contract:

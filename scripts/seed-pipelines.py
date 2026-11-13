@@ -14,10 +14,13 @@ import threading
 import uuid
 
 REPO=Path(__file__).resolve().parents[1]
+_SPEC = importlib.util.spec_from_file_location('hrx_bootstrap', Path(__file__).resolve().parent / '_bootstrap.py')
+BOOTSTRAP = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(BOOTSTRAP)
+
+
 def helper(name):
-    spec=importlib.util.spec_from_file_location(name.replace('-','_'),REPO/'scripts'/f'{name}.py')
-    module=importlib.util.module_from_spec(spec); sys.modules[spec.name]=module; spec.loader.exec_module(module)
-    return module
+    return BOOTSTRAP.load_public(name)
 CACHE=helper('pipeline-cache'); SEED=helper('seed-models'); CONFIG=helper('model-config'); INVENTORY=helper('cached-inventory')
 
 def selected(cache_root, suite=None, cached=False, runtime=None):

@@ -712,7 +712,7 @@ def run_host(args):
     result['started_at'] = host_started_at
     result['source']['execution_runner_sha256'] = digest(Path(__file__))
     result['source']['execution_helpers_sha256'] = {name: digest(SCRIPT_DIR / name) for name in
-        ('asset-verification.py', 'ci-progress.py', 'evidence-capture.py', 'failure-records.py', 'pipeline-preparation.py', 'runtime-policy.py', 'pipeline-cache.py')}
+        ('asset-verification.py', 'ci-progress.py', 'evidence-capture.py', 'failure-records.py', 'pipeline-preparation.py', 'runtime-policy.py', 'pipeline-cache.py', *PIPELINE.BOOTSTRAP.implementation_files())}
     if args.workflow:
         if args.workflow.stat().st_size > 16384:
             raise ValueError('workflow identity file exceeds its size limit')

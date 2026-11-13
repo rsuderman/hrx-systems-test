@@ -15,11 +15,13 @@ SCRIPTS = Path(__file__).resolve().parent
 MAX_REPORT_BYTES = 4 * 1024 * 1024
 
 
+_SPEC = importlib.util.spec_from_file_location('hrx_bootstrap', Path(__file__).resolve().parent / '_bootstrap.py')
+BOOTSTRAP = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(BOOTSTRAP)
+
+
 def helper(name):
-    spec = importlib.util.spec_from_file_location('pipeline_' + name.replace('-', '_'), SCRIPTS / (name + '.py'))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return BOOTSTRAP.load_public(name)
 
 
 def digest(path):

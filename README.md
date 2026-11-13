@@ -70,6 +70,8 @@ directory rather than reusing one from the separate-stage example.
 
 - [Legacy synthetic stage skeleton](docs/single-model-e2e.md): fixture-only
   orchestration checks; the staged commands above perform real execution.
+- [Script responsibilities](docs/script-responsibilities.md): public command callers,
+  internal implementation owners and source-provenance boundaries.
 - [Per-Bead specifications](docs/specs/basic-e2e.md#responsibilities):
   current task boundaries, data contracts and acceptance checks.
 - [First end-to-end epic](docs/acquisition-spike.md): manual seeding and cache
