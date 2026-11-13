@@ -38,7 +38,8 @@ or catalog/service framework.
   publication. No latest-build fallback, source build or implicit pin changes.
   Download SDK/dependencies per preparation attempt; no persistent SDK cache.
   Containers install fresh isolated venvs; do not share or relocate venvs.
-- Pipeline card/lock/programs are fetched fresh during preparation. Model weights,
+- Pipeline card/lock/programs are verified copies of explicitly host-seeded exact
+  publication inputs, with no network fallback. Model weights,
   tokenizer and declared companion assets are reused from native HF/Loom caches.
   Only manual seeding writes those caches. Preparation and execution mount model
   caches read-only, report misses and never repair or silently reseed.

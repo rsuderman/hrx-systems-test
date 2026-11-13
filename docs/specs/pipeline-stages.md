@@ -26,9 +26,10 @@ three public stages, preserves their exit statuses and prints final paths.
 Owner: `hst-utq.3`, reusing completed SDK bootstrap and seeding helpers.
 
 - Read/freeze the suite, baseline configs and seed manifests. Pull the pinned
-  container image and download/verify the selected SDK/dependencies and every
-  selected hosted pipeline into this attempt. Model assets are already seeded;
-  missing assets fail rather than trigger seeding.
+  container image and download/verify the selected SDK and dependencies into this
+  attempt. Model assets and original pipeline inputs are
+  explicitly host-seeded beforehand. Verify and stage exact pipeline cache copies;
+  misses fail with a reseed command and no download fallback.
 - Verify/assemble model trees with asset-cache mounts read-only in a
   network-disabled phase. Preserve selected preset/workload and source identities.
   No GPU/server/model registration is required for preparation.
@@ -118,7 +119,8 @@ A concrete fixture is maintained at
 It is explicitly fixture evidence, not real support. Expected entries carry
 `id`, `selection`, `test_kind` and baseline `expected_text`; phase timing is
 nullable `elapsed_seconds`. Optional `execution_contract` records observed
-`cache_read_only`, `pipeline_fresh` and `external_network`; omitted or unknown
+`cache_read_only`, `pipeline_source=host_seeded` and `external_network`; legacy
+`pipeline_fresh` remains readable for saved older runs. Omitted or unknown
 values must display unconfirmed rather than claim successful isolation.
 
 Every expected entry has exactly one model result, with repeated attempts stored

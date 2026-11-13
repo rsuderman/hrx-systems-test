@@ -302,3 +302,54 @@ def failed_selection(value):
     if len(json.dumps(value).encode()) > 8192:
         raise ValueError('frozen resolution failure exceeds evidence bound')
     return copy.deepcopy(value)
+
+
+def verify_pipeline_cache(prepared, entry, manifest, baseline, required=False):
+    """Validate captured original-cache proof against sealed prepared source only."""
+    proof = manifest.get('pipeline_cache')
+    if proof is None:
+        if required:
+            raise ValueError('host-seeded preparation lacks pipeline cache provenance')
+        return
+    if proof != entry.get('pipeline_cache') or proof != baseline.get('pipeline_cache'):
+        raise ValueError('pipeline cache provenance disagrees with frozen inputs')
+    if (proof.get('schema_version') != 1 or proof.get('pipeline_source') != 'host_seeded' or
+            proof.get('status') != 'hit' or any(proof.get(key) != 0 for key in
+            ('pipeline_network_requests', 'pipeline_downloaded_bytes', 'pipeline_cache_writes'))):
+        raise ValueError('invalid host-seeded pipeline source contract')
+    prefix = f"models/{entry['id']}/"
+    if (proof.get('manifest_path') != prefix + 'pipeline-cache-entry.json' or
+            proof.get('read_path') != prefix + 'pipeline-cache-read.json'):
+        raise ValueError('pipeline cache evidence paths changed')
+    cache_path, read_path = contained(prepared, proof['manifest_path']), contained(prepared, proof['read_path'])
+    if digest(cache_path) != proof['manifest_sha256'] or digest(read_path) != proof['read_sha256']:
+        raise ValueError('pipeline cache evidence changed')
+    recorded = read_json(read_path)
+    if recorded != {key: value for key, value in proof.items() if key != 'read_sha256'}:
+        raise ValueError('pipeline cache read receipt changed')
+    cache_helper = helper('pipeline-cache')
+    cached = cache_helper.validate_manifest(cache_path.read_bytes(), entry['selection'],
+                                            manifest['card_sha256'], manifest['lock_sha256'])
+    if proof.get('entry_key') != cache_helper.key_for(entry['selection'], manifest['card_sha256'], manifest['lock_sha256']):
+        raise ValueError('pipeline cache entry key changed')
+    if (cached.get('schema_version') != 1 or cached.get('selection') != entry['selection'] or
+            proof.get('requested_selection') != entry['selection']):
+        raise ValueError('pipeline cache requested selection changed')
+    for key, expected in (('card', manifest['card_sha256']), ('lock', manifest['lock_sha256'])):
+        if cached.get(key, {}).get('sha256') != expected or proof[key + '_sha256'] != expected:
+            raise ValueError('pipeline cache original publication identity changed')
+    sources = cached.get('sources')
+    if not isinstance(sources, list):
+        raise ValueError('pipeline cache lacks selected source closure')
+    names = [item['installation_path'] for item in sources]
+    if len(set(names)) != len(names) or set(names) != {item['path'] for item in manifest['programs']}:
+        raise ValueError('pipeline cache selected source closure changed')
+    upgrade = manifest.get('pipeline_upgrade', {})
+    original = upgrade.get('source_tree', prefix + 'model')
+    if original not in (prefix + 'model', prefix + 'model-original'):
+        raise ValueError('pipeline original source path changed')
+    for item in sources:
+        path = contained(prepared, str(Path(original) / item['installation_path']))
+        if (not path.is_file() or path.stat().st_size != item['size'] or digest(path) != item['sha256'] or
+                item.get('identity_authority') not in ('published_lock', 'host_seed')):
+            raise ValueError('pipeline cached original source identity changed')

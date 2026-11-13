@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare fresh pipelines and verified read-only model assets for offline tests."""
+"""Prepare host-seeded pipelines and verified read-only model assets for offline tests."""
 import argparse
 import contextlib
 from dataclasses import asdict, replace
@@ -13,7 +13,8 @@ import signal
 import subprocess
 import sys
 import tempfile
-import threading
+import shlex
+import time
 import uuid
 
 
@@ -60,11 +61,11 @@ def source_identity(repo):
     return {'commit': commit, 'dirty': bool(subprocess.check_output(
         ['git', '-C', str(repo), 'status', '--porcelain'], text=True).strip()),
         'files_sha256': {f'scripts/{name}': digest(repo / 'scripts' / name) for name in
-                         ('prepare-cached-models.py', 'seed-models.py', 'sdk-environment.py', 'cached-inventory.py', 'asset-verification.py', 'ci-progress.py', 'evidence-capture.py', 'failure-records.py', 'model-config.py', 'actions-runtime.py', 'release-runtime.py', 'runtime-policy.py', 'pipeline-preparation.py', 'selection-snapshot.py', 'upgrade-pipelines-0.1.0-to-0.2.0.py')}}
+                         ('prepare-cached-models.py', 'seed-models.py', 'sdk-environment.py', 'cached-inventory.py', 'asset-verification.py', 'ci-progress.py', 'evidence-capture.py', 'failure-records.py', 'model-config.py', 'actions-runtime.py', 'release-runtime.py', 'runtime-policy.py', 'pipeline-preparation.py', 'selection-snapshot.py', 'upgrade-pipelines-0.1.0-to-0.2.0.py', 'pipeline-cache.py')}}
 
 
-def indexed_cache(selection, seed, cache_root, work, verifier=None):
-    """Native cache for fresh code; immutable indexed files for selected assets."""
+def indexed_cache(selection, seed, cache_root, work, verifier=None, code=None):
+    """Compose no-fallback staged pipeline reads with immutable indexed assets."""
     from loom.model.fetch_storage import AcquiredFile, ContentCache
     from loom.model.lock import file_key
     entries = {item['installation_path']: item for item in seed['files']}
@@ -88,7 +89,10 @@ def indexed_cache(selection, seed, cache_root, work, verifier=None):
         previous = by_origin.setdefault(key, item)
         if previous['sha256'] != item['sha256'] or previous['size'] != item['size']:
             raise ValueError('conflicting indexed identities for one asset source')
-    code = SEED.native_cache(work / 'pipeline-cache', work / 'pipeline-hf', threading.Event())
+    if code is None:
+        entry = helper('pipeline-cache').read_entry(cache_root / 'pipelines', seed['selection'],
+                                                  seed['card_sha256'], seed['lock_sha256'])
+        code = helper('pipeline-cache').native_cache(entry, work / 'pipeline-staged')
     verifier = verifier or ASSETS.Verifier()
 
     class IndexedCache(ContentCache):
@@ -135,9 +139,13 @@ def online(baseline, seed, cache_root, work, *, location=None, policy=None):
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository) or not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('pipeline publication must identify one repository and immutable commit')
     location = location or f'https://huggingface.co/{repository}/resolve/{revision}/model.json'
-    documents = SEED.native_cache(work / 'pipeline-cache', work / 'pipeline-hf', threading.Event())
-    document = documents.read_document(location, offline=False)
-    lock = documents.read_document(location + '.lock', offline=False)
+    entry = helper('pipeline-cache').read_entry(cache_root / 'pipelines', seed['selection'],
+                                              seed['card_sha256'], seed['lock_sha256'])
+    if baseline.get('pipeline_cache', {}).get('manifest_sha256') not in (None, entry.manifest_sha256):
+        raise helper('pipeline-cache').CacheError('seed_mismatch', 'pipeline cache manifest changed after host verification')
+    documents = helper('pipeline-cache').native_cache(entry, work / 'pipeline-staged')
+    document = documents.read_document(location, offline=True)
+    lock = documents.read_document(location + '.lock', offline=True)
     (work / 'model.json').write_text(document.text)
     (work / 'model.json.lock').write_text(lock.text)
     if digest(work / 'model.json') != seed['card_sha256'] or digest(work / 'model.json.lock') != seed['lock_sha256']:
@@ -147,15 +155,15 @@ def online(baseline, seed, cache_root, work, *, location=None, policy=None):
         baseline.update(INVENTORY.workload(baseline, selection))
     if policy is not None:
         baseline = PIPELINE.profile(baseline, policy)
-    cache = indexed_cache(selection, seed, cache_root, work)
+    cache = indexed_cache(selection, seed, cache_root, work, code=documents)
     plan = plan_fetch(Document(location, document.text), selection, cache,
-                      lock_location=str(work / 'model.json.lock'))
+                      lock_location=location + '.lock')
     for name, file in selection.files.items():
         if not SEED.code_file(file):
             continue
         if file.transform is not None:
             raise ValueError('initial prepared baseline requires untransformed programs')
-        item = cache.acquire(plan.sources[name], plan.identities.get(name), offline=False)
+        item = cache.acquire(plan.sources[name], plan.identities.get(name), offline=True)
         plan.sources[name] = replace(plan.sources[name], transport={'kind': 'local', 'path': str(item.path)})
     write_json(work / 'sources.json', {'document': asdict(plan.document),
         'sources': {name: asdict(source) for name, source in plan.sources.items()},
@@ -183,6 +191,14 @@ def offline(baseline, seed, cache_root, work, destination, entry_id, sdk_identit
             path = cache.indexed(source, plan.identities.get(name))
             plan.sources[name] = replace(source, transport={'kind': 'local', 'path': str(path)})
     install(plan, cache, destination / 'model')
+    # Native installation may share source through a staging symlink. Materialize
+    # only code so no execution input depends on ephemeral work or host cache paths.
+    for name, file in selection.files.items():
+        installed = destination / 'model' / name
+        if SEED.code_file(file) and installed.is_symlink():
+            data = installed.read_bytes()
+            installed.unlink()
+            installed.write_bytes(data)
     upgrade = None
     if policy is not None:
         upgrade = PIPELINE.seal_upgrade(destination, work, seed, policy, entry_id)
@@ -206,6 +222,7 @@ def offline(baseline, seed, cache_root, work, destination, entry_id, sdk_identit
     manifest = {'schema_version': 1, 'selection': selection_identity(baseline),
         'model_id': baseline['model_id'], 'model_card_path': f'/inputs/{entry_id}/model/model.json',
         'card_sha256': seed['card_sha256'], 'lock_sha256': seed['lock_sha256'],
+        **({'pipeline_cache': baseline['pipeline_cache']} if 'pipeline_cache' in baseline else {}),
         'installed_card_sha256': digest(destination / 'model/model.json'),
         'programs': programs, 'assets': assets, 'sdk_identity': sdk_identity,
         'effective_execution': baseline.get('effective_execution', baseline['published_execution']),
@@ -311,7 +328,14 @@ def native_batch(operation):
                 record['inputs_manifest'] = f"models/{record['id']}/prepared-inputs.json"
                 record['inputs_manifest_sha256'] = digest(model_dir / 'prepared-inputs.json')
         except Exception as error:
-            record['preparation'] = {'status': 'failed', 'reason': f'{operation}: {type(error).__name__}: {error}'}
+            reason = f'{operation}: {type(error).__name__}: {error}'
+            if getattr(error, 'kind', None) and record.get('pipeline_cache'):
+                failed_cache = {key: value for key, value in record['pipeline_cache'].items() if key != 'read_sha256'}
+                failed_cache.update(status='failed', error_kind=error.kind, reason=str(error)[:4096])
+                write_json(model_dir / 'pipeline-cache-read.json', failed_cache)
+                record['pipeline_cache'] = {**failed_cache, 'read_sha256': digest(model_dir / 'pipeline-cache-read.json')}
+                reason += '; reseed: ' + failed_cache['reseed_command']
+            record['preparation'] = {'status': 'failed', 'reason': reason}
             policy = suite.get('runtime_policy')
             if operation == 'offline' and policy is not None:
                 # A rejected source remains model-local and keeps its publication
@@ -334,7 +358,7 @@ def native_batch(operation):
             write_json(suite_path, suite)
             failed = record['preparation']['status'] == 'failed' and record['preparation']['reason'] != 'preparation not reached'
             outcome = ('FAIL ' + record['preparation']['reason']) if failed else (
-                'pipeline fetched; assets available' if operation == 'online' else 'prepared; cache reused')
+                'host-seeded pipeline verified; assets available' if operation == 'online' else 'prepared; cache reused')
             PROGRESS.emit(label + ': ' + outcome)
 
 
@@ -468,6 +492,8 @@ def run_host(args):
     attempt = {'schema_version': 1, 'attempt_id': output.name, 'source': source_identity(REPO),
         'suite_sha256': digest(suite_path) if suite_path is not None else None, 'runtime': None,
         'selection_mode': 'cached' if cached else 'suite', 'frozen_inputs': frozen_inputs,
+        'preparation_contract': {'pipeline_source': 'host_seeded', 'pipeline_network_requests': 0,
+                                 'pipeline_downloaded_bytes': 0, 'pipeline_cache_writes': 0},
         'inventory_errors': inventory['errors'] if cached else [],
         'full_integrity': getattr(args, 'full_integrity', False),
         'entries': [{'id': entry['id'], 'selection': entry.get('selection', {}),
@@ -544,6 +570,8 @@ def run_host(args):
         'runtime': {'image': template['container']['image'], 'platform': template['container'].get('platform'),
                     'sdk': template['sdk'], 'resolved_runtime': runtime_snapshot},
         'selection_mode': 'cached' if cached else 'suite', 'frozen_inputs': frozen_inputs,
+        'preparation_contract': {'pipeline_source': 'host_seeded', 'pipeline_network_requests': 0,
+                                 'pipeline_downloaded_bytes': 0, 'pipeline_cache_writes': 0},
         'inventory_errors': inventory['errors'] if cached else [],
         'runtime_policy': runtime_policy, 'policy_files': policy_files,
         'full_integrity': getattr(args, 'full_integrity', False),
@@ -554,6 +582,8 @@ def run_host(args):
                      'test_kind': 'unresolved' if cached else 'text_smoke',
                      'preparation': {'status': 'failed', 'reason': 'preparation not reached'},
                      'inputs_manifest': None, 'evidence': []} for entry in suite['entries']]}
+    attempt['cache_roots']['pipelines'] = {'host_path': str(cache_root / 'pipelines'),
+                                           'container_path': '/model-cache/pipelines'}
     if cached:
         attempt['inventory_sha256'] = digest(output / 'inventory.json')
         attempt['inventory_path'] = 'inventory.json'
@@ -599,6 +629,46 @@ def run_host(args):
                 record['baseline'] = f'config/{entry_id}/baseline.json'
                 record['evidence'] = [f'models/{entry_id}/seed-manifest.json',
                                       record['baseline'], f"config/{entry_id}/{baseline['sdk']['dependency_lock']}"]
+                seed = read_json(model_dir / 'seed-manifest.json')
+                seed_selection = (' --selection cached' if cached else
+                    ' --suite ' + shlex.quote(str(args.suite or REPO / 'config/cached-model-tests.json')))
+                reseed = 'bash scripts/seed-pipelines.sh --root ' + shlex.quote(str(root)) + seed_selection
+                started = time.monotonic()
+                try:
+                    pipeline_entry = helper('pipeline-cache').read_entry(cache_root / 'pipelines',
+                        record['selection'], seed['card_sha256'], seed['lock_sha256'])
+                    (model_dir / 'pipeline-cache-entry.json').write_bytes(pipeline_entry.raw_manifest)
+                    proof = {'schema_version': 1, 'pipeline_source': 'host_seeded', 'status': 'hit',
+                             'manifest_path': f'models/{entry_id}/pipeline-cache-entry.json',
+                             'manifest_sha256': pipeline_entry.manifest_sha256, 'entry_key': pipeline_entry.key,
+                             'read_path': f'models/{entry_id}/pipeline-cache-read.json',
+                             'requested_selection': record['selection'], 'card_sha256': seed['card_sha256'],
+                             'lock_sha256': seed['lock_sha256'], 'reseed_command': reseed,
+                             'pipeline_network_requests': 0, 'pipeline_downloaded_bytes': 0,
+                             'pipeline_cache_writes': 0,
+                             'source_file_count': len(pipeline_entry.manifest['sources']),
+                             'source_size_bytes': sum(item['size'] for item in pipeline_entry.manifest['sources']),
+                             'read_seconds': time.monotonic() - started}
+                    record['evidence'].append(proof['manifest_path'])
+                except Exception as error:
+                    proof = {'schema_version': 1, 'pipeline_source': 'host_seeded', 'status': 'failed',
+                             'error_kind': getattr(error, 'kind', 'cache_read'),
+                             'reason': str(error)[:4096], 'reseed_command': reseed,
+                             'read_path': f'models/{entry_id}/pipeline-cache-read.json',
+                             'requested_selection': record['selection'], 'card_sha256': seed['card_sha256'],
+                             'lock_sha256': seed['lock_sha256'], 'pipeline_network_requests': 0,
+                             'pipeline_downloaded_bytes': 0, 'pipeline_cache_writes': 0,
+                             'read_seconds': time.monotonic() - started}
+                    write_json(model_dir / 'pipeline-cache-read.json', proof)
+                    record['pipeline_cache'] = proof
+                    record['evidence'].append(proof['read_path'])
+                    raise ValueError(f"pipeline cache {proof['error_kind']}: {error}; reseed: {reseed}") from error
+                write_json(model_dir / 'pipeline-cache-read.json', proof)
+                proof['read_sha256'] = digest(model_dir / 'pipeline-cache-read.json')
+                baseline['pipeline_cache'] = proof
+                write_json(config_dir / 'baseline.json', baseline)
+                record['pipeline_cache'] = proof
+                record['evidence'].append(proof['read_path'])
                 if 'sdk_identity' not in attempt['runtime']:
                     runtime_dir = output / 'config/runtime'
                     shutil.copytree(config_dir, runtime_dir)
@@ -644,12 +714,10 @@ def run_host(args):
                     '--mount', f'type=bind,src={SCRIPT_DIR},dst=/source/scripts,readonly',
                     '--mount', f'type=bind,src={output},dst=/prepared',
                     '--mount', f'type=bind,src={temporary},dst=/run']
-                for name in ('huggingface', 'loom-assets'):
+                for name in ('huggingface', 'loom-assets', 'pipelines'):
                     common += ['--mount', f'type=bind,src={cache_root / name},dst=/model-cache/{name},readonly']
                 for operation in ('online', 'offline'):
-                    command = common + ['--network', 'bridge' if operation == 'online' else 'none']
-                    if operation == 'online' and os.environ.get('HF_TOKEN'):
-                        command += ['--env', 'HF_TOKEN']
+                    command = common + ['--network', 'none']
                     command += [runtime['image'], 'python', '-u', '-I', '/source/scripts/prepare-cached-models.py',
                                 '--stage', 'batch-' + operation]
                     try:

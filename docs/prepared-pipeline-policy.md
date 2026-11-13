@@ -25,8 +25,10 @@ mutually exclusive with `--runtime-source`. A tagged resolution failure produces
 an ordinary runtime-setup failure for every expected entry, with no acquisition
 or serving attempt. The composite command forwards the same preparation flags.
 
-Preparation installs verified original pipeline sources before applying the
-migration. The executable tree stays at `models/ID/model`; an upgraded entry keeps
+Before preparation, the operator seeds exact original pipeline inputs using
+[seed-pipelines.sh](seed-pipelines.md). Preparation reads this cache without
+network fallback, stages independent copies, and installs the verified originals
+before applying the migration. The executable tree stays at `models/ID/model`; an upgraded entry keeps
 its installed original at `models/ID/model-original`. Asset links remain shared
 and asset integrity checks retain their existing receipt-based behavior. Raw
 published card and lock hashes are separate from hashes of the relocated installed
@@ -56,6 +58,12 @@ Execution checks original and executable hashes, baseline and policy identities,
 report identity, effective requests and the copied seccomp profile on both host
 and container. Execution does not apply migrations or reread live policy config.
 Legacy prepared bundles without this policy retain their existing verification.
+
+Each ready entry also records `pipeline_cache`, binding captured original cache
+manifest bytes and a read receipt to the source identities used by the upgrade
+seal. `pipeline-cache-entry.json` and `pipeline-cache-read.json` remain in raw
+evidence; execution preflight needs only these staged copies, not the host pipeline
+cache. Missing or corrupt entries fail with the host reseed command.
 
 Raw results retain policy files, frozen references, baseline and dependency-lock
 JSON, publication evidence and migration reports through their evidence lists.

@@ -73,8 +73,8 @@ directory rather than reusing one from the separate-stage example.
 - [Per-Bead specifications](docs/specs/basic-e2e.md#responsibilities):
   current task boundaries, data contracts and acceptance checks.
 - [First end-to-end epic](docs/acquisition-spike.md): manual seeding and cache
-  reuse, fresh pipeline/HRX inputs, and one real GitHub inference test on an
-  operator-selected compatible host.
+  reuse, host-seeded pipelines and fresh HRX inputs, and a real GitHub inference
+  test on an operator-selected compatible host.
 - [Seed one model](docs/seed-models.md): populate the model cache with one command,
   using the checked-in model selection and release pins.
 - [Hardware-specific seed list](docs/acquisition-spike.md#hardware-specific-model-list-and-seeding):
@@ -99,11 +99,12 @@ trusted orchestration and model execution.
 The [persistent-cache design](docs/design.md#persistent-cache-across-container-runs)
 separates writable acquisition from read-only test inputs so containers can be
 discarded while GGUF files remain available between nights.
-An operator manually seeds weights, tokenizers and companion assets; CI consumes
-that cache read-only and reports misses for manual reseeding. Each run downloads
-a fresh pipeline and installs the exact selected HRX SDK in a new venv inside a
-pinned base container. The first acquisition spike permits an explicit
-download-only probe without claiming GPU suitability or model execution.
+An operator manually seeds weights, tokenizers and companion assets, then runs
+[`seed-pipelines.sh`](docs/seed-pipelines.md) for the exact pinned pipeline inputs.
+CI consumes both caches read-only and reports misses for manual reseeding. Each
+run stages independent verified pipeline copies and installs the exact selected
+HRX SDK in a new venv inside a pinned base container. The first acquisition spike
+permits an explicit download-only probe without claiming GPU suitability or model execution.
 
 Automatic memory qualification and distributed hardware execution remain later
 work. The current suite assumes

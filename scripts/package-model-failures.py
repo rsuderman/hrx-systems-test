@@ -69,7 +69,8 @@ def package(attempt, output, archive=None):
                 'actions-selection.json', 'resolved-runtime.json', 'target-environment.json',
                 'sdk-error.json', 'sdk-acquisition.json', 'ci-plan.json', 'lane-selection.json',
                 'runtime-policy.json', 'seccomp.json', 'pipeline-upgrade.json', 'publication-card.json',
-                'publication-lock.json', 'selection-snapshot.json', 'runtime-selection.json'}
+                'publication-lock.json', 'selection-snapshot.json', 'runtime-selection.json',
+                'pipeline-cache-entry.json', 'pipeline-cache-read.json'}
             if source.suffix == '.json' and source.name not in allowed_names and not re.fullmatch(r'(?:results/|preparation-evidence/)?config/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.json', reference) and not source.name.endswith(('.log.capture.json', '.log.metadata.json')):
                 raise ValueError('unrecognized evidence JSON; assets/configuration are not copied')
             if source.suffix == '.txt' and source.name not in ('diagnostics.txt', 'error.txt'):

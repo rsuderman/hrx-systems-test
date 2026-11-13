@@ -3,7 +3,7 @@
 ## Outcome
 
 One local command or manual GitHub dispatch tests every registered cached model
-sequentially: fresh hosted pipeline, verified read-only assets, real readiness,
+sequentially: verified host-seeded pipeline copies, read-only assets, real readiness,
 one bounded query/assertion and confirmed model removal. Start one empty server
 for the suite, hot-load/unload models sequentially, then stop that server once. The currently indexed cache holds
 one Qwen3.5 0.8B selection. Prove that path first, then exercise the same loop for

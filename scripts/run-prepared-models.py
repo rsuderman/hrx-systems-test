@@ -103,6 +103,7 @@ def initial_results(suite, hardware, mode='real'):
     return {'schema_version': 1, 'attempt_id': suite['attempt_id'], 'mode': mode,
         'source': copy.deepcopy(suite.get('source', {})), 'runtime': copy.deepcopy(suite.get('runtime') or {}),
         'selection_mode': suite.get('selection_mode', 'suite'),
+        'preparation_contract': copy.deepcopy(suite.get('preparation_contract', {})),
         'inventory_sha256': suite.get('inventory_sha256'),
         'inventory_errors': copy.deepcopy(suite.get('inventory_errors', [])),
         'asset_verification': {'preparation': copy.deepcopy(suite.get('asset_verification', {}))},
@@ -138,7 +139,7 @@ def copy_evidence(prepared, output, suite, result):
     if suite.get('runtime_policy') is not None:
         result['runtime_policy'] = copy.deepcopy(suite['runtime_policy'])
     for entry, model in zip(suite['entries'], result['models']):
-        for key in ('pipeline_upgrade', 'published_execution', 'effective_execution', 'effective_test_profile'):
+        for key in ('pipeline_upgrade', 'pipeline_cache', 'published_execution', 'effective_execution', 'effective_test_profile'):
             if key in entry:
                 model[key] = copy.deepcopy(entry[key])
         references = list(entry.get('evidence', []))
@@ -616,6 +617,8 @@ def verify_prepared(prepared, suite, inside=False):
                 entry_baseline.get('effective_execution', entry_baseline['published_execution']) != manifest['effective_execution']):
             raise ValueError('prepared workload differs from frozen baseline')
         PIPELINE.verify_upgrade(prepared, entry, manifest, entry_baseline, policy)
+        PIPELINE.verify_pipeline_cache(prepared, entry, manifest, entry_baseline,
+            required=suite.get('preparation_contract', {}).get('pipeline_source') == 'host_seeded')
         if policy is not None and policy['pipeline_upgrade']['enabled']:
             report = PIPELINE.read_json(PIPELINE.contained(prepared, manifest['pipeline_upgrade']['report_path']))
             expected_implementation = suite['source']['files_sha256']['scripts/upgrade-pipelines-0.1.0-to-0.2.0.py']
@@ -709,7 +712,7 @@ def run_host(args):
     result['started_at'] = host_started_at
     result['source']['execution_runner_sha256'] = digest(Path(__file__))
     result['source']['execution_helpers_sha256'] = {name: digest(SCRIPT_DIR / name) for name in
-        ('asset-verification.py', 'ci-progress.py', 'evidence-capture.py', 'failure-records.py', 'pipeline-preparation.py', 'runtime-policy.py')}
+        ('asset-verification.py', 'ci-progress.py', 'evidence-capture.py', 'failure-records.py', 'pipeline-preparation.py', 'runtime-policy.py', 'pipeline-cache.py')}
     if args.workflow:
         if args.workflow.stat().st_size > 16384:
             raise ValueError('workflow identity file exceeds its size limit')
@@ -843,6 +846,8 @@ def inside_container(args):
             raise ValueError('serving SDK identity differs from prepared SDK')
         result['evidence'].append('sdk-runtime/sdk.json')
         result['execution_contract'] = {'cache_read_only': True, 'external_network': False}
+        if suite.get('preparation_contract', {}).get('pipeline_source') == 'host_seeded':
+            result['execution_contract']['pipeline_source'] = 'host_seeded'
         if suite.get('preparation_contract', {}).get('pipeline_fresh') is True:
             result['execution_contract']['pipeline_fresh'] = True
         with socket.socket() as check:

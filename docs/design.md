@@ -8,7 +8,7 @@ fixture stage contract and manual hookup; real adapters remain pending. Update
 this document as requirements and decisions resolve.
 
 The first implementation epic is [one model end to end](acquisition-spike.md):
-manual asset seeding, fresh pipeline/HRX inputs, read-only CI consumption, real
+manual asset/pipeline seeding, fresh HRX inputs, read-only CI consumption, real
 model readiness, bounded inference and owned cleanup. It assumes the operator
 selects a compatible host/model. The later
 [hardware-specific seed list](acquisition-spike.md#hardware-specific-model-list-and-seeding)
@@ -43,10 +43,10 @@ node coordinating workers on different hardware.
   by test containers with read-only access to verified cached inputs. Limit
   acquisition to the assets required by the planned model/preset selections.
 - Initially, a person seeds the model assets using a simple script. CI mounts
-  that cache read-only; automatic CI seeding can be added later. Each CI run
-  acquires its selected pipeline and Loom/HRX build and checks their compatibility.
-- Persist reusable assets such as weights and tokenizers across runs. Download
-  the selected pipeline afresh for each nightly into that run's staging area;
+  that cache read-only. Operators also seed original pipeline inputs explicitly;
+  each CI run stages exact verified copies and acquires its Loom/HRX build.
+- Persist reusable assets and verified original pipeline inputs across runs. Copy
+  the exact selected pipeline into each nightly's independent staging area;
   do not reuse a previous run's installed pipeline as the candidate under test.
 - Maintain a model-size index and account for runners that cannot fit every model
   in device memory.
@@ -82,7 +82,7 @@ flowchart LR
     Sizes[Model size and memory index] --> Plan
     Capacity[Runner capabilities] --> Plan
     Operator[Operator-run seed script] --> Cache[(Persistent model-asset cache)]
-    Plan --> Inputs[Fresh pipeline and exact HRX SDK]
+    Plan --> Inputs[Host-seeded pipeline copies and exact HRX SDK]
     Inputs --> Verify[Verify cached asset closure]
     Cache -->|read-only| Verify
     Verify --> Worker[Local model test worker]
@@ -344,7 +344,7 @@ a partial-coverage warning remains an explicit policy decision.
 | Phase | Behavior | Recorded outcome |
 |---|---|---|
 | Resolve | Resolve immutable publications/runtime/test profiles, consult the size index and confirm runner capacity | Frozen inputs, expected jobs, assignments and explicit eligibility exclusions |
-| Acquire and verify | Download fresh pipeline/SDK; verify the selected model closure through read-only cache mounts | Available inputs or a reported cache miss/compatibility failure; no CI asset repair |
+| Acquire and verify | Download SDK; stage verified host-seeded pipelines and verify model closure through read-only cache mounts | Available inputs or a reported cache miss/compatibility failure; no CI asset repair |
 | Execute | Start the service, wait for actual model readiness, run bounded checks and shut down owned processes | Test outcomes, diagnostics and timings |
 | Collect | Assemble model, runtime, hardware and test provenance with responses/logs | A durable local result bundle |
 | Publish | Upload results and produce an aggregate coverage summary | Published evidence or a retained pending upload |
@@ -372,25 +372,24 @@ another GGUF downloader or weight store.
 | Storage | Lifetime | Contents |
 |---|---|---|
 | HF Hub cache | Persistent across runs | HF payload blobs, repository snapshots and SDK-managed partial transfers |
-| Loom acquisition state | Asset cache persistent; pipeline acquisition state per run | Reusable non-HF assets and asset receipts; fresh pipeline documents/programs staged separately |
-| Selected pipeline installation | Per nightly run, immutable during testing | Freshly downloaded card/lock, programs and references to reusable cached assets |
+| Loom acquisition state | Asset and original pipeline caches persistent; native acquisition state per run | Reusable non-HF assets and asset receipts; verified original pipeline copies staged separately |
+| Selected pipeline installation | Per nightly run, immutable during testing | Verified host-seeded card/lock, program copies and references to cached assets |
 | Run directories | Per nightly run/attempt | Isolated runtime state, responses, diagnostics and result bundles |
 
 `HF_HUB_CACHE` controls the HF cache. `--cache` or `LOOM_CACHE_HOME` controls Loom
 acquisition state. Persistent payload storage must remain outside disposable run
-directories. The acquisition configuration must keep fresh pipeline downloads
-separate from reusable asset storage. Download the selected HRX release and its
+directories. Explicit host pipeline seeding uses `cache/pipelines`, separate
+from reusable model-asset storage; CI reads both caches without repair writes. Download the selected HRX release and its
 pinned dependencies into disposable per-attempt storage; install them in a fresh
 container venv. SDK payloads are not retained across attempts.
 
-The persistent-cache policy applies to assets: model weights, tokenizers and
-other declared reusable model inputs. The pipeline candidate consists of its
+Persistent storage includes model assets and explicitly seeded original
+pipeline inputs. See [host seeding](seed-pipelines.md) for the required operator step. The pipeline candidate consists of its
 model card/lock, control and other `.loom` files, executable kernels/programs and
-pipeline configuration. Download that candidate for each nightly from its
-resolved publication revision into a new run directory, even when its assets
-are already cached. Freeze its revision before resolving required assets. This
-does not decide whether the nightly follows the latest publication or a reviewed
-pin; it ensures the selected pipeline is acquired anew in either case.
+pipeline configuration. Each nightly requires a cache entry matching its exact
+publication revision, selection and seeded card/lock hashes. It stages independent
+verified copies and rebuilds native SDK state. A changed pin requires explicit
+host reseeding; missing or corrupt entries never trigger a network fallback.
 
 Default `--materialize=auto` keeps programs independently editable while sharing
 weights and tokenizers where linking is supported. Copy fallback must be accounted
@@ -422,24 +421,25 @@ design. Docker supports [read-only bind mounts](https://docs.docker.com/engine/s
 
 | Phase | Persistent model-store access | Other writable storage |
 |---|---|---|
-| Manual seeding | Read/write to designated reusable-asset caches | Seed staging, scratch and logs |
-| CI acquisition/verification | Read-only model assets; no repair writes | Fresh pipeline, candidate SDK/venv, scratch and logs |
+| Manual seeding | Read/write to designated model-asset or original-pipeline cache | Seed staging, scratch and logs |
+| CI acquisition/verification | Read-only model assets and pipeline originals; no repair writes | Verified pipeline copies, candidate SDK/venv, scratch and logs |
 | CI test | Read-only model assets and staged pipeline | Per-attempt runtime state, scratch and results |
 | Maintenance | Controlled access for quota management and eviction | Maintenance records |
 
 The operator-run seed script uses a frozen card/lock selection to acquire and
-verify reusable assets. CI downloads its selected pipeline into fresh staging,
-then verifies the selected closure against the read-only cache. A missing asset
+verify reusable assets. A separate explicit pipeline seed command records the
+original source closure. CI copies that exact verified pipeline into staging and
+verifies the selected closure against the read-only caches. A missing asset
 is a cache-miss result requiring manual reseeding, not an implicit download.
-Reuse verified assets across nights and base-image updates while refreshing the
-pipeline and candidate SDK each run. Partial downloads are not ready inputs;
-retain the SDK's own cache coordination rather than inventing a new blob store.
+Reuse verified original inputs across nights and base-image updates while
+acquiring the candidate SDK each run. Partial seed entries are not ready inputs;
+only the explicit host writers publish or repair persistent cache entries.
 
 The acquisition unit is the complete asset set selected by a pinned model card
 and preset, not a clone of every file in its repositories. Include the selected
 programs into per-run staging, and tokenizer/model assets, all required GGUF
 shards, and required vision/draft companions into reusable storage during manual
-seeding. CI only reads those assets. Do not acquire unused
+seeding. CI only reads those original inputs. Do not acquire unused
 quantizations, alternate presets, unrelated repository files or historical
 revisions merely because they are published alongside the selected assets.
 Retained assets from previous runs may remain under the retention policy.
@@ -448,8 +448,8 @@ Resolve the selection using `loom-fetch` and its card/lock semantics; do not
 approximate it with a filename glob for GGUF files. Manual seeding downloads
 missing assets and reuses verified content, including shared companions. CI
 performs read-only verification and reports missing content without repair.
-Do not let an existing pipeline installation or SDK document/program cache
-silently substitute for the fresh pipeline download required for this run.
+Do not reuse an installed or upgraded tree. Only the exact SDK-neutral original
+entry may supply pipeline bytes; rebuild SDK-dependent native state each attempt.
 The caching result identifies the pinned selection, required assets and whether
 the complete set is ready. Correct selection filtering for the chosen
 `loom-fetch` version remains an integration acceptance check.

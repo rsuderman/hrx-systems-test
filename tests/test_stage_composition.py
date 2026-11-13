@@ -469,7 +469,7 @@ class StageCompositionTests(unittest.TestCase):
 
     def test_workflow_cancellation_prevents_new_model_work_but_keeps_cleanup(self):
         workflow = (ROOT / '.github/workflows/_model-verification-worker.yml').read_text()
-        for name in ('Prepare fresh pipelines and read-only cached assets',
+        for name in ('Prepare host-seeded pipelines and read-only cached assets',
                      'Run the prepared suite offline through one server'):
             section = workflow.split('      - name: ' + name + '\n', 1)[1].split('\n      - ', 1)[0]
             self.assertIn("!cancelled() && steps.initialize.outcome == 'success'", section)
@@ -479,7 +479,7 @@ class StageCompositionTests(unittest.TestCase):
             self.assertIn("always() && steps.initialize.outcome == 'success'", section)
 
     def test_workflow_cache_root_preserves_runner_environment_without_repo_override(self):
-        script = workflow_run_block('Prepare fresh pipelines and read-only cached assets')
+        script = workflow_run_block('Prepare host-seeded pipelines and read-only cached assets')
         self.output.mkdir()
         (self.script.parent / 'paired-ci.py').write_text("import sys; sys.stdout.buffer.write(b'--selection-snapshot\\0fixture.json\\0')\n")
         for configured, expected in [('', str(self.cache_root)), ('/explicit-repo-cache', '/explicit-repo-cache')]:

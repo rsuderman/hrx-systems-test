@@ -40,6 +40,13 @@ class ReportTests(unittest.TestCase):
         self.save()
         report=REPORT.generate(self.results,self.root/'report')
         return report,(self.root/'report/index.html').read_text(),(self.root/'report/summary.md').read_text()
+    def test_host_seeded_provenance_replaces_fresh_download_claim_for_new_results(self):
+        self.raw['preparation_contract'] = {'pipeline_source': 'host_seeded'}
+        self.raw['execution_contract'] = {'pipeline_source': 'host_seeded', 'cache_read_only': True, 'external_network': False}
+        _, html, _ = self.generate()
+        self.assertIn('Host-seeded pinned pipelines', html)
+        self.assertNotIn('Fresh pinned pipeline staging', html)
+
     def test_fixture_report_links_and_shared_counts(self):
         report,html,md=self.generate()
         self.assertEqual(report['counts']['passed'],1)

@@ -3,8 +3,10 @@ from contextlib import redirect_stdout
 import importlib.util
 import io
 import json
+import shutil
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -61,12 +63,12 @@ class HostContractTests(unittest.TestCase):
                     PREP.native_batch('online')
                 return output.getvalue()
             good = batch()
-            self.assertIn('prepare 1/1 online: Example: pipeline fetched; assets available', good)
+            self.assertIn('prepare 1/1 online: Example: host-seeded pipeline verified; assets available', good)
             self.assertNotIn('preparation not reached', good)
             # The batch uses an existing per-operation SDK directory on a repeat.
             bad = batch(RuntimeError('fixture fetch failed'))
             self.assertIn('FAIL online: RuntimeError: fixture fetch failed', bad)
-            self.assertNotIn('pipeline fetched; assets available', bad)
+            self.assertNotIn('host-seeded pipeline verified; assets available', bad)
 
     def test_path_rejects_parent_and_symlink_escape(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -139,7 +141,47 @@ class NativePreparationTests(unittest.TestCase):
         self.addCleanup(self.fixture.doCleanups)
         self.root, self.cache = self.fixture.root, self.fixture.cache
         self.baseline = self.fixture.baseline
-        _, _, self.seed = self.fixture.attempt('seed')
+        seed_work, _, self.seed = self.fixture.attempt('seed')
+        self.pipeline = PREP.helper('pipeline-cache')
+        original_helper = PREP.helper
+        self.pipeline_entry = None
+        def reader(root, selection, card, lock):
+            if card != self.pipeline_entry.manifest['card']['sha256'] or lock != self.pipeline_entry.manifest['lock']['sha256']:
+                raise self.pipeline.CacheError('seed_mismatch', 'published card/lock disagree with pipeline cache')
+            return self.pipeline_entry
+        facade = SimpleNamespace(read_entry=reader, native_cache=self.pipeline.native_cache)
+        self.cache_patch = patch.object(PREP, 'helper', side_effect=lambda name: facade if name == 'pipeline-cache' else original_helper(name))
+        self.cache_patch.start()
+        self.addCleanup(self.cache_patch.stop)
+        self.seed_pipeline(seed_work, self.seed)
+
+    def seed_pipeline(self, seed_work, seed):
+        # Local HTTP fixture coordinates exercise the native adapter; production
+        # manifest validation uses immutable HF coordinates in dedicated tests.
+        saved = PREP.read_json(seed_work / 'prepared.json')
+        root = self.cache / 'pipelines'
+        blobs = root / 'blobs/sha256'
+        blobs.mkdir(parents=True, exist_ok=True)
+        def blob(data):
+            digest = self.pipeline.sha(data)
+            (blobs / digest).write_bytes(data)
+            return {'size': len(data), 'sha256': digest}
+        manifest = {'schema_version': 1, 'selection': seed['selection'],
+                    'card': {'location': self.fixture.url, **blob((seed_work / 'model.json').read_bytes())},
+                    'lock': {'location': self.fixture.url + '.lock', **blob((seed_work / 'model.json.lock').read_bytes())},
+                    'sources': [], 'origin_roots': saved['origins'], 'sdk_identity': {}}
+        selected = PREP.SEED.selection_for(self.baseline, (seed_work / 'model.json').read_text())
+        for name, file in selected.files.items():
+            if not PREP.SEED.code_file(file):
+                continue
+            source = saved['sources'][name]
+            manifest['sources'].append({'installation_path': name, 'roles': sorted(file.roles),
+                'origin': source['origin'], 'resolved': source['resolved'], 'identity_authority': 'host_seed',
+                **blob(Path(source['transport']['path']).read_bytes())})
+        raw = self.pipeline.canonical(manifest)
+        self.pipeline_entry = self.pipeline.VerifiedEntry(root,
+            self.pipeline.key_for(seed['selection'], seed['card_sha256'], seed['lock_sha256']),
+            manifest, raw, self.pipeline.sha(raw))
 
     def prepare(self, name='prepared'):
         work, output = self.root / (name + '-work'), self.root / name
@@ -149,21 +191,29 @@ class NativePreparationTests(unittest.TestCase):
         manifest = PREP.offline(self.baseline, self.seed, self.cache, work, output, 'tiny', {'fixture': True})
         return output, manifest
 
-    def test_fresh_code_and_offline_verified_assets_keep_cache_unchanged(self):
+    def test_seeded_code_and_offline_verified_assets_keep_cache_unchanged(self):
         before = {str(p.relative_to(self.cache)): p.read_bytes() for p in self.cache.rglob('*') if p.is_file()}
         (self.fixture.remote / 'control.loom').write_bytes(b'fresh pipeline for preparation')
         count = len(self.fixture.requests)
         output, manifest = self.prepare()
         requests = self.fixture.requests[count:]
-        self.assertIn('/control.loom', requests)
+        self.assertEqual(requests, [])
         self.assertNotIn('/model.gguf', requests)
         self.assertNotIn('/tokenizer.json', requests)
-        self.assertEqual((output / 'model/control.loom').read_bytes(), b'fresh pipeline for preparation')
+        self.assertEqual((output / 'model/control.loom').read_bytes(), b'first program')
         self.assertEqual(manifest['model_card_path'], '/inputs/tiny/model/model.json')
         self.assertEqual(manifest['asset_phase_network'], 'disabled')
         self.assertEqual(len(manifest['assets']), 2)
         after = {str(p.relative_to(self.cache)): p.read_bytes() for p in self.cache.rglob('*') if p.is_file()}
         self.assertEqual(before, after)
+
+    def test_prepared_code_survives_pipeline_cache_and_work_removal(self):
+        output, _ = self.prepare()
+        shutil.rmtree(self.cache / 'pipelines')
+        shutil.rmtree(self.root / 'prepared-work')
+        program = output / 'model/control.loom'
+        self.assertFalse(program.is_symlink())
+        self.assertEqual(program.read_bytes(), b'first program')
 
     def test_corrupt_asset_fails_without_ready_manifest(self):
         item = self.seed['files'][0]
@@ -205,7 +255,8 @@ class NativePreparationTests(unittest.TestCase):
         card = json.loads((self.fixture.remote / 'model.json').read_text())
         card['presets']['chat']['execution'] = {'rows': 2, 'context_capacity': 128}
         (self.fixture.remote / 'model.json').write_text(json.dumps(card))
-        _, _, seed = self.fixture.attempt('cached-seed')
+        seed_work, _, seed = self.fixture.attempt('cached-seed')
+        self.seed_pipeline(seed_work, seed)
         baseline = {k: v for k, v in self.baseline.items()
                     if k not in ('published_execution', 'smoke_request', 'smoke_expected_text')}
         baseline['selection_mode'] = 'cached'
@@ -224,7 +275,8 @@ class NativePreparationTests(unittest.TestCase):
         card['services']['chat']['kind'] = 'decision'
         card['presets']['chat']['execution'] = {'pending_requests': 64}
         (self.fixture.remote / 'model.json').write_text(json.dumps(card))
-        _, _, seed = self.fixture.attempt('decision-seed')
+        seed_work, _, seed = self.fixture.attempt('decision-seed')
+        self.seed_pipeline(seed_work, seed)
         baseline = {k: v for k, v in self.baseline.items()
                     if k not in ('published_execution', 'smoke_request', 'smoke_expected_text')}
         baseline['selection_mode'] = 'cached'

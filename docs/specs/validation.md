@@ -14,7 +14,7 @@ Follow [shared contract](basic-e2e.md) and [stage schema](pipeline-stages.md).
    model again. Verify the dedicated runner can read the configured manifest,
    native cache files and pipeline inputs and access the selected GPU/Docker.
    Operator owns any privileged permission repair; report the exact blocker.
-2. Prepare fresh pinned pipeline/SDK inputs and run a real local one-entry suite
+2. Prepare independent host-seeded pinned pipeline copies and fresh SDK inputs and run a real local one-entry suite
    offline with cache/input mounts read-only. Require real registration/readiness,
    bounded recorded request/assertion, confirmed unregistration and final shutdown.
    Demonstrate two load/query/unload cycles in the same server process; repeat
@@ -28,7 +28,7 @@ Follow [shared contract](basic-e2e.md) and [stage schema](pipeline-stages.md).
    entry. Verify input/model-cache mounts are read-only and serving has no external
    network/source credentials. Require actual response assertion, removal and
    final cleanup for every model plus successful compact artifact upload.
-5. Repeat GitHub dispatch with distinct attempt and fresh pipeline/SDK staging
+5. Repeat GitHub dispatch with distinct attempt and independent pipeline copies and fresh SDK staging
    but the same cached assets and pinned selections. Require equivalent real
    coverage and cleanup. New paths alone are not proof of fresh program acquisition;
    preserve acquisition provenance. Hash reads are not network transfer claims.

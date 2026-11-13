@@ -493,8 +493,10 @@ def render_html(report, root):
     environment = ''.join(f'<div><h3>{label}</h3><strong class="identity-title">{escaped(value)}</strong><details class="identity-details"><summary>Full identity</summary><pre>{escaped(identity(report[key]))}</pre></details></div>'
                           for key,label,value in (("runtime","HRX release",runtime_title),("hardware","Hardware",hardware_title),("source","Harness source",source_title)))
     contract = report.get("execution_contract", {})
+    pipeline_source = contract.get("pipeline_source") or report.get("preparation_contract", {}).get("pipeline_source")
     claims = [("Cache mounted read-only", contract.get("cache_read_only") is True),
-              ("Fresh pinned pipeline staging", contract.get("pipeline_fresh") is True),
+              ("Host-seeded pinned pipelines" if pipeline_source == "host_seeded" else "Fresh pinned pipeline staging",
+               contract.get("pipeline_source") == "host_seeded" or contract.get("pipeline_fresh") is True),
               ("External execution network disabled", contract.get("external_network") is False)]
     claim_html = ''.join(f'<span class="contract">{escaped(label)} · {"Recorded" if confirmed else "Unconfirmed"}</span>' for label, confirmed in claims)
     server = report["server"]

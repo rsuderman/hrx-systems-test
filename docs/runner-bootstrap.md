@@ -144,7 +144,8 @@ the runner's credentials. See [manual workflow dispatch](https://docs.github.com
 ## Next design and validation checkpoint
 
 Once the runner smoke check succeeds, decide the pinned Loom image and GPU
-device mapping, then validate GPU telemetry and fresh pipeline acquisition with
+device mapping, seed pipeline originals with [seed-pipelines.sh](seed-pipelines.md),
+then validate GPU telemetry and read-only pipeline staging with
 persistent assets. Start with one small model and verify a second run reuses its
 weights/tokenizer while downloading its pipeline again. The cache policy and
 model admission design remain in [the working design](design.md).

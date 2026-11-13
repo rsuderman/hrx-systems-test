@@ -30,7 +30,7 @@ program set `source`. The selected model ID is `Qwen/Qwen3.5-0.8B`.
 | `Qwen3.5-0.8B-Q4_K_M.gguf` | 532,517,120 | Persistent verified asset |
 | `mmproj-F16.gguf` | 204,987,232 | Persistent verified vision companion |
 | `tokenizer.json` | 9,832,586 | Persistent verified asset |
-| Card, lock, programs and auxiliary program inputs | Determined by selected closure | Fresh pipeline staging every nightly |
+| Card, lock, programs and auxiliary program inputs | Determined by selected closure | Independent verified copies of host-seeded pipeline originals |
 
 These values were checked against the inventoried publication's `model.json`
 and `model.json.lock`. The asset origin is pinned to
@@ -51,7 +51,7 @@ epic assumes that selected workload fits its host; automatic qualification is la
 | Stage | Real adapter acceptance | Skeleton evidence |
 |---|---|---|
 | Resolve | Freeze publication/preset, base image, per-run SDK and workload; record the operator-selected compatible host assumption | Selection and CLI references in `plan.json` |
-| Acquire | Operator seeds assets; CI downloads fresh pipeline/SDK and verifies read-only cached inputs, reporting cache misses | Fixture stages a new synthetic pipeline and reuses one content-addressed synthetic asset |
+| Acquire | Operator seeds assets and pipeline originals; CI downloads its SDK and verifies read-only cached inputs, reporting cache misses | Fixture stages a new synthetic pipeline and reuses one content-addressed synthetic asset |
 | Admit | Bind the operator-selected compatible GPU/workload and record the assumption; automatic suitability qualification is later | Synthetic eligible/unknown/insufficient decisions only |
 | Serve | Launch owned container/server; wait for expected model in `/v1/models` | Loopback synthetic HTTP server becomes model-ready after multiple probes |
 | Assert | Bounded `/v1/chat/completions` query; known answer `4`; record response | Synthetic answer and deliberately wrong-answer cases |
@@ -138,7 +138,7 @@ payload directories. No nightly schedule is introduced.
    Execute the bounded readiness/query/assertion client inside that boundary,
    without host networking, model-execution credentials or a Docker socket.
 5. Run the single published selection manually; inspect readiness, answer,
-   observed memory and cleanup evidence. Repeat with a new pipeline download
+   observed memory and cleanup evidence. Repeat with a new verified pipeline staging
    and the warm asset cache. Only then expand model/feature coverage or schedules.
 
 The base image, per-run SDK, cache reuse and real serving lifecycle are this

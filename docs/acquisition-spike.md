@@ -1,5 +1,11 @@
 # First spike: one model end to end with reusable assets
 
+Pipeline reuse policy update: ordinary preparation now consumes exact original
+inputs from the [explicit host pipeline cache](seed-pipelines.md). Historical
+fresh-download experiments below describe the earlier spike; they are not the
+current CI acquisition contract. SDK packages remain per-attempt downloads.
+
+
 Status: **scoped for implementation** under Beads epic `hst-utq`. Deliver one
 real model test through GitHub Actions, including manual seeding, pinned pipeline
 and HRX release acquisition, model readiness, a bounded inference assertion and cleanup.

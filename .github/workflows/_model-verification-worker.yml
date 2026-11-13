@@ -52,7 +52,7 @@ jobs:
           python3 -I scripts/paired-ci.py initialize --plan "$plan" --lane "$LANE_ID" \
             --output "$output" --previous-safe "$PREVIOUS_SAFE" --github-env "$GITHUB_ENV"
           printf 'CI_PLAN=%s\n' "$plan" >> "$GITHUB_ENV"
-      - name: Prepare fresh pipelines and read-only cached assets
+      - name: Prepare host-seeded pipelines and read-only cached assets
         id: prepare
         env:
           HRX_ACTIONS_TOKEN: ${{ secrets.HRX_ACTIONS_TOKEN }}
@@ -186,6 +186,8 @@ jobs:
             ${{ env.E2E_OUTPUT }}/results/config/*/*.json
             ${{ env.E2E_OUTPUT }}/results/policies/runtime-policy.json
             ${{ env.E2E_OUTPUT }}/results/policies/seccomp.json
+            ${{ env.E2E_OUTPUT }}/results/models/*/pipeline-cache-entry.json
+            ${{ env.E2E_OUTPUT }}/results/models/*/pipeline-cache-read.json
             ${{ env.E2E_OUTPUT }}/results/models/*/pipeline-upgrade.json
             ${{ env.E2E_OUTPUT }}/results/models/*/publication-card.json
             ${{ env.E2E_OUTPUT }}/results/models/*/publication-lock.json

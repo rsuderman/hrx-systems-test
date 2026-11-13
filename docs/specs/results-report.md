@@ -59,7 +59,8 @@ is not the sole signal. Tables remain readable on narrow screens.
    every quantization/modality of an architecture.
 3. **Test environment strip.** HRX release, harness source, GPU/device identity,
    suite identity and shared-server lifecycle. Show a concise statement that
-   execution used read-only cached assets and freshly staged pinned pipelines,
+   execution used read-only cached assets and verified staged pinned pipelines
+   (`host_seeded` for new preparation; retain legacy saved-run provenance),
    derived from execution evidence rather than hard-coded success text.
 4. **Model support matrix.** One row per expected suite entry with model/preset,
    pipeline publication, input verification, load/readiness, query/assertion,
