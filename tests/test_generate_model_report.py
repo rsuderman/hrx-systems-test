@@ -61,7 +61,12 @@ class ReportTests(unittest.TestCase):
         path=self.results/evidence;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('{"published":true}')
         model.setdefault('evidence',[]).append(evidence)
         report,html,md=self.generate()
-        self.assertIn('hrx-runtime-0.2.0-v1',md);self.assertIn('0.1.0-to-0.2.0',html)
+        for summary in (md, html):
+            self.assertNotIn('Pipeline compatibility', summary)
+            self.assertNotIn('| Entry | Pipeline upgrade | Migration |', summary)
+        saved=json.loads((self.root/'report/report.json').read_text())
+        self.assertEqual(saved['runtime_policy'],self.raw['runtime_policy'])
+        self.assertEqual(saved['models'][0]['pipeline_upgrade'],model['pipeline_upgrade'])
         self.assertEqual(report['models'][0]['published_execution']['pool_capacity'],100)
         self.assertEqual(report['models'][0]['effective_execution']['pool_capacity'],200)
         self.assertTrue((self.root/'report'/evidence).is_file())
