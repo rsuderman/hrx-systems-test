@@ -1,6 +1,6 @@
 # Upgrade pipeline source contracts from HRX 0.1.0 to 0.2.0
 
-The [versioned upgrader](../../../scripts/upgrade-pipelines-0.1.0-to-0.2.0.py)
+The [versioned upgrader](../../../tools/migrations/upgrade-pipelines-0.1.0-to-0.2.0.py)
 creates a local executable derivative of supported older hosted pipelines. It
 preserves the original tree, publication locks and asset references. It does not
 publish a new model, select an SDK, configure GPU memory or change smoke requests.
@@ -8,8 +8,8 @@ The caller selects this migration only for a compatible target runtime; the
 pinned 0.1.0 execution path must use the original source.
 
 ```sh
-python3 scripts/upgrade-pipelines-0.1.0-to-0.2.0.py SOURCE --check
-python3 scripts/upgrade-pipelines-0.1.0-to-0.2.0.py SOURCE --output NEW_DIRECTORY
+python3 tools/migrations/upgrade-pipelines-0.1.0-to-0.2.0.py SOURCE --check
+python3 tools/migrations/upgrade-pipelines-0.1.0-to-0.2.0.py SOURCE --output NEW_DIRECTORY
 ```
 
 `--check` prints a JSON plan without writing. `--output` requires a new, separate

@@ -9,16 +9,15 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-def module(name):
-    spec = importlib.util.spec_from_file_location(name.replace('-', '_'), ROOT / 'scripts' / (name + '.py'))
-    value = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(value)
-    return value
+import runpy
+runpy.run_path(str(ROOT / 'python/run.py'))['bootstrap']()
+from hrx_systems.reporting import render, failures, package_failures, runtime_identity
 
-SUMMARY = module('runtime-summary')
-REPORT = module('generate-model-report')
-PACKAGE = module('package-model-failures')
-RECORDS = module('failure-records')
+
+SUMMARY = runtime_identity
+REPORT = render
+PACKAGE = package_failures
+RECORDS = failures
 SHA = 'd01d1c18b154189fd073777329052d23f6071f14'
 SDK = {'name': 'hrx-loom', 'version': '0.1.0', 'release': 'v0.1.0',
        'repository': 'ROCm/hrx-system', 'source_commit': SHA}

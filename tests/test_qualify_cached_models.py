@@ -11,9 +11,9 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('qualify', ROOT / 'scripts/qualify-cached-models.py')
-QUALIFY = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(QUALIFY)
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.host import hardware_advisory as QUALIFY
 PROVENANCE = {'method': 'reviewed fixture evidence', 'reference': 'fixture://synthetic-only',
               'reviewer': 'fixture reviewer', 'observed_at': '2026-11-11T00:00:00Z'}
 

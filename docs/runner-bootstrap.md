@@ -17,8 +17,8 @@ From the repository root, as the intended runner account:
 
 ```sh
 export HRX_SYSTEMS_ROOT="$HOME/.local/share/hrx-systems-test"
-bash scripts/bootstrap-runner.sh check
-bash scripts/bootstrap-runner.sh prepare
+bash scripts/host/bootstrap-runner.sh check
+bash scripts/host/bootstrap-runner.sh prepare
 ```
 
 Keep this root outside the checkout. It contains `runner/` (including GitHub
@@ -36,7 +36,7 @@ The repository pins runner versions and checksums in
 `config/bootstrap-versions.env`. Install the pinned Linux x64 or arm64 runner:
 
 ```sh
-bash scripts/bootstrap-runner.sh install-runner
+bash scripts/host/bootstrap-runner.sh install-runner
 ```
 
 The script downloads from `github.com/actions/runner`, checks the supplied SHA256,
@@ -55,8 +55,8 @@ for its registration token and any host-specific instructions. See
 ## 3. Register and start
 
 ```sh
-bash scripts/bootstrap-runner.sh register https://github.com/OWNER/hrx-systems-test
-bash scripts/bootstrap-runner.sh start
+bash scripts/host/bootstrap-runner.sh register https://github.com/OWNER/hrx-systems-test
+bash scripts/host/bootstrap-runner.sh start
 ```
 
 Registration invokes GitHub's interactive configurator; paste the registration
@@ -116,7 +116,7 @@ on GitHub. Neither operation is performed by adding the workflow file.
 The repository pins an official Alpine image by digest for the storage check:
 
 ```sh
-bash scripts/check-container-storage.sh
+bash scripts/host/check-container-storage.sh
 ```
 
 Override `BOOTSTRAP_IMAGE` with another reviewed digest-pinned Linux image
@@ -180,11 +180,11 @@ In the new account's shell:
 ```sh
 cd /home/hrx-runner/hrx-systems-test
 export HRX_SYSTEMS_ROOT="$HOME/.local/share/hrx-systems-test"
-bash scripts/bootstrap-runner.sh check
-bash scripts/bootstrap-runner.sh prepare
-bash scripts/bootstrap-runner.sh install-runner
-bash scripts/bootstrap-runner.sh register https://github.com/rsuderman/hrx-systems-test
-bash scripts/bootstrap-runner.sh start
+bash scripts/host/bootstrap-runner.sh check
+bash scripts/host/bootstrap-runner.sh prepare
+bash scripts/host/bootstrap-runner.sh install-runner
+bash scripts/host/bootstrap-runner.sh register https://github.com/rsuderman/hrx-systems-test
+bash scripts/host/bootstrap-runner.sh start
 ```
 
 Get a new registration token from the repository settings as the owner; do not

@@ -17,7 +17,9 @@ def load(path, name):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
     return module
-R = load(ROOT/'scripts/release-runtime.py', 'release_runtime')
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.sdk import releases as R
 F = load(ROOT/'tests/test_actions_runtime.py', 'release_actions_fixture')
 A = R.A
 NOW = F.NOW

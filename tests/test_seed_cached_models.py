@@ -8,9 +8,9 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('seed_cached_models', ROOT / 'scripts/seed-cached-models.py')
-BATCH = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(BATCH)
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.cache import seed_suite as BATCH
 
 
 class SuiteSeedTests(unittest.TestCase):
@@ -44,7 +44,7 @@ class SuiteSeedTests(unittest.TestCase):
         self.assertEqual(child.call_count, len(entries))
         for call, entry in zip(child.call_args_list, entries):
             command = call.args[0]
-            self.assertEqual(command[:2], ['bash', str(ROOT / 'scripts/seed-models.sh')])
+            self.assertEqual(command[:2], ['bash', str(ROOT / 'scripts/cache/seed-models.sh')])
             baseline = Path(command[command.index('--baseline') + 1])
             self.assertEqual(json.loads(baseline.read_text())['model_id'], entry['selection']['model_id'])
             self.assertEqual(command[command.index('--seed-manifest') + 1],

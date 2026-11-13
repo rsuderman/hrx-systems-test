@@ -3,7 +3,7 @@
 After execution, generate all final artifacts from its saved results:
 
 ```sh
-bash scripts/generate-model-report.sh \
+bash scripts/report/generate-model-report.sh \
   --results "$attempt/results" --output "$attempt/report"
 ```
 

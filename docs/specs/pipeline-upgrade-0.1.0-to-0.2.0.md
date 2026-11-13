@@ -78,8 +78,8 @@ HEAD; package version alone does not establish equivalence to another build.
 Proposed repository command:
 
 ```sh
-python3 scripts/upgrade-pipelines-0.1.0-to-0.2.0.py SOURCE --check
-python3 scripts/upgrade-pipelines-0.1.0-to-0.2.0.py SOURCE --output NEW_DIRECTORY
+python3 tools/migrations/upgrade-pipelines-0.1.0-to-0.2.0.py SOURCE --check
+python3 tools/migrations/upgrade-pipelines-0.1.0-to-0.2.0.py SOURCE --output NEW_DIRECTORY
 ```
 
 Migration identifier: `hrx-pipelines-0.1.0-to-0.2.0`, with a separately recorded

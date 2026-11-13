@@ -1,0 +1,621 @@
+#!/usr/bin/env python3
+"""Prepare host-seeded pipelines and verified read-only model assets for offline tests."""
+import argparse
+import contextlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import shlex
+import time
+import uuid
+
+
+from .. import layout
+from ..layout import REPO_ROOT as REPO
+SELECTION_FIELDS = ('repository', 'publication_revision', 'model_id', 'preset', 'variant', 'programs')
+from ..cache import seed_assets as SEED, assets as ASSETS, pipeline_reader as CACHE
+from ..sdk import environment as SDK, actions as ACTIONS, releases as RELEASES, publication_abi as ABI
+from ..selection import inventory as INVENTORY, configuration as CONFIG, snapshot as SNAPSHOT
+from ..diagnostics import progress as PROGRESS, capture as CAPTURE
+from ..pipelines import seals as PIPELINE
+from . import runtime_policy as POLICY
+from .native import NativePreparation
+read_json, write_json, digest = SEED.read_json, SEED.write_json, SEED.digest
+
+
+def contained(root, relative):
+    relative = Path(relative)
+    if relative.is_absolute() or '..' in relative.parts:
+        raise ValueError(f'path must stay inside its designated root: {relative}')
+    path = (root / relative).resolve(strict=True)
+    if not path.is_relative_to(root.resolve(strict=True)):
+        raise ValueError(f'path escapes designated root: {relative}')
+    return path
+
+
+def selection_identity(baseline):
+    return {key: baseline[key] for key in SELECTION_FIELDS}
+
+
+def source_identity(repo):
+    commit = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+    return {'commit': commit, 'dirty': bool(subprocess.check_output(
+        ['git', '-C', str(repo), 'status', '--porcelain'], text=True).strip()),
+        'layout_version': layout.LAYOUT_VERSION,
+        'migration_implementation_path': layout.MIGRATION_RELATIVE,
+        'files_sha256': {name: digest(repo / name) for name in layout.implementation_files()}}
+
+
+def native_preparation():
+    return NativePreparation(
+        seed=SEED, assets=ASSETS, cache=CACHE, policy=PIPELINE,
+        inventory=INVENTORY, contained=contained, read_json=read_json, write_json=write_json, digest=digest)
+
+
+def indexed_cache(selection, seed, cache_root, work, verifier=None, code=None):
+    return native_preparation().indexed_cache(selection, seed, cache_root, work, verifier, code)
+
+
+def online(baseline, seed, cache_root, work, *, location=None, policy=None):
+    return native_preparation().online(baseline, seed, cache_root, work, location=location, policy=policy)
+
+
+def offline(baseline, seed, cache_root, work, destination, entry_id, sdk_identity, verifier=None, policy=None):
+    return native_preparation().offline(baseline, seed, cache_root, work, destination, entry_id, sdk_identity, verifier, policy)
+
+
+def stage(args):
+    if args.stage.startswith('batch-'):
+        operation = args.stage.removeprefix('batch-')
+        if operation == 'online':
+            with PROGRESS.operation('prepare SDK installation'):
+                subprocess.run([*layout.command('sdk-environment', interpreter=sys.executable, container=True, unbuffered=True), 'install',
+                    '--baseline', '/prepared/config/runtime/baseline.json', '--payload-root', '/prepared/sdk-payloads',
+                    '--output', '/prepared/sdk-prepare'], check=True)
+        return subprocess.run([*layout.command('prepare-cached-models', interpreter='/run/venv/bin/python', container=True, unbuffered=True),
+                               '--native-batch', operation]).returncode
+    entry = read_json(Path('/prepared/config') / args.entry_id / 'baseline.json')
+    seed = read_json(Path('/prepared/models') / args.entry_id / 'seed-manifest.json')
+    sdk_output = Path('/prepared/models') / args.entry_id / ('sdk-' + args.stage)
+    subprocess.run([*layout.command('sdk-environment', interpreter=sys.executable, container=True), 'install',
+        '--baseline', '/prepared/config/runtime/baseline.json', '--payload-root', '/prepared/sdk-payloads',
+        '--output', str(sdk_output)], check=True)
+    return subprocess.run([*layout.command('prepare-cached-models', interpreter='/run/venv/bin/python', container=True, unbuffered=True),
+                           '--native', args.stage, args.entry_id]).returncode
+
+
+def native(operation, entry_id, work=None, verifier=None, policy=None):
+    work = work or Path('/run')
+    baseline = read_json(Path('/prepared/config') / entry_id / 'baseline.json')
+    seed = read_json(Path('/prepared/models') / entry_id / 'seed-manifest.json')
+    if operation == 'online':
+        baseline = online(baseline, seed, Path('/model-cache'), work, policy=policy)
+        write_json(Path('/prepared/config') / entry_id / 'baseline.json', baseline)
+        return baseline
+    else:
+        for name in ('huggingface', 'loom-assets'):
+            if not os.statvfs(Path('/model-cache') / name).f_flag & os.ST_RDONLY:
+                raise ValueError('model cache mount is not read-only')
+        manifest = offline(baseline, seed, Path('/model-cache'), work,
+                Path('/prepared/models') / entry_id, entry_id,
+                read_json(Path('/prepared/models') / entry_id / 'sdk-offline/sdk.json')['identity'], verifier, policy)
+        if policy is not None:
+            write_json(Path('/prepared/config') / entry_id / 'baseline.json', baseline)
+        return manifest
+
+
+def native_batch(operation):
+    """One installed SDK for the full batch; model working files stay separate."""
+    suite_path = Path('/prepared/prepared-suite.json')
+    suite = read_json(suite_path)
+    verifier = ASSETS.Verifier(ASSETS.load_index('/prepared/asset-verification.json'),
+                              full=suite.get('full_integrity', False))
+    ids = set(read_json('/prepared/batch-entry-ids.json'))
+    for position, record in enumerate(suite['entries'], 1):
+        if record['id'] not in ids:
+            continue
+        model_dir = Path('/prepared/models') / record['id']
+        if operation == 'offline' and not (model_dir / 'online-complete.json').is_file():
+            continue
+        work = Path('/run/models') / record['id']
+        work.mkdir(parents=True, exist_ok=True)
+        log_path = model_dir / (operation + '.log')
+        record['evidence'].append(f"models/{record['id']}/{operation}.log")
+        label = f"prepare {position}/{len(suite['entries'])} {operation}: {record['selection']['model_id']}"
+        try:
+            sdk_dir = model_dir / ('sdk-' + operation)
+            sdk_dir.mkdir(exist_ok=True)
+            shutil.copyfile('/prepared/sdk-prepare/sdk.json', sdk_dir / 'sdk.json')
+            record['evidence'].append(f"models/{record['id']}/sdk-{operation}/sdk.json")
+            # Native output stays in the per-model log. Heartbeats use the saved
+            # trusted console stream despite redirect_stdout inside the operation.
+            with PROGRESS.operation(label):
+                with log_path.open('w') as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+                    manifest = native(operation, record['id'], work, verifier, policy=suite.get('runtime_policy'))
+            if operation == 'online':
+                baseline, _, _, identity = SDK.load_baseline(Path('/prepared') / record['baseline'])
+                record.update(runtime_identity_sha256=baseline.get('resolved_runtime', {}).get('runtime_identity_sha256'),
+                    baseline_sha256=identity['baseline_sha256'],
+                    smoke_request=baseline['smoke_request'], smoke_expected_text=baseline['smoke_expected_text'],
+                    effective_execution=baseline['published_execution'], test_kind=baseline.get('test_kind', 'text_smoke'),
+                    service_kind=baseline.get('service_kind', 'text'), profile_identity=baseline.get('profile_identity', 'explicit-baseline'))
+                write_json(model_dir / 'online-complete.json', {'status': 'passed'})
+            else:
+                if isinstance(manifest, dict) and manifest.get('pipeline_upgrade') is not None:
+                    _, _, _, updated = SDK.load_baseline(Path('/prepared') / record['baseline'])
+                    record.update(baseline_sha256=updated['baseline_sha256'],
+                        effective_execution=manifest['effective_execution'],
+                        pipeline_upgrade=manifest['pipeline_upgrade'],
+                        published_execution=manifest['published_execution'],
+                        effective_test_profile=manifest['effective_test_profile'])
+                    record['evidence'].extend(manifest.get('evidence', []))
+                record['preparation'] = {'status': 'ready', 'reason': None}
+                record['inputs_manifest'] = f"models/{record['id']}/prepared-inputs.json"
+                record['inputs_manifest_sha256'] = digest(model_dir / 'prepared-inputs.json')
+        except Exception as error:
+            reason = f'{operation}: {type(error).__name__}: {error}'
+            if getattr(error, 'kind', None) and record.get('pipeline_cache'):
+                failed_cache = {key: value for key, value in record['pipeline_cache'].items() if key != 'read_sha256'}
+                failed_cache.update(status='failed', error_kind=error.kind, reason=str(error)[:4096])
+                write_json(model_dir / 'pipeline-cache-read.json', failed_cache)
+                record['pipeline_cache'] = {**failed_cache, 'read_sha256': digest(model_dir / 'pipeline-cache-read.json')}
+                reason += '; reseed: ' + failed_cache['reseed_command']
+            record['preparation'] = {'status': 'failed', 'reason': reason}
+            policy = suite.get('runtime_policy')
+            if operation == 'offline' and policy is not None:
+                # A rejected source remains model-local and keeps its publication
+                # evidence even when no executable derivative can be sealed.
+                report_path = f"models/{record['id']}/pipeline-upgrade.json"
+                publication = [f"models/{record['id']}/{name}" for name in
+                               ('publication-card.json', 'publication-lock.json') if (model_dir / name).is_file()]
+                failure = {'schema_version': 1, 'status': 'failed' if publication else 'not_reached',
+                           'migration_id': policy['pipeline_upgrade']['migration_id'],
+                           'policy_sha256': policy['policy_sha256'],
+                           'runtime_identity_sha256': policy['runtime_identity_sha256'],
+                           'reason': record['preparation']['reason'][:4096]}
+                write_json(model_dir / 'pipeline-upgrade.json', failure)
+                record['pipeline_upgrade'] = {**failure, 'report_path': report_path,
+                                             'report_sha256': digest(model_dir / 'pipeline-upgrade.json')}
+                record['evidence'].extend([report_path, *publication])
+        finally:
+            if operation == 'offline':
+                suite['asset_verification'] = dict(verifier.stats)
+            write_json(suite_path, suite)
+            failed = record['preparation']['status'] == 'failed' and record['preparation']['reason'] != 'preparation not reached'
+            outcome = ('FAIL ' + record['preparation']['reason']) if failed else (
+                'host-seeded pipeline verified; assets available' if operation == 'online' else 'prepared; cache reused')
+            PROGRESS.emit(label + ': ' + outcome)
+
+
+def container_json(container, operation, arguments=(), prepared=None):
+    """Run bounded pure qualification in the selected image, without host packages."""
+    if operation not in ('target-environment', 'qualify-wheel'):
+        raise ValueError('unknown SDK inspection operation')
+    command = ['docker', 'run', '--rm', '--pull=never', '--read-only', '--network', 'none',
+               '--platform', container.get('platform', 'linux/amd64'),
+               '--user', f'{os.getuid()}:{os.getgid()}', '--cap-drop', 'ALL',
+               '--security-opt', 'no-new-privileges', '--tmpfs', '/tmp:rw,size=128m,mode=1777',
+               '--env', 'HOME=/tmp', '--env', 'PYTHONNOUSERSITE=1',
+               *layout.mount_arguments()]
+    if prepared is not None:
+        command += ['--mount', f'type=bind,src={prepared},dst=/prepared,readonly']
+    command += [container['image'], *layout.command('sdk-environment', [operation, *arguments],
+        interpreter=container.get('python', 'python3'), container=True)]
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=60)
+    if prepared is not None:
+        with (prepared / 'actions-qualification.log').open('a') as log:
+            log.write((completed.stdout + completed.stderr)[:4 * 1024 * 1024])
+    completed.check_returncode()
+    if len(completed.stdout) > 4 * 1024 * 1024:
+        raise ValueError('runtime qualification output exceeds limit')
+    value = json.loads(completed.stdout)
+    if not isinstance(value, dict):
+        raise ValueError('runtime qualification did not return an object')
+    return value
+
+
+def actions_runtime(settings, selector, output, attempt, *, selection=None):
+    container = settings['container']
+    attempt['runtime'] = {'image': container['image'], 'platform': container.get('platform'),
+                          'source_selector': selector}
+    write_json(output / 'prepared-suite.json', attempt)
+    PROGRESS.run(['docker', 'pull', '--platform', container.get('platform', 'linux/amd64'), container['image']],
+                 output / 'image-pull.log', label='prepare container image', check=True, timeout=300)
+    with PROGRESS.operation('prepare target Python environment'):
+        environment = container_json(container, 'target-environment')
+    write_json(output / 'target-environment.json', environment)
+
+    def qualify(wheel, lock, target, dependency_directory=None):
+        write_json(output / 'actions-qualification-input.json', {'environment': target, 'lock': lock})
+        relative = '/prepared/' + Path(wheel).relative_to(output).as_posix()
+        dependencies = '/prepared/' + dependency_directory.relative_to(output).as_posix() if dependency_directory else ''
+        with PROGRESS.operation('prepare Actions wheel compatibility'):
+            result = container_json(container, 'qualify-wheel', (relative, dependencies), output)
+        return result['metadata'], result['compatibility_status']
+
+    def observed(source):
+        attempt['runtime'] = {'image': container['image'], 'platform': container.get('platform'),
+                              'source_selection': source}
+        write_json(output / 'prepared-suite.json', attempt)
+        write_json(output / 'actions-selection.json', source)
+
+    with PROGRESS.operation('prepare Actions SDK acquisition'):
+        snapshot, events = SDK.acquire_actions_runtime(settings, output / 'sdk-payloads',
+            selector=selector, environment=environment, qualifier=qualify, observe_source=observed,
+            **({'selection': selection} if selection is not None else {}))
+    adapter = SDK.runtime_baseline(settings, snapshot)
+    receipt = output / 'sdk-download'
+    receipt.mkdir()
+    write_json(receipt / 'sdk-acquisition.json', {'schema_version': 1, 'status': 'ready',
+        'payload_policy': 'per_attempt', 'resolved_runtime': snapshot, 'payloads': events,
+        'downloaded_bytes': sum(event['downloaded_bytes'] for event in events)})
+    return adapter, snapshot
+
+
+def run_host(args):
+    root = Path(args.root or os.environ.get('HRX_SYSTEMS_ROOT', Path.home() / '.local/share/hrx-systems-test')).expanduser()
+    if not root.is_absolute() or root == Path('/'):
+        raise ValueError('root must be an absolute directory other than /')
+    root = root.resolve(strict=True)
+    cache_root = root / 'cache'
+    selection_snapshot = getattr(args, 'selection_snapshot', None)
+    loaded_selection = None
+    if selection_snapshot is not None:
+        if args.suite is not None:
+            raise ValueError('--selection-snapshot and --suite are mutually exclusive')
+        loaded_selection = SNAPSHOT.load(selection_snapshot, cache_root, REPO)
+    cached = loaded_selection[0] == 'cached' if loaded_selection else getattr(args, 'selection', None) == 'cached'
+    if getattr(args, 'runtime', None) and getattr(args, 'runtime_baseline', None):
+        raise ValueError('--runtime and --runtime-baseline are mutually exclusive')
+    runtime_path = getattr(args, 'runtime', None) or getattr(args, 'runtime_baseline', None)
+    if getattr(args, 'runtime_baseline', None) and not cached:
+        raise ValueError('--runtime-baseline requires --selection cached')
+    if cached and args.suite:
+        raise ValueError('--selection cached and --suite are mutually exclusive')
+    suite_path = (Path(selection_snapshot).resolve(strict=True) if selection_snapshot else
+                  None if cached else (args.suite or REPO / 'config/cached-model-tests.json').resolve(strict=True))
+    if loaded_selection:
+        _, inventory, candidates = loaded_selection
+        suite = {'schema_version': 1, 'entries': candidates}
+    else:
+        inventory, candidates = INVENTORY.discover(cache_root) if cached else (None, [])
+        suite = {'schema_version': 1, 'entries': candidates} if cached else read_json(suite_path)
+    if suite.get('schema_version') != 1 or (not suite.get('entries') and not (cached and inventory['errors'])):
+        raise ValueError('suite must have schema_version1 and nonempty entries')
+    ids = [entry['id'] for entry in suite['entries']]
+    if 'runtime' in ids or len(set(ids)) != len(ids) or any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', value) for value in ids):
+        raise ValueError('suite IDs must be unique path-safe strings other than reserved runtime')
+    output = (args.output or root / 'runs' / ('prepared-' + uuid.uuid4().hex)).absolute()
+    output.mkdir(parents=True, exist_ok=False)
+    ASSETS.write_index(output / ASSETS.INDEX_NAME, ASSETS.load_index(cache_root / ASSETS.INDEX_NAME))
+    frozen_inputs = []
+    if selection_snapshot is not None:
+        shutil.copyfile(selection_snapshot, output / 'selection-snapshot.json')
+        frozen_inputs.append({'kind': 'selection_snapshot', 'path': 'selection-snapshot.json',
+                              'sha256': digest(output / 'selection-snapshot.json')})
+    if cached:
+        write_json(output / 'inventory.json', inventory)
+    if runtime_path is None and not cached:
+        for candidate in suite['entries']:
+            if candidate.get('baseline'):
+                try:
+                    runtime_path = contained(REPO, candidate['baseline'])
+                    break
+                except (ValueError, OSError):
+                    continue
+    # Freeze the full denominator before runtime configuration, auth or transfer.
+    attempt = {'schema_version': 1, 'attempt_id': output.name, 'source': source_identity(REPO),
+        'suite_sha256': digest(suite_path) if suite_path is not None else None, 'runtime': None,
+        'selection_mode': 'cached' if cached else 'suite', 'frozen_inputs': frozen_inputs,
+        'preparation_contract': {'pipeline_source': 'host_seeded', 'pipeline_network_requests': 0,
+                                 'pipeline_downloaded_bytes': 0, 'pipeline_cache_writes': 0},
+        'inventory_errors': inventory['errors'] if cached else [],
+        'full_integrity': getattr(args, 'full_integrity', False),
+        'entries': [{'id': entry['id'], 'selection': entry.get('selection', {}),
+                     'preparation': {'status': 'failed', 'reason': 'preparation not reached'},
+                     'inputs_manifest': None, 'evidence': []} for entry in suite['entries']]}
+    if cached:
+        attempt.update(inventory_sha256=digest(output / 'inventory.json'), inventory_path='inventory.json')
+    write_json(output / 'prepared-suite.json', attempt)
+    actions_acquired = False
+    try:
+        configured_path = Path(runtime_path or REPO / 'config/runtime.json').resolve(strict=True)
+        settings, _, _, _ = SDK.load_runtime(configured_path)
+        frozen = None
+        runtime_selection = getattr(args, 'runtime_selection', None)
+        if runtime_selection is not None:
+            if getattr(args, 'runtime_source', None) is not None:
+                raise ValueError('--runtime-selection and --runtime-source are mutually exclusive')
+            selected = PIPELINE.read_json(runtime_selection)
+            shutil.copyfile(runtime_selection, output / 'runtime-selection.json')
+            frozen_inputs.append({'kind': 'runtime_selection', 'path': 'runtime-selection.json',
+                                  'sha256': digest(output / 'runtime-selection.json')})
+            failed = PIPELINE.failed_selection(selected)
+            if failed is not None:
+                raise SDK.SdkError('frozen runtime resolution failed: ' + failed['error']['message'], failed['error']['kind'])
+            frozen = RELEASES.load_selection(selected)
+            selector = frozen['selector']
+        else:
+            selector = ACTIONS.selector_from_args(args, settings['sdk']['source'])
+        subprocess.run(['docker', 'info'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if selector['kind'] in ('github_actions', 'release_latest'):
+            template, runtime_snapshot = actions_runtime(settings, selector, output, attempt, **({'selection': frozen} if frozen is not None else {}))
+            lock_path = configured_path.parent / settings['sdk']['dependency_lock']
+            actions_acquired = True
+        else:
+            template, runtime_snapshot, lock_path = CONFIG.runtime(runtime_path)
+        publication_abi = None
+        policy_helper = POLICY
+        if policy_helper.needs_publication_abi(runtime_snapshot, getattr(args, 'pipeline_upgrade', 'auto')):
+            with PROGRESS.operation('prepare SDK publication ABI evidence'):
+                publication_abi = ABI.stage(
+                    output, runtime_snapshot, ACTIONS.GitHubClient())
+        runtime_policy, policy_files = PIPELINE.freeze_policy(output, runtime_snapshot,
+            publication_abi=publication_abi,
+            pipeline_upgrade=getattr(args, 'pipeline_upgrade', 'auto'),
+            pool_backing=getattr(args, 'pool_backing', None), memory_bytes=getattr(args, 'memory_bytes', None))
+    except (ValueError, OSError, KeyError, TypeError, SDK.SdkError, subprocess.SubprocessError) as error:
+        reason = f'runtime setup: {type(error).__name__}: {error}'
+        for record in attempt['entries']:
+            record['preparation'] = {'status': 'failed', 'reason': reason}
+        write_json(output / 'prepared-suite.json', attempt)
+        errors = output / 'sdk-download'
+        errors.mkdir(exist_ok=True)
+        write_json(errors / 'sdk-error.json', {'schema_version': 1, 'status': 'failed',
+                   'stage': 'runtime_setup', 'error_kind': getattr(error, 'kind', 'configuration'),
+                   'error': reason, 'model_executed': False})
+        CAPTURE.preparation_snapshot(output, attempt)
+        PROGRESS.emit('prepare: FAIL ' + reason)
+        return 1
+    generated = output / 'selection-config'
+    generated.mkdir()
+    write_json(output / 'resolved-runtime.json', runtime_snapshot)
+    shutil.copyfile(lock_path, generated / template['sdk']['dependency_lock'])
+    for candidate in suite['entries']:
+        try:
+            if cached:
+                baseline = {**template, **candidate['selection'], 'selection_mode': 'cached',
+                            **INVENTORY.freeze_test_policy(REPO, candidate['selection']),
+                            'resolved_runtime': runtime_snapshot}
+            else:
+                baseline, candidate_lock = CONFIG.compose(candidate, runtime_path,
+                    runtime_context=(template, runtime_snapshot, lock_path))
+                if candidate_lock.read_bytes() != lock_path.read_bytes():
+                    raise ValueError('suite entries must share one dependency lock')
+            baseline_path = generated / (candidate['id'] + '.json')
+            write_json(baseline_path, baseline)
+            candidate['_baseline'] = baseline_path
+        except (ValueError, OSError, KeyError, SDK.SdkError) as error:
+            candidate['_compose_error'] = f'{type(error).__name__}: {error}'
+    attempt = {'schema_version': 1, 'attempt_id': output.name, 'source': source_identity(REPO),
+        'suite_sha256': digest(suite_path) if suite_path is not None else None,
+        'runtime': {'image': template['container']['image'], 'platform': template['container'].get('platform'),
+                    'sdk': template['sdk'], 'resolved_runtime': runtime_snapshot},
+        'selection_mode': 'cached' if cached else 'suite', 'frozen_inputs': frozen_inputs,
+        'preparation_contract': {'pipeline_source': 'host_seeded', 'pipeline_network_requests': 0,
+                                 'pipeline_downloaded_bytes': 0, 'pipeline_cache_writes': 0},
+        'inventory_errors': inventory['errors'] if cached else [],
+        'runtime_policy': runtime_policy, 'policy_files': policy_files,
+        'full_integrity': getattr(args, 'full_integrity', False),
+        'cache_roots': {name: {'host_path': str((cache_root / name).resolve(strict=True)),
+                             'container_path': '/model-cache/' + name}
+                        for name in ('huggingface', 'loom-assets')},
+        'entries': [{'id': entry['id'], 'selection': entry.get('selection', {}),
+                     'test_kind': 'unresolved' if cached else 'text_smoke',
+                     'preparation': {'status': 'failed', 'reason': 'preparation not reached'},
+                     'inputs_manifest': None, 'evidence': []} for entry in suite['entries']]}
+    attempt['cache_roots']['pipelines'] = {'host_path': str(cache_root / 'pipelines'),
+                                           'container_path': '/model-cache/pipelines'}
+    if cached:
+        attempt['inventory_sha256'] = digest(output / 'inventory.json')
+        attempt['inventory_path'] = 'inventory.json'
+    PROGRESS.emit(f"prepare: {len(attempt['entries'])} selections; cache verification " +
+                  ('full integrity' if attempt['full_integrity'] else 'unchanged asset receipts'))
+    container_name = 'hrx-prepare-' + uuid.uuid4().hex
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt
+    old_handlers = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM)}
+    write_json(output / 'prepared-suite.json', attempt)
+    try:
+        contexts = []
+        for config, record in zip(suite['entries'], attempt['entries']):
+            entry_id = config['id']
+            try:
+                if config.get('_compose_error'):
+                    raise ValueError(config['_compose_error'])
+                if cached:
+                    record['selection'] = config['selection']
+                    if config['conflict']:
+                        raise ValueError('conflicting_seed_manifests: aliases disagree on immutable asset identities')
+                baseline_path = config['_baseline']
+                baseline, lock, _, identity = SDK.load_baseline(baseline_path)
+                record.update(runtime_identity_sha256=baseline.get('resolved_runtime', {}).get('runtime_identity_sha256'),
+                    baseline_sha256=identity['baseline_sha256'],
+                    dependency_lock_sha256=identity['dependency_lock_sha256'],
+                    selection=selection_identity(baseline), smoke_request=baseline.get('smoke_request'),
+                    smoke_expected_text=baseline.get('smoke_expected_text'), effective_execution=baseline.get('published_execution'))
+                runtime_key = {'image': baseline['container']['image'], 'platform': baseline['container']['platform'],
+                               'sdk': baseline['sdk'], 'dependency_lock_sha256': identity['dependency_lock_sha256']}
+                config_dir = output / 'config' / entry_id
+                config_dir.mkdir(parents=True)
+                shutil.copyfile(baseline_path, config_dir / 'baseline.json')
+                shutil.copyfile(baseline_path.parent / baseline['sdk']['dependency_lock'],
+                                config_dir / baseline['sdk']['dependency_lock'])
+                model_dir = output / 'models' / entry_id
+                model_dir.mkdir(parents=True)
+                if config.get('_raw') is not None:
+                    (model_dir / 'seed-manifest.json').write_bytes(config['_raw'])
+                else:
+                    seed_path = contained(cache_root, config['seed_manifest'])
+                    shutil.copyfile(seed_path, model_dir / 'seed-manifest.json')
+                record['baseline'] = f'config/{entry_id}/baseline.json'
+                record['evidence'] = [f'models/{entry_id}/seed-manifest.json',
+                                      record['baseline'], f"config/{entry_id}/{baseline['sdk']['dependency_lock']}"]
+                seed = read_json(model_dir / 'seed-manifest.json')
+                seed_selection = (' --selection cached' if cached else
+                    ' --suite ' + shlex.quote(str(args.suite or REPO / 'config/cached-model-tests.json')))
+                reseed = 'bash scripts/cache/seed-pipelines.sh --root ' + shlex.quote(str(root)) + seed_selection
+                started = time.monotonic()
+                try:
+                    pipeline_entry = CACHE.read_entry(cache_root / 'pipelines',
+                        record['selection'], seed['card_sha256'], seed['lock_sha256'])
+                    (model_dir / 'pipeline-cache-entry.json').write_bytes(pipeline_entry.raw_manifest)
+                    proof = {'schema_version': 1, 'pipeline_source': 'host_seeded', 'status': 'hit',
+                             'manifest_path': f'models/{entry_id}/pipeline-cache-entry.json',
+                             'manifest_sha256': pipeline_entry.manifest_sha256, 'entry_key': pipeline_entry.key,
+                             'read_path': f'models/{entry_id}/pipeline-cache-read.json',
+                             'requested_selection': record['selection'], 'card_sha256': seed['card_sha256'],
+                             'lock_sha256': seed['lock_sha256'], 'reseed_command': reseed,
+                             'pipeline_network_requests': 0, 'pipeline_downloaded_bytes': 0,
+                             'pipeline_cache_writes': 0,
+                             'source_file_count': len(pipeline_entry.manifest['sources']),
+                             'source_size_bytes': sum(item['size'] for item in pipeline_entry.manifest['sources']),
+                             'read_seconds': time.monotonic() - started}
+                    record['evidence'].append(proof['manifest_path'])
+                except Exception as error:
+                    proof = {'schema_version': 1, 'pipeline_source': 'host_seeded', 'status': 'failed',
+                             'error_kind': getattr(error, 'kind', 'cache_read'),
+                             'reason': str(error)[:4096], 'reseed_command': reseed,
+                             'read_path': f'models/{entry_id}/pipeline-cache-read.json',
+                             'requested_selection': record['selection'], 'card_sha256': seed['card_sha256'],
+                             'lock_sha256': seed['lock_sha256'], 'pipeline_network_requests': 0,
+                             'pipeline_downloaded_bytes': 0, 'pipeline_cache_writes': 0,
+                             'read_seconds': time.monotonic() - started}
+                    write_json(model_dir / 'pipeline-cache-read.json', proof)
+                    record['pipeline_cache'] = proof
+                    record['evidence'].append(proof['read_path'])
+                    raise ValueError(f"pipeline cache {proof['error_kind']}: {error}; reseed: {reseed}") from error
+                write_json(model_dir / 'pipeline-cache-read.json', proof)
+                proof['read_sha256'] = digest(model_dir / 'pipeline-cache-read.json')
+                baseline['pipeline_cache'] = proof
+                write_json(config_dir / 'baseline.json', baseline)
+                record['pipeline_cache'] = proof
+                record['evidence'].append(proof['read_path'])
+                if 'sdk_identity' not in attempt['runtime']:
+                    runtime_dir = output / 'config/runtime'
+                    shutil.copytree(config_dir, runtime_dir)
+                    write_json(runtime_dir / 'baseline.json', {key: baseline[key] for key in
+                        ('schema_version', 'sdk', 'container', 'resolved_runtime')})
+                    _, _, _, runtime_identity = SDK.load_baseline(runtime_dir / 'baseline.json')
+                    attempt['runtime'] = {**runtime_key, 'sdk_identity': runtime_identity,
+                        'sdk_payloads': 'sdk-payloads', 'sdk_baseline': 'config/runtime/baseline.json',
+                        'resolved_runtime': baseline['resolved_runtime']}
+                    write_json(output / 'resolved-runtime.json', baseline['resolved_runtime'])
+                elif any(attempt['runtime'][key] != value for key, value in runtime_key.items()):
+                    raise ValueError('suite entries must share one pinned image/SDK/dependency identity')
+                contexts.append((record, runtime_key, model_dir))
+            except Exception as error:
+                record['preparation'] = {'status': 'failed', 'reason': f'{type(error).__name__}: {error}'}
+            finally:
+                write_json(output / 'prepared-suite.json', attempt)
+        # Snapshot every expected entry/config before any acquisition begins.
+        if contexts:
+            try:
+                runtime = attempt['runtime']
+                PROGRESS.emit(f"prepare: SDK {runtime['sdk']['version']} at {runtime['sdk']['source_commit']}")
+                if not actions_acquired:
+                    PROGRESS.run(['docker', 'pull', '--platform', runtime['platform'], runtime['image']],
+                        output / 'image-pull.log', label='prepare container image', check=True, timeout=300)
+                    PROGRESS.run([*layout.command('sdk-environment', unbuffered=True), 'acquire',
+                        '--baseline', str(output / runtime['sdk_baseline']), '--payload-root', str(output / 'sdk-payloads'),
+                        '--output', str(output / 'sdk-download')], output / 'sdk-acquire.log',
+                        label='prepare SDK acquisition', check=True, timeout=600)
+            except Exception as error:
+                PROGRESS.emit(f'prepare: FAIL common runtime: {type(error).__name__}: {error}')
+                for record, _, _ in contexts:
+                    record['preparation'] = {'status': 'failed', 'reason': f'common runtime: {type(error).__name__}: {error}'}
+                write_json(output / 'prepared-suite.json', attempt)
+                return 1
+        if contexts:
+            write_json(output / 'batch-entry-ids.json', [record['id'] for record, _, _ in contexts])
+            with tempfile.TemporaryDirectory(prefix='.prepare-work-', dir=output) as temporary:
+                common = ['docker', 'run', '--rm', '--pull=never', '--name', container_name, '--read-only',
+                    '--platform', runtime['platform'], '--user', f'{os.getuid()}:{os.getgid()}',
+                    '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+                    '--tmpfs', '/tmp:rw,size=128m,mode=1777', '--env', 'HOME=/tmp', '--env', 'PYTHONNOUSERSITE=1',
+                    *layout.mount_arguments(),
+                    '--mount', f'type=bind,src={output},dst=/prepared',
+                    '--mount', f'type=bind,src={temporary},dst=/run']
+                for name in ('huggingface', 'loom-assets', 'pipelines'):
+                    common += ['--mount', f'type=bind,src={cache_root / name},dst=/model-cache/{name},readonly']
+                for operation in ('online', 'offline'):
+                    command = common + ['--network', 'none']
+                    command += [runtime['image'], *layout.command('prepare-cached-models', interpreter='python', container=True, unbuffered=True),
+                                '--stage', 'batch-' + operation]
+                    try:
+                        PROGRESS.run(command, output / ('batch-' + operation + '.log'),
+                                     label='prepare batch ' + operation, check=True, timeout=600 * len(contexts))
+                    except Exception as error:
+                        PROGRESS.emit(f'prepare batch {operation}: FAIL {type(error).__name__}: {error}')
+                        attempt = read_json(output / 'prepared-suite.json')
+                        for record in attempt['entries']:
+                            if record['preparation']['reason'] == 'preparation not reached':
+                                record['preparation'] = {'status': 'failed', 'reason': f'batch {operation}: {error}'}
+                        write_json(output / 'prepared-suite.json', attempt)
+                        return 1
+                    finally:
+                        subprocess.run(['docker', 'rm', '-f', container_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                attempt = read_json(output / 'prepared-suite.json')
+        print(f'Prepared suite: {output / "prepared-suite.json"}', flush=True)
+        return int(bool(attempt['inventory_errors']) or any(item['preparation']['status'] != 'ready' for item in attempt['entries']))
+    except KeyboardInterrupt:
+        PROGRESS.emit('prepare: interrupted; cleaning up owned container')
+        attempt = read_json(output / 'prepared-suite.json')
+        for record in attempt['entries']:
+            if record['preparation']['reason'] == 'preparation not reached':
+                record['preparation'] = {'status': 'failed', 'reason': 'preparation interrupted'}
+        write_json(output / 'prepared-suite.json', attempt)
+        return 1
+    finally:
+        try:
+            CAPTURE.preparation_snapshot(output, read_json(output / 'prepared-suite.json'))
+        except (ValueError, OSError) as error:
+            print(f'Preparation evidence capture unavailable: {error}', file=sys.stderr)
+        subprocess.run(['docker', 'rm', '-f', container_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for sig, previous in old_handlers.items():
+            signal.signal(sig, previous)
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) == 2 and argv[0] == '--native-batch':
+        native_batch(argv[1])
+        return 0
+    if len(argv) == 3 and argv[0] == '--native':
+        native(argv[1], argv[2])
+        return 0
+    parser = argparse.ArgumentParser(description=__doc__)
+    ACTIONS.add_source_arguments(parser)
+    parser.add_argument('--suite', type=Path)
+    parser.add_argument('--selection-snapshot', type=Path, help='frozen common selection and seed snapshot; no inventory rescan')
+    parser.add_argument('--runtime-selection', type=Path, help='frozen SDK selection reference; no latest re-resolution')
+    parser.add_argument('--pipeline-upgrade', choices=('auto', 'none'), default='auto')
+    parser.add_argument('--pool-backing', choices=('fixed', 'elastic'))
+    parser.add_argument('--memory-bytes', help='explicit elastic shared-server memory allowance')
+    parser.add_argument('--selection', choices=('cached',), help='derive the suite from this runner’s published seed manifests')
+    parser.add_argument('--runtime', type=Path, help='shared runtime configuration; default config/runtime.json')
+    parser.add_argument('--runtime-baseline', type=Path, help='shared SDK/image baseline for cached selection')
+    parser.add_argument('--full-integrity', action='store_true', help='hash every distinct physical asset once instead of trusting unchanged seed receipts')
+    parser.add_argument('--root', type=Path)
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--stage', choices=('online', 'offline', 'batch-online', 'batch-offline'), help=argparse.SUPPRESS)
+    parser.add_argument('--entry-id', help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+    if args.stage:
+        return stage(args)
+    try:
+        return run_host(args)
+    except (ValueError, OSError, subprocess.SubprocessError, KeyError, TypeError) as error:
+        PROGRESS.emit(f'prepare: FAIL {type(error).__name__}: {error}')
+        print(f'Cannot prepare: {error}', file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

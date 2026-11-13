@@ -18,7 +18,9 @@ def load(path, name):
     return module
 
 
-SDK = load(ROOT / 'scripts/sdk-environment.py', 'pipeline_sdk')
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.sdk import environment as SDK
 R = load(ROOT / 'tests/test_release_runtime.py', 'pipeline_release_fixture')
 F = R.F
 

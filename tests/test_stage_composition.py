@@ -64,16 +64,15 @@ class StageCompositionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        scripts = self.root / 'repo/scripts'
-        scripts.mkdir(parents=True)
-        self.script = scripts / 'run-cached-models.sh'
-        shutil.copyfile(ROOT / 'scripts/run-cached-models.sh', self.script)
-        shutil.copyfile(ROOT / 'scripts/ci-progress.py', scripts / 'ci-progress.py')
-        for helper in ('package-model-failures.sh', 'package-model-failures.py', 'failure-records.py', 'runtime-summary.py'):
-            shutil.copyfile(ROOT / 'scripts' / helper, scripts / helper)
-        for name, kind in [('prepare-cached-models.sh', 'prepare'),
-                           ('run-prepared-models.sh', 'run'),
-                           ('generate-model-report.sh', 'report')]:
+        self.repo = self.root / 'repo'
+        scripts = self.repo / 'scripts'
+        shutil.copytree(ROOT / 'scripts', scripts, symlinks=True)
+        shutil.copytree(ROOT / 'python', self.repo / 'python', ignore=shutil.ignore_patterns('__pycache__'))
+        shutil.copytree(ROOT / 'tools', self.repo / 'tools')
+        self.script = scripts / 'test/run-cached-models.sh'
+        for name, kind in [('test/prepare-cached-models.sh', 'prepare'),
+                           ('test/run-prepared-models.sh', 'run'),
+                           ('report/generate-model-report.sh', 'report')]:
             (scripts / name).write_text(FAKE_STAGE.replace('kind=KIND', 'kind=' + kind))
         self.cache_root = self.root / 'read only cache root'
         (self.cache_root / 'cache').mkdir(parents=True)
@@ -114,9 +113,9 @@ class StageCompositionTests(unittest.TestCase):
             'RAW_DISPATCH_INPUTS': json.dumps({} if inputs is None else inputs),
             'TRIGGER_SCHEDULE': '0 4 * * *' if event == 'schedule' else '',
             'GITHUB_TOKEN': 'secret-not-to-copy'}
-        import importlib.util
-        spec = importlib.util.spec_from_file_location('paired_fixture', ROOT / 'scripts/paired-ci.py')
-        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        import runpy
+        runpy.run_path(str(ROOT / 'python/run.py'))['bootstrap']()
+        from hrx_systems.ci import paired as module
         try:
             values = module.normalize(event, {} if inputs is None else inputs)
             plan_dir = self.root / ('plan-' + str(number)); plan_dir.mkdir()
@@ -373,7 +372,7 @@ class StageCompositionTests(unittest.TestCase):
             if workflow_metadata:
                 raw['workflow'] = workflow_identity
             raw_path.write_text(json.dumps(raw))
-            generated = subprocess.run([sys.executable, '-I', str(ROOT / 'scripts/generate-model-report.py'),
+            generated = subprocess.run([sys.executable, '-I', str(ROOT / 'python/run.py'), 'generate-model-report',
                 '--results', str(results), '--output', str(self.output / 'report')],
                 capture_output=True, text=True, timeout=10)
             self.assertEqual(generated.returncode, 0, generated.stderr)
@@ -481,13 +480,13 @@ class StageCompositionTests(unittest.TestCase):
     def test_workflow_cache_root_preserves_runner_environment_without_repo_override(self):
         script = workflow_run_block('Prepare host-seeded pipelines and read-only cached assets')
         self.output.mkdir()
-        (self.script.parent / 'paired-ci.py').write_text("import sys; sys.stdout.buffer.write(b'--selection-snapshot\\0fixture.json\\0')\n")
+        (self.repo / 'python/hrx_systems/ci/paired.py').write_text("def main(argv=None):\n import sys; sys.stdout.buffer.write(b'--selection-snapshot\\0fixture.json\\0')\n")
         for configured, expected in [('', str(self.cache_root)), ('/explicit-repo-cache', '/explicit-repo-cache')]:
             with self.subTest(configured=configured):
                 prepared = self.output / 'prepared'
                 if prepared.exists():
                     shutil.rmtree(prepared)
-                result = subprocess.run(['bash', '-c', script], cwd=self.script.parent.parent,
+                result = subprocess.run(['bash', '-c', script], cwd=self.repo,
                     env={**self.env, 'E2E_OUTPUT': str(self.output), 'CONFIGURED_CACHE_ROOT': configured,
                          'HRX_SYSTEMS_ROOT': str(self.cache_root), 'CI_PLAN':'fixture', 'LANE_ID':'latest-release'}, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -509,7 +508,7 @@ class StageCompositionTests(unittest.TestCase):
         self.assertIn('CONFIGURED_CACHE_ROOT: ${{ vars.HRX_SYSTEMS_ROOT }}', workflow)
         self.assertNotIn('      HRX_SYSTEMS_ROOT: ${{ vars.HRX_SYSTEMS_ROOT }}', workflow)
         self.assertNotRegex(upload, r'/(?:prepared|cache|sdk-payloads)/|/results/\s*$')
-        for name in ('prepare-cached-models.sh', 'run-prepared-models.sh', 'generate-model-report.sh'):
+        for name in ('test/prepare-cached-models.sh', 'test/run-prepared-models.sh', 'report/generate-model-report.sh'):
             self.assertIn('bash scripts/' + name, workflow)
 
 

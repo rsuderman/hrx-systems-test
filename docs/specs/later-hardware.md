@@ -60,7 +60,7 @@ the storage estimate, not qualification evidence or the seeder's verification.
 - All four checks pass and memory is available: `seed`, `runnable_now: true`.
 
 For an eligible entry, the operator invokes the existing
-`bash scripts/seed-models.sh --baseline <referenced-baseline> --root ... --output ...`
+`bash scripts/cache/seed-models.sh --baseline <referenced-baseline> --root ... --output ...`
 contract. Do not pass this report as a baseline or add a second selection API.
 The seeder still owns native resolution, integrity and ready-index publication;
 CI preparation still owns read-only closure verification. No CI cache writes or

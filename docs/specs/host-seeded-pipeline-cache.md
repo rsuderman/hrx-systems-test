@@ -24,13 +24,13 @@ must preserve the cache behavior. Its isolated worktree is `script-responsibilit
 
 ## Existing behavior and boundaries
 
-`scripts/prepare-cached-models.py` currently downloads publication card/lock files
+`python/hrx_systems/preparation/command.py` currently downloads publication card/lock files
 and pipeline source into disposable per-attempt `pipeline-cache` and `pipeline-hf`
 directories. It checks the publication commit and expected card/lock hashes from
-the existing model seed. `scripts/seed-models.py` provides native content-cache
+the existing model seed. `python/hrx_systems/cache/seed_assets.py` provides native content-cache
 routing. Program/auxiliary roles distinguish code from weight assets.
 
-`scripts/sdk-environment.py`, `actions-runtime.py` and `release-runtime.py`
+`python/hrx_systems/sdk/environment.py`, `python/hrx_systems/sdk/actions.py` and `python/hrx_systems/sdk/releases.py`
 separately resolve/acquire SDK packages and dependencies. `pipeline-preparation.py`
 binds runtime policy, request settings, original publication and derived source.
 `paired-ci.py` and the workflows orchestrate the two SDK lanes and reporting.
@@ -41,7 +41,7 @@ proof that all online time is byte transfer or a promised cache speedup.
 
 ## Proposed host seeding contract
 
-Add an explicit host command, proposed name `scripts/seed-pipelines.sh`, accepting
+Add an explicit host command, proposed name `scripts/cache/seed-pipelines.sh`, accepting
 the existing suite or cached model-seed inventory and configured root. Reuse the
 existing selection vocabulary rather than creating a second model catalog.
 
@@ -64,7 +64,7 @@ existing selection vocabulary rather than creating a second model catalog.
 
 ### Command and selection
 
-The public command is `bash scripts/seed-pipelines.sh --root ROOT`, defaulting to
+The public command is `bash scripts/cache/seed-pipelines.sh --root ROOT`, defaulting to
 the existing authored suite. `--selection cached` selects all deduplicated existing
 GGUF seed entries; `--suite FILE` selects an authored suite instead. The two
 selection options are mutually exclusive. Reuse existing inventory/selection
@@ -76,7 +76,7 @@ identities do not depend on that SDK's version. No GPU devices are mounted.
 For example, the host operator runs:
 
 ```sh
-bash scripts/seed-pipelines.sh --root /srv/loom-models --selection cached
+bash scripts/cache/seed-pipelines.sh --root /srv/loom-models --selection cached
 ```
 
 Ordinary `prepare-cached-models.sh` and both CI lanes require seeded inputs by
@@ -261,7 +261,7 @@ check, not a reason to invent a new planning task or require model qualification
 
 After local cache acceptance, refine the caller map below against that accepted source.
 Use thin existing public script entrypoints and focused implementation modules.
-Suggested internal package root is `scripts/lib/hrx_systems/`; final file names
+The implementation package root is `python/hrx_systems/`; final file names
 may change, but the following responsibility boundaries are the contract:
 
 - Host administration and explicit cache seeding.
@@ -271,16 +271,7 @@ may change, but the following responsibility boundaries are the contract:
 - Execution and lifecycle management.
 - CI orchestration and saved-results reporting/publication.
 
-| Current concentration | Proposed responsibility | Preserved entrypoints |
-| --- | --- | --- |
-| `bootstrap-runner.sh`, model/pipeline seed orchestration | `host/`: explicit operator setup and seed writers | Existing bootstrap/seed commands |
-| SDK/release/Actions helpers | `runtime/`: identity resolution, acquisition and offline installation | Existing SDK CLI and selector flags |
-| `prepare-cached-models.py`, cache routing | `pipelines/`: original-input reader, native preparation and immutable staging | `prepare-cached-models.sh` |
-| `pipeline-preparation.py`, `runtime-policy.py` | Separate source-integrity/upgrade sealing from request/launch policy | Existing policy and verification behavior |
-| `upgrade-pipelines-0.1.0-to-0.2.0.py` | Keep pure stdlib callable rewrite and standalone versioned command | Exact current standalone script/API |
-| `run-prepared-models.py` | `execution/`: preflight, serving lifecycle and cleanup | `run-prepared-models.sh` |
-| `paired-ci.py`, workflow shell glue | `ci/`: inputs, lane sequencing and outcome/publication orchestration | Existing workflow inputs and two lanes |
-| Renderer and failure packaging | `reports/`: saved-results normalization, formatting and packaging | Existing report/package commands |
+The completed layout and canonical command map are documented in [script responsibilities](../script-responsibilities.md) and [scripts/README.md](../../scripts/README.md).
 
 This is a separation of implementation responsibilities, not a requirement to
 split every file listed or create one module per noun. Do the minimum moves and

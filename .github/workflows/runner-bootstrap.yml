@@ -16,6 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Check host prerequisites
-        run: bash scripts/bootstrap-runner.sh check
+        run: bash scripts/host/bootstrap-runner.sh check
       - name: Check container storage boundary
-        run: bash scripts/check-container-storage.sh
+        run: bash scripts/host/check-container-storage.sh

@@ -14,10 +14,10 @@ import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / 'scripts/ci-progress.py'
-SPEC = importlib.util.spec_from_file_location('ci_progress', SCRIPT)
-PROGRESS = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(PROGRESS)
+SCRIPT = ROOT / 'python/run.py'
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.diagnostics import progress as PROGRESS
 
 
 class ProgressTests(unittest.TestCase):
@@ -44,7 +44,7 @@ class ProgressTests(unittest.TestCase):
         self.assertIn('::error::unsafe', self.log.read_text())
 
     def test_progress_visible_while_child_still_working(self):
-        command = [sys.executable, '-u', '-I', str(SCRIPT), '--label', 'run', '--log', str(self.log), '--',
+        command = [sys.executable, '-u', '-I', str(SCRIPT), 'ci-progress', '--label', 'run', '--log', str(self.log), '--',
                    *self.child("import time;print('[hrx] fixture online: ready');time.sleep(.6)")]
         process = subprocess.Popen(command, stdout=subprocess.PIPE, text=True)
         self.addCleanup(lambda: process.poll() is None and process.kill())
@@ -109,7 +109,7 @@ class ProgressTests(unittest.TestCase):
                     f"Path({str(pid_file)!r}).write_text(str(child.pid));"
                     "signal.signal(signal.SIGTERM,lambda *_:(child.wait(timeout=3),sys.exit(0)));"
                     "time.sleep(30)")
-                command = [sys.executable, '-u', '-I', str(SCRIPT), '--label', 'signal', '--log', str(self.log), '--', *self.child(code)]
+                command = [sys.executable, '-u', '-I', str(SCRIPT), 'ci-progress', '--label', 'signal', '--log', str(self.log), '--', *self.child(code)]
                 process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 try:
                     deadline = time.monotonic() + 3
@@ -129,7 +129,7 @@ class ProgressTests(unittest.TestCase):
                         process.wait()
 
     def test_child_signal_exit_has_normal_shell_status(self):
-        process = subprocess.run([sys.executable, '-u', '-I', str(SCRIPT), '--label', 'signal-exit',
+        process = subprocess.run([sys.executable, '-u', '-I', str(SCRIPT), 'ci-progress', '--label', 'signal-exit',
             '--log', str(self.log), '--', *self.child('import os,signal;os.kill(os.getpid(),signal.SIGTERM)')],
             capture_output=True, text=True, timeout=3)
         self.assertEqual(process.returncode, 143, process.stdout + process.stderr)

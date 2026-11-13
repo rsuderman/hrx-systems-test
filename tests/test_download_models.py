@@ -9,9 +9,9 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('download_models', ROOT / 'scripts/download-models.py')
-DOWNLOAD = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(DOWNLOAD)
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.cache import download_catalog as DOWNLOAD
 
 
 class DownloadReaderTests(unittest.TestCase):

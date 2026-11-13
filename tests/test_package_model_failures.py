@@ -12,17 +12,14 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def module(name):
-    spec = importlib.util.spec_from_file_location(name.replace('-', '_'), ROOT / 'scripts' / (name + '.py'))
-    value = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(value)
-    return value
+import runpy
+runpy.run_path(str(ROOT / 'python/run.py'))['bootstrap']()
+from hrx_systems.reporting import render, failures, package_failures, runtime_identity
 
 
-RECORDS = module('failure-records')
-PACKAGE = module('package-model-failures')
-CAPTURE = module('evidence-capture')
-
+RECORDS = failures
+PACKAGE = package_failures
+from hrx_systems.diagnostics import capture as CAPTURE
 
 class FailureBundleTests(unittest.TestCase):
     def setUp(self):

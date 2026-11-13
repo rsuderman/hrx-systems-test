@@ -3,7 +3,7 @@
 Use preparation output from this machine, with its existing seeded model cache:
 
 ```sh
-bash scripts/run-prepared-models.sh \
+bash scripts/test/run-prepared-models.sh \
   --prepared "$attempt/prepared" --output "$attempt/results"
 ```
 
@@ -66,7 +66,7 @@ local runs require none. Source credentials are never passed to execution.
 For cancellation recovery, the execution-owned cleanup hook is:
 
 ```sh
-bash scripts/run-prepared-models.sh --cleanup --output "$attempt/results"
+bash scripts/test/run-prepared-models.sh --cleanup --output "$attempt/results"
 ```
 
 It derives the owned container identity from the absolute output path, checks a

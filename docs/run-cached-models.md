@@ -3,9 +3,9 @@
 The public stage commands work independently, both locally and in GitHub:
 
 ```sh
-bash scripts/prepare-cached-models.sh --output "$attempt/prepared"
-bash scripts/run-prepared-models.sh --prepared "$attempt/prepared" --output "$attempt/results"
-bash scripts/generate-model-report.sh --results "$attempt/results" --output "$attempt/report"
+bash scripts/test/prepare-cached-models.sh --output "$attempt/prepared"
+bash scripts/test/run-prepared-models.sh --prepared "$attempt/prepared" --output "$attempt/results"
+bash scripts/report/generate-model-report.sh --results "$attempt/results" --output "$attempt/report"
 ```
 
 ## GitHub triggers and defaults
@@ -33,7 +33,7 @@ unrelated local processes. See [nightly behavior](specs/later-nightly.md).
 For convenience, run all three through the same thin Bash composition:
 
 ```sh
-bash scripts/run-cached-models.sh --root "$HRX_SYSTEMS_ROOT" --output "$attempt"
+bash scripts/test/run-cached-models.sh --root "$HRX_SYSTEMS_ROOT" --output "$attempt"
 ```
 
 `--root` identifies the seeded cache's parent, not the results directory. It
@@ -73,7 +73,7 @@ The combined command exits nonzero for failed/not-run stages or uncertain cleanu
 The command delegates cleanup to the execution stage's ownership-checked hook:
 
 ```sh
-bash scripts/run-prepared-models.sh --cleanup --output "$attempt/results"
+bash scripts/test/run-prepared-models.sh --cleanup --output "$attempt/results"
 ```
 
 This checks/removes only the container identity derived for those results. An
@@ -129,7 +129,7 @@ installed SDKs or environments.
 To regenerate from saved attempt evidence without a cache, GPU or network:
 
 ```sh
-bash scripts/package-model-failures.sh --attempt "$attempt" \
+bash scripts/report/package-model-failures.sh --attempt "$attempt" \
   --output "$attempt/failures" --zip "$attempt/model-failures.zip"
 ```
 

@@ -2,7 +2,7 @@
 
 ## Outcome and ownership
 
-Provide an optional `scripts/run-cached-models.sh` convenience wrapper and a real
+Provide an optional `scripts/test/run-cached-models.sh` convenience wrapper and a real
 manual GitHub workflow that call the same independent Bash stages. The three
 stage owners supply preparation (.3), execution (40e) and reports (.6); this task
 owns composition, CI metadata, failure propagation and artifact collection only.

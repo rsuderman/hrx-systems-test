@@ -1,61 +1,57 @@
-"""Trusted isolated imports and implementation provenance after module extraction."""
+"""Trusted isolated imports, package boundaries and implementation provenance."""
 import hashlib
-import importlib.util
 from pathlib import Path
+import runpy
 import subprocess
+import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def load(name):
-    spec = importlib.util.spec_from_file_location('test_modules_' + name.replace('-', '_'), ROOT / 'scripts' / (name + '.py'))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+runpy.run_path(str(ROOT / 'python/run.py'))['bootstrap']()
+from hrx_systems import layout
+from hrx_systems.preparation import command as prepare
 
 
 class ScriptModulesTests(unittest.TestCase):
     def test_public_commands_import_under_isolation_outside_checkout(self):
         with tempfile.TemporaryDirectory() as temporary:
-            for script in ('prepare-cached-models.py', 'seed-pipelines.py', 'run-prepared-models.py'):
-                with self.subTest(script=script):
-                    result = subprocess.run(['python3', '-I', str(ROOT / 'scripts' / script), '--help'],
-                        cwd=temporary, capture_output=True, text=True)
+            for role in ('prepare-cached-models', 'seed-pipelines', 'run-prepared-models'):
+                with self.subTest(role=role):
+                    result = subprocess.run(layout.command(role, ['--help']), cwd=temporary,
+                                            capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn('usage:', result.stdout)
 
-    def test_native_protocol_import_requires_no_installed_sdk(self):
-        code = """import importlib.util, pathlib, sys
-path = pathlib.Path(sys.argv[1])
-spec = importlib.util.spec_from_file_location('isolated_prepare', path)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-service = module.native_preparation()
-assert type(service).__module__ == 'hrx_systems.pipelines.preparation'
+    def test_native_protocol_and_reader_import_require_no_installed_sdk_or_writer(self):
+        code = """import pathlib, runpy, sys
+runpy.run_path(sys.argv[1])['bootstrap']()
+from hrx_systems.cache import pipeline_reader
+assert 'hrx_systems.cache.pipeline_writer' not in sys.modules
+from hrx_systems.preparation import command
+service = command.native_preparation()
+assert type(service).__module__ == 'hrx_systems.preparation.native'
 assert 'loom' not in sys.modules
-assert module.helper('pipeline-cache').read_entry.__module__ == 'hrx_systems.pipelines.cache_reader'
+assert command.CACHE.read_entry.__module__ == 'hrx_systems.cache.pipeline_reader'
 """
-        result = subprocess.run(['python3', '-I', '-c', code, str(ROOT / 'scripts/prepare-cached-models.py')],
+        result = subprocess.run([sys.executable, '-I', '-c', code, str(layout.launcher_path())],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_preparation_provenance_includes_bootstrap_and_actual_internal_sources(self):
-        prepare = load('prepare-cached-models')
+    def test_preparation_provenance_includes_launcher_and_actual_package_sources(self):
         identities = prepare.source_identity(ROOT)['files_sha256']
-        expected = [ROOT / 'scripts/_bootstrap.py', *sorted((ROOT / 'scripts/lib/hrx_systems').rglob('*.py'))]
-        for path in expected:
-            self.assertEqual(identities[str(path.relative_to(ROOT))], hashlib.sha256(path.read_bytes()).hexdigest())
+        self.assertEqual(set(identities), set(layout.implementation_files()))
+        for path in layout.implementation_files():
+            self.assertEqual(identities[path], hashlib.sha256((ROOT / path).read_bytes()).hexdigest())
 
-    def test_loader_rejects_paths_outside_its_repository(self):
-        bootstrap = load('_bootstrap')
-        for value in ('../runtime-policy', '/tmp/module', 'runtime-policy.py/extra'):
-            with self.subTest(value=value), self.assertRaises(ValueError):
-                bootstrap.load_public(value)
+    def test_only_documented_python_aliases_remain_and_paths_cannot_escape(self):
+        self.assertEqual({p.name for p in (ROOT / 'scripts').glob('*.py')},
+                         {'paired-ci.py', 'release-runtime.py', 'single-model-e2e.py',
+                          'upgrade-pipelines-0.1.0-to-0.2.0.py'})
+        self.assertFalse((ROOT / 'scripts/lib').exists())
         for value in ('../outside.py', '/tmp/outside.py', 'pipelines/../outside.py'):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                bootstrap.load_internal(value)
+                layout.repository_path(value)
 
 
 if __name__ == '__main__':

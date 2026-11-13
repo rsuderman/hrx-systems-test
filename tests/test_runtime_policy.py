@@ -8,14 +8,10 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-def load(name):
-    spec = importlib.util.spec_from_file_location(name.replace('-', '_'), ROOT / 'scripts' / (name + '.py'))
-    result = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(result)
-    return result
-
-POLICY = load('runtime-policy')
-SDK = load('sdk-environment')
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.preparation import runtime_policy as POLICY
+from hrx_systems.sdk import environment as SDK
 from _publication_fixture import publication_abi
 
 

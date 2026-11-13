@@ -10,11 +10,11 @@ Runtime settings remain version qualified; see [runtime policy](runtime-policy.m
 For example, use the ordinary three stages with a dynamically selected release:
 
 ```bash
-scripts/prepare-cached-models.sh --selection cached --runtime-source release-latest \
+scripts/test/prepare-cached-models.sh --selection cached --runtime-source release-latest \
   --root /srv/loom-models --output /tmp/prepared-release
-scripts/run-prepared-models.sh --prepared /tmp/prepared-release \
+scripts/test/run-prepared-models.sh --prepared /tmp/prepared-release \
   --output /tmp/results-release --device-uri amdgpu://0 --cycles 2
-scripts/generate-model-report.sh --results /tmp/results-release \
+scripts/report/generate-model-report.sh --results /tmp/results-release \
   --output /tmp/report-release
 ```
 

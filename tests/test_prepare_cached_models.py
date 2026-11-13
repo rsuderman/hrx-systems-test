@@ -11,9 +11,9 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('prepare_cached_models', ROOT / 'scripts/prepare-cached-models.py')
-PREP = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(PREP)
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.preparation import command as PREP
 try:
     import loom
 except ImportError:
@@ -142,15 +142,13 @@ class NativePreparationTests(unittest.TestCase):
         self.root, self.cache = self.fixture.root, self.fixture.cache
         self.baseline = self.fixture.baseline
         seed_work, _, self.seed = self.fixture.attempt('seed')
-        self.pipeline = PREP.helper('pipeline-cache')
-        original_helper = PREP.helper
+        self.pipeline = PREP.CACHE
         self.pipeline_entry = None
         def reader(root, selection, card, lock):
             if card != self.pipeline_entry.manifest['card']['sha256'] or lock != self.pipeline_entry.manifest['lock']['sha256']:
                 raise self.pipeline.CacheError('seed_mismatch', 'published card/lock disagree with pipeline cache')
             return self.pipeline_entry
-        facade = SimpleNamespace(read_entry=reader, native_cache=self.pipeline.native_cache)
-        self.cache_patch = patch.object(PREP, 'helper', side_effect=lambda name: facade if name == 'pipeline-cache' else original_helper(name))
+        self.cache_patch = patch.object(PREP.CACHE, 'read_entry', side_effect=reader)
         self.cache_patch.start()
         self.addCleanup(self.cache_patch.stop)
         self.seed_pipeline(seed_work, self.seed)

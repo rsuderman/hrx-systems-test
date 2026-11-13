@@ -6,8 +6,9 @@ import tempfile
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
-S=importlib.util.spec_from_file_location('selection_snapshot_test',ROOT/'scripts/selection-snapshot.py')
-M=importlib.util.module_from_spec(S);S.loader.exec_module(M)
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.selection import snapshot as M
 
 class SnapshotTests(unittest.TestCase):
     def setUp(self):

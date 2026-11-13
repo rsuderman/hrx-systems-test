@@ -21,9 +21,11 @@ def load(path, name):
     return module
 
 
-PREP = load(ROOT / 'scripts/prepare-cached-models.py', 'integration_prepare')
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.preparation import command as PREP
 SDK = PREP.SDK
-PACKAGE = load(ROOT / 'scripts/package-model-failures.py', 'integration_package')
+from hrx_systems.reporting import package_failures as PACKAGE
 FIXTURE = load(ROOT / 'tests/test_actions_runtime.py', 'integration_actions_fixture')
 
 
@@ -127,7 +129,7 @@ class ActionsIntegrationTests(unittest.TestCase):
     def test_qualification_container_never_receives_source_token(self):
         with patch.object(PREP.subprocess, 'run') as child:
             child.return_value = SimpleNamespace(stdout='{}', stderr='', check_returncode=lambda: None)
-            PREP.container_json({'image': 'pinned@sha256:' + 'a' * 64}, 'print("{}")')
+            PREP.container_json({'image': 'pinned@sha256:' + 'a' * 64}, 'target-environment')
         command = child.call_args.args[0]
         self.assertIn('none', command)
         self.assertNotIn('HRX_ACTIONS_TOKEN', str(command))

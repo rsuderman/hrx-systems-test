@@ -12,16 +12,11 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def load(name):
-    spec = importlib.util.spec_from_file_location('test_' + name.replace('-', '_'), ROOT / 'scripts' / (name + '.py'))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-PIPE = load('pipeline-preparation')
-PREP = load('prepare-cached-models')
-RUN = load('run-prepared-models')
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.pipelines import seals as PIPE
+from hrx_systems.preparation import command as PREP
+from hrx_systems.execution import command as RUN
 SDK = PREP.SDK
 from _publication_fixture import publication_abi
 
@@ -51,7 +46,7 @@ class PipelinePreparationTests(unittest.TestCase):
         (destination / 'model/weights.gguf').symlink_to(asset)
         seed = {'card_sha256': PIPE.digest(work / 'model.json'), 'lock_sha256': PIPE.digest(work / 'model.json.lock')}
         snapshot = copy.deepcopy(snapshot_override) if snapshot_override is not None else runtime(version)
-        abi = publication_abi(snapshot, root, abi_profile, client=abi_client) if PREP.helper('runtime-policy').needs_publication_abi(snapshot, upgrade) else None
+        abi = publication_abi(snapshot, root, abi_profile, client=abi_client) if PREP.POLICY.needs_publication_abi(snapshot, upgrade) else None
         policy, files = PIPE.freeze_policy(root, snapshot, pipeline_upgrade=upgrade, publication_abi=abi)
         identity = {'repository': 'example/model', 'publication_revision': 'a'*40,
                     'model_id': 'Example', 'preset': 'chat', 'variant': 'gguf', 'programs': 'source'}

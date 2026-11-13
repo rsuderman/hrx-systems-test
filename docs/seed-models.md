@@ -3,7 +3,7 @@
 From this repository, run:
 
 ```sh
-bash scripts/seed-models.sh
+bash scripts/cache/seed-models.sh
 ```
 
 The command selects the first entry in `config/cached-model-tests.json`, currently
@@ -28,7 +28,7 @@ Repeat the same command to reuse verified model assets. To prove reuse without
 asset network access:
 
 ```sh
-bash scripts/seed-models.sh --asset-network offline
+bash scripts/cache/seed-models.sh --asset-network offline
 ```
 
 This still fetches the SDK and pipeline online, then runs the same native

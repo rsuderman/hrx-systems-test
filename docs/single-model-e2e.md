@@ -72,10 +72,10 @@ Use a task-owned external venv and output/cache root:
 ```sh
 python3 -m venv /external/single-model-venv
 /external/single-model-venv/bin/python -m unittest discover -s tests -v
-/external/single-model-venv/bin/python scripts/single-model-e2e.py \
+/external/single-model-venv/bin/python tests/support/single_model_e2e.py \
   --mode fixture --cache /external/single-model-cache \
   --output /external/single-model-runs/first
-/external/single-model-venv/bin/python scripts/single-model-e2e.py \
+/external/single-model-venv/bin/python tests/support/single_model_e2e.py \
   --mode fixture --cache /external/single-model-cache \
   --output /external/single-model-runs/second
 ```

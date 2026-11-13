@@ -7,7 +7,7 @@ download missing pipeline inputs or repair stored entries.
 From the repository, seed the existing cached model inventory:
 
 ```sh
-bash scripts/seed-pipelines.sh --root /srv/loom-models --selection cached
+bash scripts/cache/seed-pipelines.sh --root /srv/loom-models --selection cached
 ```
 
 This selects the existing model seed manifests, without creating a second model
@@ -75,7 +75,7 @@ entry, inspect the diagnostic and run its host-reseed command. For the full
 cached inventory that command is:
 
 ```sh
-bash scripts/seed-pipelines.sh --root /srv/loom-models --selection cached
+bash scripts/cache/seed-pipelines.sh --root /srv/loom-models --selection cached
 ```
 
 Only the explicit seeder may repair missing or corrupt data. Do not edit entry
@@ -89,7 +89,7 @@ and garbage collection are outside this workflow.
 Run the existing public preparation stage after seeding:
 
 ```sh
-bash scripts/prepare-cached-models.sh --root /srv/loom-models \
+bash scripts/test/prepare-cached-models.sh --root /srv/loom-models \
   --selection cached --runtime-source release-latest --output /tmp/prepared-release
 ```
 

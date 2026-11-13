@@ -54,7 +54,7 @@ implemented single-model seed format or introducing a second model inventory.
    between models. Stop the server/container once after the loop, including failure
    paths. A one-entry suite proves the real local path first.
 3. **One command and GitHub hookup.** `hst-utq.4` supplies
-   optional `scripts/run-cached-models.sh`, which composes the prepare, execution and report commands; execution calls
+   optional `scripts/test/run-cached-models.sh`, which composes the prepare, execution and report commands; execution calls
    the lifecycle client once; it does not loop over subprocesses that each start a server.
    An optional `run-single-model.sh` convenience entry uses the same one-entry
    suite path. One manual workflow job invokes the same three Bash stages and uploads

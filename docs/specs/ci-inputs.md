@@ -2,13 +2,13 @@
 
 ## Outcome and ownership
 
-Provide `scripts/prepare-cached-models.sh` and its Python implementation. Starting
+Provide `scripts/test/prepare-cached-models.sh` and its Python implementation. Starting
 from the repo-authored suite and manually seeded assets, produce an independently
 consumable prepared suite. Downloading/verifying inputs happens here; never start
 a GPU server or generate presentation reports. Depends on completed `.1/.2`.
 
 ```sh
-bash scripts/prepare-cached-models.sh --output "$attempt/prepared"
+bash scripts/test/prepare-cached-models.sh --output "$attempt/prepared"
 ```
 
 ## Inputs

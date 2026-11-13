@@ -8,8 +8,9 @@ import unittest
 from unittest.mock import patch
 
 SCRIPTS=Path(__file__).resolve().parents[1]/'scripts'
-spec=importlib.util.spec_from_file_location('pipeline_cache_test',SCRIPTS/'pipeline-cache.py')
-C=importlib.util.module_from_spec(spec); sys.modules[spec.name]=C; spec.loader.exec_module(C)
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.cache import pipeline_reader as C, pipeline_writer as W, native_adapter as N
 
 class CacheTests(unittest.TestCase):
     def setUp(self):
@@ -26,7 +27,7 @@ class CacheTests(unittest.TestCase):
             'sources':[{'installation_path':'program/model.loom','roles':['program'],'origin':'program/model.loom','resolved':None,
                         'identity_authority':'host_seed',**item(b'vector.constant')}], 'origin_roots':{},'sdk_identity':{'version':'test'}}
     def read(self): return C.read_entry(self.root,self.selection,self.manifest['card']['sha256'],self.manifest['lock']['sha256'])
-    def publish(self): return C.publish(self.root,self.manifest,self.payloads)
+    def publish(self): return W.publish(self.root,self.manifest,self.payloads)
     def test_publish_repeat_preserves_manifest_and_inode(self):
         entry=self.publish(); inode=(self.root/'entries'/f'{entry.key}.json').stat().st_ino
         self.manifest['sdk_identity']={'version':'another'}
@@ -67,11 +68,11 @@ class CacheTests(unittest.TestCase):
         with self.assertRaises(C.CacheError):C.validate_manifest(C.canonical(self.manifest))
     def test_failed_publication_keeps_previous_manifest(self):
         entry=self.publish(); (self.root/'blobs/sha256'/self.manifest['sources'][0]['sha256']).unlink()
-        real=C.atomic
+        real=W.atomic
         def interrupt(path,data):
             if path.suffix=='.json':raise InterruptedError('test interruption')
             real(path,data)
-        with patch.object(C,'atomic',side_effect=interrupt):
+        with patch.object(W,'atomic',side_effect=interrupt):
             with self.assertRaises(InterruptedError):self.publish()
         self.assertEqual((self.root/'entries'/f'{entry.key}.json').read_bytes(),entry.raw_manifest)
     def test_manifest_bound_to_expected_seed(self):
@@ -82,7 +83,7 @@ class CacheTests(unittest.TestCase):
         with self.assertRaises(C.CacheError):C.validate_manifest(b'{"schema_version":1,"schema_version":1}')
     def test_reader_does_not_write(self):
         self.publish()
-        with patch.object(C,'atomic',side_effect=AssertionError('write')),patch.object(Path,'mkdir',side_effect=AssertionError('mkdir')):
+        with patch.object(W,'atomic',side_effect=AssertionError('write')),patch.object(Path,'mkdir',side_effect=AssertionError('mkdir')):
             self.read()
 
 
@@ -94,7 +95,7 @@ class NativeAdapterTests(unittest.TestCase):
         self.addCleanup(lambda:sys.path.remove(os.environ['PIPELINE_CACHE_SDK_WHEEL']))
     def test_native_staging_is_independent_and_unknown_refuses(self):
         from loom.model.fetch_source import Source
-        entry=CacheTests.publish(self); adapter=C.native_cache(entry,Path(self.tmp.name)/'staged')
+        entry=CacheTests.publish(self); adapter=N.native_cache(entry,Path(self.tmp.name)/'staged')
         source=Source('program/model.loom',{'kind':'url','url':'https://invalid'})
         prepared=adapter.prepare_source(source,None,offline=True)
         acquired=adapter.acquire(prepared,None,offline=True)
@@ -107,8 +108,7 @@ class NativeAdapterTests(unittest.TestCase):
         with self.assertRaises(C.CacheError):adapter.acquire(Source('unknown',{'kind':'url','url':'https://unknown'}),None,offline=False)
         with self.assertRaises(C.CacheError):adapter.huggingface.resolve_revision({'kind':'hf','repo':'other','revision':'main'},offline=False)
     def test_native_seeder_plans_code_only_without_asset_access(self):
-        spec=importlib.util.spec_from_file_location('pipeline_seed_native',SCRIPTS/'seed-pipelines.py')
-        seed=importlib.util.module_from_spec(spec);spec.loader.exec_module(seed)
+        from hrx_systems.cache import seed_pipelines as seed
         from loom.model.fetch_source import Document,Source
         from loom.model.fetch_storage import ContentCache
         from loom.model.lock import FileIdentity,ModelLock
@@ -143,8 +143,8 @@ class NativeAdapterTests(unittest.TestCase):
 
 class SeederOrchestrationTests(unittest.TestCase):
     def setUp(self):
-        spec=importlib.util.spec_from_file_location('pipeline_seed_orchestration',SCRIPTS/'seed-pipelines.py')
-        self.seed=importlib.util.module_from_spec(spec);spec.loader.exec_module(self.seed)
+        from hrx_systems.cache import seed_pipelines
+        self.seed=seed_pipelines
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name)
         self.args=type('Args',(),dict(root=self.root,suite=None,selection=None,runtime=None,output=self.root/'report'))()
@@ -165,7 +165,7 @@ class SeederOrchestrationTests(unittest.TestCase):
             path=self.root/'cache/pipelines/.seed.lock'
             with path.open('a') as stream:
                 with self.assertRaises(BlockingIOError):fcntl.flock(stream,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            with self.seed.CACHE.writer_lock(path.with_name('.publish.lock')):pass
+            with self.seed.WRITER.writer_lock(path.with_name('.publish.lock')):pass
             return {'id':name,'status':'ready'}
         with patch.object(self.seed,'selected',return_value=self.entries),patch.object(self.seed,'seed_one',side_effect=one):
             self.assertEqual(self.seed.run(self.args),0)

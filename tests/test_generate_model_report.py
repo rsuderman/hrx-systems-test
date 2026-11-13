@@ -13,9 +13,9 @@ from urllib.parse import unquote, urlsplit
 
 
 ROOT=Path(__file__).resolve().parents[1]
-SPEC=importlib.util.spec_from_file_location('model_report',ROOT/'scripts/generate-model-report.py')
-REPORT=importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(REPORT)
+import runpy
+runpy.run_path(str(ROOT / 'python/run.py'))['bootstrap']()
+from hrx_systems.reporting import render as REPORT
 FIXTURE=ROOT/'tests/fixtures/model-report/passing'
 
 

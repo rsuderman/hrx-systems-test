@@ -17,7 +17,7 @@ For a shared cache, pass `--reader-user` with the dedicated runner account so
 new and reseeded inventory manifests remain readable by CI.
 
 To test every hosted selection seeded on this runner, use
-`bash scripts/run-cached-models.sh --selection cached` with the configured cache
+`bash scripts/test/run-cached-models.sh --selection cached` with the configured cache
 root. See [runner-cache inventory selection](docs/cached-inventory.md) for
 discovery, deduplication, test profiles and incomplete-coverage handling.
 
@@ -35,17 +35,17 @@ Docker access, the selected GPU and a seeded compatible model are required.
 which may differ from a cache owned by another account.
 
 ```sh
-bash scripts/seed-cached-models.sh
+bash scripts/cache/seed-cached-models.sh
 
 attempt="$HOME/.local/share/hrx-systems-test/runs/manual-$(date -u +%Y%m%dT%H%M%S)-$$"
-bash scripts/prepare-cached-models.sh --output "$attempt/prepared"
-bash scripts/run-prepared-models.sh --prepared "$attempt/prepared" --output "$attempt/results"
-bash scripts/generate-model-report.sh --results "$attempt/results" --output "$attempt/report"
+bash scripts/test/prepare-cached-models.sh --output "$attempt/prepared"
+bash scripts/test/run-prepared-models.sh --prepared "$attempt/prepared" --output "$attempt/results"
+bash scripts/report/generate-model-report.sh --results "$attempt/results" --output "$attempt/report"
 ```
 
 Open `$attempt/report/index.html`. Report generation can run again from saved
 results without Docker, GPU or cache access. For the same stages in one command,
-use `bash scripts/run-cached-models.sh --output "$attempt"`; choose a fresh attempt
+use `bash scripts/test/run-cached-models.sh --output "$attempt"`; choose a fresh attempt
 directory rather than reusing one from the separate-stage example.
 
 - [Prepare inputs](docs/prepare-cached-models.md)
@@ -111,3 +111,5 @@ permits an explicit download-only probe without claiming GPU suitability or mode
 Automatic memory qualification and distributed hardware execution remain later
 work. The current suite assumes
 operator-selected compatible models/device and reports actual failures explicitly.
+
+Command directories, Python responsibilities and supported legacy aliases are listed in [scripts/README.md](scripts/README.md) and [the responsibility map](docs/script-responsibilities.md).

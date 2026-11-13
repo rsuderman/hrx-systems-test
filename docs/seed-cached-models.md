@@ -3,7 +3,7 @@
 From the repository:
 
 ```sh
-bash scripts/seed-cached-models.sh
+bash scripts/cache/seed-cached-models.sh
 ```
 
 This reads `config/cached-model-tests.json` and sequentially invokes the existing
@@ -27,7 +27,7 @@ single-model command and retains completed/current/not-run outcomes.
 To exercise the same seeding path with model-asset networking disabled:
 
 ```sh
-bash scripts/seed-cached-models.sh --asset-network offline
+bash scripts/cache/seed-cached-models.sh --asset-network offline
 ```
 
 SDK and pipeline acquisition still occur online. Persistent assets must already
@@ -37,7 +37,7 @@ When seeding as a different account from the runner, optionally grant an existin
 user read access to each successfully published manifest:
 
 ```sh
-bash scripts/seed-cached-models.sh --reader-user EXISTING_RUNNER_USER
+bash scripts/cache/seed-cached-models.sh --reader-user EXISTING_RUNNER_USER
 ```
 
 This requires `setfacl` and ownership of the manifest; it uses no sudo and never

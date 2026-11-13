@@ -3,7 +3,7 @@
 From the repository, run this as the cache writer, without sudo:
 
 ```bash
-bash scripts/download-models.sh --root /srv/loom-models --reader-user hrx-runner
+bash scripts/cache/download-models.sh --root /srv/loom-models --reader-user hrx-runner
 ```
 
 This sequentially seeds the 45 pinned publications whose selected GGUF assets
@@ -31,7 +31,7 @@ Omit `--reader-user` for a cache used only by the seeding account.
 Preview without writing or downloading:
 
 ```bash
-bash scripts/download-models.sh --root /srv/loom-models --reader-user hrx-runner --dry-run
+bash scripts/cache/download-models.sh --root /srv/loom-models --reader-user hrx-runner --dry-run
 ```
 
 The terminal prints each model, completion time and log path. The printed run
@@ -45,7 +45,7 @@ To run independently of a terminal session:
 
 ```bash
 mkdir -p "$HOME/.local/state/hrx-systems-test"
-nohup bash scripts/download-models.sh --root /srv/loom-models --reader-user hrx-runner \
+nohup bash scripts/cache/download-models.sh --root /srv/loom-models --reader-user hrx-runner \
   > "$HOME/.local/state/hrx-systems-test/download-models.log" 2>&1 < /dev/null &
 echo "Download PID: $!"
 ```

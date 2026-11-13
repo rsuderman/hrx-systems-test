@@ -18,7 +18,7 @@ container's fresh `/run/venv`; compare its identity with prepared inputs.
 
 ## Public execution stage
 
-`bash scripts/run-prepared-models.sh --prepared "$attempt/prepared"
+`bash scripts/test/run-prepared-models.sh --prepared "$attempt/prepared"
 --output "$attempt/results"` is the public Bash entry point, backed by Python.
 Consume `prepared-suite.json` and staged payloads only; pull no image/pipeline/SDK
 or assets. Require the prepared image locally and install SDK wheels offline.

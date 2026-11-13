@@ -76,7 +76,7 @@ replace the existing model's index. Seed the registered suite with one command:
 
 ```sh
 cache_root="${HRX_SYSTEMS_ROOT:-$HOME/.local/share/hrx-systems-test}"
-bash scripts/seed-cached-models.sh --root "$cache_root"
+bash scripts/cache/seed-cached-models.sh --root "$cache_root"
 ```
 
 For a runner using a different account, append `--reader-user ACCOUNT` to the
@@ -90,7 +90,7 @@ After seeding, the [existing staged commands](specs/pipeline-stages.md) prepare,
 execute and report the full default suite. For one combined local run:
 
 ```sh
-bash scripts/run-cached-models.sh --root "$cache_root" --cycles 2
+bash scripts/test/run-cached-models.sh --root "$cache_root" --cycles 2
 ```
 
 One server loads, queries and fully unregisters each model sequentially. Repeated

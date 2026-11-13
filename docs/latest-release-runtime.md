@@ -18,9 +18,9 @@ is not accepted as the released source identity.
 ## Metadata-only frozen selection
 
 ```sh
-python3 scripts/release-runtime.py freeze \
+python3 -I python/run.py release-runtime freeze \
   --runtime-source release-latest --output /absolute/new/runtime-selection.json
-python3 scripts/release-runtime.py verify \
+python3 -I python/run.py release-runtime verify \
   --input /absolute/runtime-selection.json
 ```
 
@@ -37,7 +37,7 @@ That public-command integration belongs to the following work package.
 
 ## Integration API
 
-Load `scripts/release-runtime.py` using the repository's existing helper pattern:
+Import `hrx_systems.sdk.releases` from the trusted package. Repository commands use `python3 -I python/run.py release-runtime`; the legacy script is a CLI alias:
 
 - `freeze_selection(selector, *, client=None, now=None, observe_request=None)`
   returns `{schema_version: 1, selector, source}`. It resolves metadata exactly

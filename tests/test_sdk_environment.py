@@ -8,10 +8,9 @@ import threading
 import unittest
 
 
-SPEC = importlib.util.spec_from_file_location(
-    "sdk_environment", Path(__file__).parents[1] / "scripts/sdk-environment.py")
-SDK = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(SDK)
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.sdk import environment as SDK
 
 
 class SdkEnvironmentTests(unittest.TestCase):

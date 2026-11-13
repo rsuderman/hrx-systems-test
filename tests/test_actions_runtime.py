@@ -11,9 +11,9 @@ from unittest import mock
 import urllib.error
 import zipfile
 
-SPEC = importlib.util.spec_from_file_location('actions_runtime', Path(__file__).parents[1] / 'scripts/actions-runtime.py')
-A = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(A)
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.sdk import actions as A
 HEAD, OLD = 'a' * 40, 'b' * 40
 NOW = '2026-11-11T12:00:00Z'
 ENV = {'python_version': '3.12', 'python_full_version': '3.12.5', 'sys_platform': 'linux',

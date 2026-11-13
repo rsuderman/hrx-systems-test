@@ -1,6 +1,6 @@
 # Freeze runtime-specific test policy
 
-Preparation uses `scripts/runtime-policy.py` after the selected SDK wheel identity
+Preparation uses `python/hrx_systems/preparation/runtime_policy.py` after the selected SDK wheel identity
 and metadata have been verified. It returns a policy bound to that exact runtime.
 Execution validates the frozen policy and copied seccomp bytes; it does not reread
 mutable repository configuration or choose new request/server settings.

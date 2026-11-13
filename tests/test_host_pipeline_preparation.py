@@ -21,7 +21,8 @@ def load(path, name):
 
 F = load(ROOT / 'tests/test_pipeline_preparation.py', 'host_pipeline_fixture')
 P, PIPE, RUN = F.PREP, F.PIPE, F.RUN
-C = P.helper('pipeline-cache')
+C = P.CACHE
+from hrx_systems.cache import pipeline_writer as W
 
 
 class HostPipelinePreparationTests(unittest.TestCase):
@@ -62,14 +63,14 @@ class HostPipelinePreparationTests(unittest.TestCase):
             for entry in suite['entries']:
                 self.assertEqual(entry['pipeline_cache']['error_kind'], 'missing_root')
                 self.assertEqual(entry['preparation']['status'], 'failed')
-                self.assertIn('bash scripts/seed-pipelines.sh --root ' + str(root), entry['preparation']['reason'])
+                self.assertIn('bash scripts/cache/seed-pipelines.sh --root ' + str(root), entry['preparation']['reason'])
                 self.assertIn('pipeline-cache-read.json', entry['evidence'][-1])
 
     def test_both_preparation_passes_are_offline_with_pipeline_cache_readonly_and_no_token(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             args, _, manifest, payloads = self.suite(root)
-            C.publish(root / 'cache/pipelines', manifest, payloads)
+            W.publish(root / 'cache/pipelines', manifest, payloads)
             before = {str(path.relative_to(root / 'cache/pipelines')): path.read_bytes()
                       for path in (root / 'cache/pipelines').rglob('*') if path.is_file()}
             with patch.object(P.subprocess, 'run'), patch.object(P.PROGRESS, 'run') as phase, \
@@ -81,6 +82,11 @@ class HostPipelinePreparationTests(unittest.TestCase):
             self.assertEqual(len(stages), 2)
             for command in stages:
                 self.assertEqual(command[command.index('--network') + 1], 'none')
+                self.assertIn('/source/python/run.py', command)
+                self.assertIn('prepare-cached-models', command)
+                for source, target in P.layout.source_mounts():
+                    self.assertIn(f'type=bind,src={source},dst={target},readonly', command)
+                self.assertNotIn('/source/scripts', str(command))
                 self.assertNotIn('HF_TOKEN', command)
                 self.assertIn('type=bind,src=' + str(root / 'cache/pipelines') + ',dst=/model-cache/pipelines,readonly', command)
             after = {str(path.relative_to(root / 'cache/pipelines')): path.read_bytes()

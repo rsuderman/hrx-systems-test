@@ -80,7 +80,7 @@ jobs:
           value=json.loads(os.environ.get('RAW_DISPATCH_INPUTS') or '{}')
           pathlib.Path(sys.argv[1]).write_text(json.dumps(value or {}))
           PYTHON
-          python3 -u -I scripts/paired-ci.py plan --root "$root" --output "$base/plan" \
+          python3 -u -I python/run.py paired-ci plan --root "$root" --output "$base/plan" \
             --inputs "$base/dispatch-inputs.json" --event "$GITHUB_EVENT_NAME" --github-output "$GITHUB_OUTPUT"
       - name: Upload frozen plan
         id: upload_plan
@@ -147,7 +147,7 @@ jobs:
             printf '{"schema_version":1,"status":"failed","reason":"frozen plan unavailable"}\n' > "$base/summary/paired-result.json"
             exit 1
           fi
-          python3 -I scripts/paired-ci.py aggregate --plan "$base/plan/ci-plan.json" \
+          python3 -I python/run.py paired-ci aggregate --plan "$base/plan/ci-plan.json" \
             --results "$base/results" --output "$base/summary"
       - name: Upload combined comparison
         id: upload

@@ -9,9 +9,9 @@ results/evidence rather than requiring post-run mutation.
 The names/flags below are proposed testing-repository scripts, not SDK commands.
 
 ```sh
-bash scripts/prepare-cached-models.sh --output "$attempt/prepared"
-bash scripts/run-prepared-models.sh --prepared "$attempt/prepared" --output "$attempt/results"
-bash scripts/generate-model-report.sh --results "$attempt/results" --output "$attempt/report"
+bash scripts/test/prepare-cached-models.sh --output "$attempt/prepared"
+bash scripts/test/run-prepared-models.sh --prepared "$attempt/prepared" --output "$attempt/results"
+bash scripts/report/generate-model-report.sh --results "$attempt/results" --output "$attempt/report"
 ```
 
 Preparation defaults to the checked-in suite and existing `HRX_SYSTEMS_ROOT`

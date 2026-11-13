@@ -24,7 +24,7 @@ A private SDK helper has two operations: trusted `acquire`
 downloads and verifies release/dependency payloads in the current attempt's
 `sdk-payloads/` directory; in-container `install` creates `/run/venv` from those
 read-only payload mounts and emits `sdk.json` in that container's stage-specific results
-directory. The public host entry points remain `scripts/seed-models.sh` and
+directory. The public host entry points remain `scripts/cache/seed-models.sh` and
 `scripts/run-single-model.sh`; they invoke this helper. These are contracts to
 implement, not existing SDK commands. No model cache is touched.
 

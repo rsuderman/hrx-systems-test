@@ -9,13 +9,9 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG_SPEC = importlib.util.spec_from_file_location('test_model_config', ROOT / 'scripts/model-config.py')
-CONFIG = importlib.util.module_from_spec(CONFIG_SPEC)
-CONFIG_SPEC.loader.exec_module(CONFIG)
-
-SPEC = importlib.util.spec_from_file_location('cached_inventory', ROOT / 'scripts/cached-inventory.py')
-INV = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(INV)
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.selection import configuration as CONFIG, inventory as INV
 
 
 class InventoryTests(unittest.TestCase):

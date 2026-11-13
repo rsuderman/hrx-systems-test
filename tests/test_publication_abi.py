@@ -247,8 +247,7 @@ class FrozenHandoffTests(unittest.TestCase):
 
     def test_real_capture_copy_and_report_preserve_source_evidence(self):
         from test_pipeline_preparation import RUN, PREP
-        spec=importlib.util.spec_from_file_location('epoch_report',ROOT/'scripts/generate-model-report.py')
-        report_module=importlib.util.module_from_spec(spec);spec.loader.exec_module(report_module)
+        from hrx_systems.reporting import render as report_module
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);prepared=root/'prepared';prepared.mkdir()
             _,policy,_,_,_,suite=self.fixture(prepared,abi_profile='state')
@@ -272,12 +271,12 @@ class FrozenHandoffTests(unittest.TestCase):
 
 class PreparationSelectorTests(unittest.TestCase):
     def test_shared_preparation_hook_covers_latest_replay_and_configured_pinned_sdk(self):
-        from test_host_pipeline_preparation import HostPipelinePreparationTests, P, C
+        from test_host_pipeline_preparation import HostPipelinePreparationTests, P, C, W
         from types import SimpleNamespace
         for route in ('actions-main','actions-replay','release'):
             with self.subTest(route=route), tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);args,_,manifest,payloads=HostPipelinePreparationTests().suite(root)
-                C.publish(root/'cache/pipelines',manifest,payloads)
+                W.publish(root/'cache/pipelines',manifest,payloads)
                 args.runtime_source=route
                 if route=='actions-replay':
                     args.runtime_run_id='123';args.runtime_run_attempt='1';args.runtime_artifact_id='456';args.runtime_wheel_sha256='a'*64
@@ -301,11 +300,11 @@ class PreparationSelectorTests(unittest.TestCase):
                 PIPE.validate_policy(root/'prepared',suite)
 
     def test_unchanged_release_and_explicit_none_never_acquire_sources(self):
-        from test_host_pipeline_preparation import HostPipelinePreparationTests, P, C
+        from test_host_pipeline_preparation import HostPipelinePreparationTests, P, C, W
         for version,mode in (('0.1.0','auto'),('0.2.0.dev0','none')):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);args,_,manifest,payloads=HostPipelinePreparationTests().suite(root)
-                C.publish(root/'cache/pipelines',manifest,payloads);args.pipeline_upgrade=mode
+                W.publish(root/'cache/pipelines',manifest,payloads);args.pipeline_upgrade=mode
                 snap=snapshot(version,'release')
                 settings,_,_,_=P.SDK.load_runtime(ROOT/'config/runtime.json')
                 template=P.SDK.runtime_baseline(settings,snap);lock=ROOT/'config'/settings['sdk']['dependency_lock']

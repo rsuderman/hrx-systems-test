@@ -7,13 +7,11 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG_SPEC = importlib.util.spec_from_file_location('test_model_config', ROOT / 'scripts/model-config.py')
-CONFIG = importlib.util.module_from_spec(CONFIG_SPEC)
-CONFIG_SPEC.loader.exec_module(CONFIG)
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.selection import configuration as CONFIG
 
-SPEC = importlib.util.spec_from_file_location("single_model_e2e", ROOT / "scripts/single-model-e2e.py")
-E2E = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(E2E)
+from support import single_model_e2e as E2E
 
 
 class SingleModelSkeletonTests(unittest.TestCase):

@@ -13,7 +13,7 @@ Manual `runtime_source` choices retain single-lane diagnostics: `release-latest`
 For local metadata-only planning, with `inputs.json` containing `{}`:
 
 ```sh
-python3 -I scripts/paired-ci.py plan --root "$HRX_SYSTEMS_ROOT" \
+python3 -I python/run.py paired-ci plan --root "$HRX_SYSTEMS_ROOT" \
   --output /tmp/new-paired-plan --inputs inputs.json --event workflow_dispatch
 ```
 

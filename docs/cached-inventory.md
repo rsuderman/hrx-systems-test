@@ -3,7 +3,7 @@
 After seeding and cache maintenance have finished, run:
 
 ```bash
-bash scripts/run-cached-models.sh --root "$HRX_SYSTEMS_ROOT" --selection cached
+bash scripts/test/run-cached-models.sh --root "$HRX_SYSTEMS_ROOT" --selection cached
 ```
 
 The preparation stage discovers this runner's published seed manifests and
@@ -78,7 +78,7 @@ receipts. Fresh programs, cards and SDK inputs retain their full integrity check
 For an existing cache, perform one manual adoption pass as its normal writer:
 
 ```bash
-bash scripts/verify-cached-assets.sh --root "$HRX_SYSTEMS_ROOT"
+bash scripts/cache/verify-cached-assets.sh --root "$HRX_SYSTEMS_ROOT"
 ```
 
 This hashes published seed manifests' complete asset closures once per physical

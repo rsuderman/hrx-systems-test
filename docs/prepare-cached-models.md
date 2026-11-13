@@ -3,7 +3,7 @@
 From the repository, run:
 
 ```sh
-bash scripts/prepare-cached-models.sh --output "$attempt/prepared"
+bash scripts/test/prepare-cached-models.sh --output "$attempt/prepared"
 ```
 
 Preparation defaults to the checked-in `config/cached-model-tests.json` suite and

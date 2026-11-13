@@ -6,7 +6,7 @@ cache, or alter test outcomes. Continue running the normal suite when advisory
 metadata is unknown.
 
 ```sh
-bash scripts/qualify-cached-models.sh \
+bash scripts/host/qualify-cached-models.sh \
   --prepared "$attempt/prepared" \
   --output "$attempt/hardware-advisory" \
   --device-uri amdgpu://0

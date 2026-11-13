@@ -49,7 +49,7 @@ jobs:
           set -euo pipefail
           plan="$RUNNER_TEMP/hrx-model-tests/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/plan/ci-plan.json"
           output="$RUNNER_TEMP/hrx-model-tests/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/$LANE_ID"
-          python3 -I scripts/paired-ci.py initialize --plan "$plan" --lane "$LANE_ID" \
+          python3 -I python/run.py paired-ci initialize --plan "$plan" --lane "$LANE_ID" \
             --output "$output" --previous-safe "$PREVIOUS_SAFE" --github-env "$GITHUB_ENV"
           printf 'CI_PLAN=%s\n' "$plan" >> "$GITHUB_ENV"
       - name: Prepare host-seeded pipelines and read-only cached assets
@@ -62,11 +62,11 @@ jobs:
         run: |
           set -euo pipefail
           root="${CONFIGURED_CACHE_ROOT:-${HRX_SYSTEMS_ROOT:-$HOME/.local/share/hrx-systems-test}}"
-          python3 -I scripts/paired-ci.py prepare-args --plan "$CI_PLAN" --lane "$LANE_ID" > "$E2E_OUTPUT/prepare-args.bin"
+          python3 -I python/run.py paired-ci prepare-args --plan "$CI_PLAN" --lane "$LANE_ID" > "$E2E_OUTPUT/prepare-args.bin"
           mapfile -d '' -t selection_args < "$E2E_OUTPUT/prepare-args.bin"
           [[ "${FULL_INTEGRITY:-false}" != true ]] || selection_args+=(--full-integrity)
-          python3 -u -I scripts/ci-progress.py --label prepare --log "$E2E_OUTPUT/prepare.log" -- \
-            bash scripts/prepare-cached-models.sh --root "$root" --output "$E2E_OUTPUT/prepared" "${selection_args[@]}"
+          python3 -u -I python/run.py ci-progress --label prepare --log "$E2E_OUTPUT/prepare.log" -- \
+            bash scripts/test/prepare-cached-models.sh --root "$root" --output "$E2E_OUTPUT/prepared" "${selection_args[@]}"
       - name: Run the prepared suite offline through one server
         id: run
         if: ${{ !cancelled() && steps.initialize.outcome == 'success' && env.BLOCKED != 'true' }}
@@ -78,9 +78,9 @@ jobs:
             echo 'No usable prepared manifest; no server started.' >&2
             exit 1
           fi
-          python3 -I scripts/paired-ci.py mark-run --output "$E2E_OUTPUT"
-          python3 -u -I scripts/ci-progress.py --label run --log "$E2E_OUTPUT/run.log" -- \
-            bash scripts/run-prepared-models.sh --prepared "$E2E_OUTPUT/prepared" \
+          python3 -I python/run.py paired-ci mark-run --output "$E2E_OUTPUT"
+          python3 -u -I python/run.py ci-progress --label run --log "$E2E_OUTPUT/run.log" -- \
+            bash scripts/test/run-prepared-models.sh --prepared "$E2E_OUTPUT/prepared" \
             --output "$E2E_OUTPUT/results" --workflow "$E2E_OUTPUT/workflow.json" \
             --device-uri "$DEVICE_URI" --cycles "$TEST_CYCLES"
       - name: Confirm execution-owned container cleanup
@@ -90,8 +90,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -u -I scripts/ci-progress.py --label cleanup --log "$E2E_OUTPUT/cleanup.log" -- \
-            bash scripts/run-prepared-models.sh --cleanup --output "$E2E_OUTPUT/results"
+          python3 -u -I python/run.py ci-progress --label cleanup --log "$E2E_OUTPUT/cleanup.log" -- \
+            bash scripts/test/run-prepared-models.sh --cleanup --output "$E2E_OUTPUT/results"
       - name: Save pre-report outcomes and collect failure evidence
         id: collect_failures
         if: ${{ always() && steps.initialize.outcome == 'success' }}
@@ -108,7 +108,7 @@ jobs:
           values = {name: os.environ[name.upper() + '_OUTCOME'] for name in ('prepare', 'run', 'cleanup')}
           pathlib.Path(sys.argv[1]).write_text(json.dumps({'schema_version': 1, 'stages': values}, indent=2) + '\n')
           PYTHON
-          bash scripts/package-model-failures.sh --attempt "$E2E_OUTPUT" --output "$E2E_OUTPUT/failures"
+          bash scripts/report/package-model-failures.sh --attempt "$E2E_OUTPUT" --output "$E2E_OUTPUT/failures"
       - name: Generate verification artifacts from saved results
         id: report
         if: ${{ always() && steps.initialize.outcome == 'success' }}
@@ -120,8 +120,8 @@ jobs:
             echo 'No raw results; retaining preparation/execution diagnostics.' >&2
             exit 1
           fi
-          python3 -u -I scripts/ci-progress.py --label report --log "$E2E_OUTPUT/report.log" -- \
-            bash scripts/generate-model-report.sh --results "$E2E_OUTPUT/results" --output "$E2E_OUTPUT/report" --failures "$E2E_OUTPUT/failures/failures.json"
+          python3 -u -I python/run.py ci-progress --label report --log "$E2E_OUTPUT/report.log" -- \
+            bash scripts/report/generate-model-report.sh --results "$E2E_OUTPUT/results" --output "$E2E_OUTPUT/report" --failures "$E2E_OUTPUT/failures/failures.json"
       - name: Save stage outcomes
         if: ${{ always() && steps.initialize.outcome == 'success' }}
         shell: bash
@@ -146,7 +146,7 @@ jobs:
         run: |
           set -euo pipefail
           status=0
-          bash scripts/package-model-failures.sh --attempt "$E2E_OUTPUT" --output "$E2E_OUTPUT/failures" || status=$?
+          bash scripts/report/package-model-failures.sh --attempt "$E2E_OUTPUT" --output "$E2E_OUTPUT/failures" || status=$?
           if [[ -f "$E2E_OUTPUT/failures/README.md" ]]; then
             printf 'has_failures=true\n' >> "$GITHUB_OUTPUT"
           else
@@ -293,17 +293,16 @@ jobs:
           FAILURE_URL: ${{ steps.upload_failures.outputs.artifact-url }}
         run: |
           set -euo pipefail
-          python3 -I - "$E2E_OUTPUT" "$GITHUB_OUTPUT" <<'PYTHON'
-          import importlib.util, json, os, pathlib, sys
-          spec = importlib.util.spec_from_file_location('paired', pathlib.Path('scripts/paired-ci.py'))
-          module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+          stages="$(python3 -I - <<'PYTHON'
+          import json, os
           observed = json.loads(os.environ['LANE_STAGES'])
           names = {'prepare':'prepare','run':'run','cleanup':'cleanup','report':'report',
                    'collect':'collect_failures','package':'package_failures','upload':'upload','summary':'summary'}
-          stages = {key:observed.get(value,{}).get('outcome','skipped') for key,value in names.items()}
-          result = module.finish(pathlib.Path(sys.argv[1]), stages, os.environ.get('REPORT_URL'), os.environ.get('FAILURE_URL'))
-          module.outputs(sys.argv[2], {'cleanup_safe':str(result['cleanup_safe']).lower(),'status':result['status']})
+          print(json.dumps({key:observed.get(value,{}).get('outcome','skipped') for key,value in names.items()}))
           PYTHON
+          )"
+          python3 -I python/run.py paired-ci finish --output "$E2E_OUTPUT" --stages "$stages" \
+            --github-output "$GITHUB_OUTPUT" --report-url "${REPORT_URL:-}" --failure-url "${FAILURE_URL:-}"
       - name: Upload lane result for comparison
         id: lane_upload
         if: ${{ always() && steps.lane_result.outcome == 'success' }}

@@ -11,8 +11,11 @@ import unittest
 from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
-spec=importlib.util.spec_from_file_location('paired_test',ROOT/'scripts/paired-ci.py')
-M=importlib.util.module_from_spec(spec);spec.loader.exec_module(M)
+import runpy
+runpy.run_path(str(ROOT / 'python/run.py'))['bootstrap']()
+from hrx_systems.ci import paired as M
+from hrx_systems.execution import command as RUN
+from hrx_systems.reporting import render as REPORT
 
 class PairedTests(unittest.TestCase):
     def setUp(self):
@@ -39,16 +42,13 @@ class PairedTests(unittest.TestCase):
         with self.assertRaises(ValueError):M.normalize('workflow_dispatch',{'cycles':False})
     def test_metadata_failure_is_frozen_without_losing_second_lane(self):
         from types import SimpleNamespace
-        real_helper=M.helper
         frozen={'entries':[{'entry':{'id':'example'},'selection':{'model_id':'example'}}]}
-        def helpers(name):
-            return SimpleNamespace(freeze=lambda *args: frozen) if name=='selection-snapshot' else real_helper(name)
         calls=[]
         def freezer(selector):
             calls.append(selector)
             if len(calls)==1: raise ValueError('release metadata unavailable')
             return {'schema_version':1,'selector':selector,'source':{'run_id':123}}
-        with patch.object(M,'helper',helpers):
+        with patch.object(M.S, 'freeze', return_value=frozen):
             doc=M.plan(self.root,self.root/'resolved-plan',M.normalize('push',{}),freezer=freezer)
         self.assertEqual(len(calls),2)
         self.assertEqual([x['resolution_status'] for x in doc['lanes']],['failed','selected'])
@@ -133,7 +133,7 @@ class TemporaryExclusionTests(unittest.TestCase):
             enabled = M.read(out / 'lane-selection.json')['expected_entries']
             suite = {'attempt_id': 'metadata-test', 'entries': [dict(e, preparation={'status': 'ready', 'reason': None},
                      smoke_expected_text='4') for e in enabled]}
-            raw = M.helper('run-prepared-models').initial_results(suite, {})
+            raw = RUN.initial_results(suite, {})
             raw['status'] = 'passed'
             for model in raw['models']: model['status'] = 'passed'
             M.write(out / 'results/suite-result.json', raw)
@@ -147,7 +147,7 @@ class TemporaryExclusionTests(unittest.TestCase):
         self.assertEqual([len(row['excluded_entries']) for row in plan['lanes']], [9, 0])
         self.assertEqual({row['selection']['repository'] for row in release['excluded_entries']},
                          {row['selection']['repository'] for row in self.policy['entries']})
-        snapshot_module = M.helper('selection-snapshot')
+        snapshot_module = M.S
         for lane in (release, ci):
             # Exercise the actual CLI argument boundary consumed by the worker.
             import subprocess, sys
@@ -197,7 +197,7 @@ class TemporaryExclusionTests(unittest.TestCase):
         path, plan = self.make_plan('repo-tamper')
         (self.repo / 'config/ci-model-exclusions.json').write_text('{}')
         with self.assertRaisesRegex(ValueError, 'configuration changed'):
-            M.helper('selection-snapshot').load(path.parent / plan['lanes'][0]['selection_snapshot'], self.root / 'cache', self.repo)
+            M.S.load(path.parent / plan['lanes'][0]['selection_snapshot'], self.root / 'cache', self.repo)
 
     def test_blocked_and_missing_execution_keep_only_enabled_denominator(self):
         path, _ = self.make_plan()
@@ -259,14 +259,14 @@ class TemporaryExclusionTests(unittest.TestCase):
             M.write(prepared / 'prepared-suite.json', {'attempt_id': 'metadata-regression', 'source': {},
                     'entries': [dict(e, preparation={'status': 'failed', 'reason': 'intentional fixture cache miss'})
                                 for e in enabled]})
-            runner = M.helper('run-prepared-models')
+            runner = RUN
             args = argparse.Namespace(prepared=prepared, output=out / 'results', device_uri='amdgpu://0',
                                       workflow=out / 'workflow.json')
             with patch.object(runner.subprocess, 'run', side_effect=AssertionError('must not invoke Docker')):
                 self.assertEqual(runner.run_host(args), 1)
         raw = M.read(out / 'results/suite-result.json')
         self.assertEqual(len(raw['expected_entries']), 51 if lane == 'latest-release' else 60)
-        M.helper('generate-model-report').generate(out / 'results', out / 'report')
+        REPORT.generate(out / 'results', out / 'report')
         source = (ROOT / '.github/workflows/_model-verification-worker.yml').read_text()
         section = source.split('      - name: Publish readable summary and report download\n', 1)[1]
         lines = []

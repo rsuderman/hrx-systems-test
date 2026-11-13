@@ -30,7 +30,7 @@ Standalone commands preserve the historical `legacy-12` default. Select the new
 contract explicitly when using a compatible newer SDK:
 
 ```sh
-python3 scripts/upgrade-pipelines-0.1.0-to-0.2.0.py SOURCE --check \
+python3 tools/migrations/upgrade-pipelines-0.1.0-to-0.2.0.py SOURCE --check \
   --epoch-publication-abi control-state-13
 ```
 

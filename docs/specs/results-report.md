@@ -2,7 +2,7 @@
 
 ## Independent report stage
 
-Run `bash scripts/generate-model-report.sh --results "$attempt/results"
+Run `bash scripts/report/generate-model-report.sh --results "$attempt/results"
 --output "$attempt/report"` after execution. It consumes saved `suite-result.json`
 and referenced raw evidence, then creates every final artifact below. No rerun,
 Docker/GPU/cache access or acquisition is needed. The results directory is

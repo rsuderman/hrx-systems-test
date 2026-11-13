@@ -16,9 +16,9 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('run_prepared_models', ROOT / 'scripts/run-prepared-models.py')
-RUN = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(RUN)
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.execution import command as RUN
 
 SERVER = r'''
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer

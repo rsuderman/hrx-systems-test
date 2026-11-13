@@ -9,9 +9,9 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('asset_verification', ROOT / 'scripts/asset-verification.py')
-ASSETS = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(ASSETS)
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.cache import assets as ASSETS
 
 
 class AssetVerificationTests(unittest.TestCase):

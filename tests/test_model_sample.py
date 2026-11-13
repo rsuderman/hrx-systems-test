@@ -7,13 +7,11 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG_SPEC = importlib.util.spec_from_file_location('test_model_config', ROOT / 'scripts/model-config.py')
-CONFIG = importlib.util.module_from_spec(CONFIG_SPEC)
-CONFIG_SPEC.loader.exec_module(CONFIG)
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parents[1] / "python/run.py"))["bootstrap"]()
+from hrx_systems.selection import configuration as CONFIG
 
-SPEC = importlib.util.spec_from_file_location('sample_sdk_environment', ROOT / 'scripts/sdk-environment.py')
-SDK = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(SDK)
+from hrx_systems.sdk import environment as SDK
 
 
 class ModelSampleTests(unittest.TestCase):

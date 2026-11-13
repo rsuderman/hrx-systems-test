@@ -8,7 +8,7 @@ that cache without writing it. Seeding does not run a model or select suitable
 hardware; this first model/host pair is operator-selected and compatible.
 
 ```sh
-bash scripts/seed-models.sh
+bash scripts/cache/seed-models.sh
 ```
 
 The repository owns the configuration, container invocation, SDK setup,

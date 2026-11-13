@@ -6,7 +6,7 @@ controls still allow a pinned release or exact Actions replay. To select the sam
 main-build route locally without rebuilding HRX:
 
 ```sh
-bash scripts/run-cached-models.sh --selection cached \
+bash scripts/test/run-cached-models.sh --selection cached \
   --runtime-source actions-main --output /absolute/new/attempt
 ```
 
@@ -27,7 +27,7 @@ For exact replay, copy all identifiers and the wheel checksum from the prior
 `resolved-runtime.json`:
 
 ```sh
-bash scripts/run-cached-models.sh --selection cached \
+bash scripts/test/run-cached-models.sh --selection cached \
   --runtime-source actions-replay \
   --runtime-run-id RUN_ID --runtime-run-attempt ATTEMPT \
   --runtime-artifact-id ARTIFACT_ID --runtime-wheel-sha256 WHEEL_SHA256 \

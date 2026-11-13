@@ -1,6 +1,6 @@
 # Per-run SDK environment
 
-The private `scripts/sdk-environment.py` helper implements `hst-utq.1`. Each
+The private `python/hrx_systems/sdk/environment.py` helper implements `hst-utq.1`. Each
 harness attempt downloads its selected HRX release and locked dependencies into
 temporary run storage. Only model assets use persistent caching.
 
