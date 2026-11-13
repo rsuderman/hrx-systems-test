@@ -107,7 +107,7 @@ def _validate_config(config):
         profiles = config['request_profiles']
         if profiles['profile_id'] != 'hrx-0.2.0-exact-reasoning-none-v1':
             raise ValueError('unsupported request profile configuration')
-        seen = set()
+        seen, families = set(), set()
         for override in profiles['overrides']:
             selection = override['selection']
             if set(selection) != set(SELECTION_FIELDS) or any(not isinstance(selection[key], str) or not selection[key] for key in SELECTION_FIELDS):
@@ -118,8 +118,11 @@ def _validate_config(config):
             if identity in seen or override['request_fields'] != {'reasoning_effort': 'none'}:
                 raise ValueError('duplicate request selection or unsupported request override')
             seen.add(identity)
-        if len(seen) != 3:
-            raise ValueError('runtime policy expects three exact reasoning selections')
+            families.add(tuple(selection[field] for field in SELECTION_FIELDS if field != 'publication_revision'))
+        # A refresh retains historical exact rules and adds new revisions of
+        # those same logical selections; revision count is not family count.
+        if len(families) != 3:
+            raise ValueError('runtime policy expects three logical reasoning selections')
     except (KeyError, TypeError, AttributeError) as error:
         raise ValueError('malformed runtime policy configuration') from error
     return config

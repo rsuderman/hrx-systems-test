@@ -7,6 +7,7 @@ Public Bash commands derive the checkout from their own path and dispatch throug
 | Host runner and storage | `host/bootstrap-runner.sh`, `host/check-container-storage.sh`, `host/qualify-cached-models.sh` |
 | Explicit host cache writers | `cache/seed-models.sh`, `cache/seed-cached-models.sh`, `cache/seed-pipelines.sh`, `cache/download-models.sh` |
 | Explicit asset receipt verification | `cache/verify-cached-assets.sh` |
+| Publication discovery and revision plans | `cache/refresh-publications.sh` |
 | Prepared model lifecycle | `test/prepare-cached-models.sh`, `test/run-prepared-models.sh`, `test/run-cached-models.sh` |
 | Saved-results reporting | `report/generate-model-report.sh`, `report/package-model-failures.sh` |
 
@@ -22,6 +23,9 @@ python3 -I python/run.py release-runtime --help
 ```
 
 The importable implementation is [python/hrx_systems](../python/hrx_systems). Its launcher has a fixed role registry; arbitrary module names or filenames are not accepted. `layout.py` owns code roots, argument vectors, source mounts and implementation provenance. Native stages mount only `python/` and `tools/migrations/` at their corresponding `/source/` paths, alongside the existing staged inputs and attempt data. Loom imports stay inside native SDK operations.
+
+Use [publication refresh](../docs/refresh-publications.md) to generate revision and
+catalog updates from hosted cards before explicit cache seeding and local testing.
 
 All 13 former top-level Bash paths remain thin `exec` aliases to the grouped commands. The documented `paired-ci.py` and `release-runtime.py` paths remain CLI-only aliases. They are not import APIs; Python callers import the corresponding package modules.
 

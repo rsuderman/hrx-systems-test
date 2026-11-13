@@ -10,6 +10,7 @@ ROLES = {
     'seed-cached-models': 'hrx_systems.cache.seed_suite',
     'seed-pipelines': 'hrx_systems.cache.seed_pipelines',
     'download-models': 'hrx_systems.cache.download_catalog',
+    'refresh-publications': 'hrx_systems.cache.refresh_publications',
     'verify-cached-assets': 'hrx_systems.cache.assets',
     'generate-model-report': 'hrx_systems.reporting.render',
     'package-model-failures': 'hrx_systems.reporting.package_failures',

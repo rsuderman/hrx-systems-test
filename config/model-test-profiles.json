@@ -210,6 +210,185 @@
         "reasoning_effort": "low"
       },
       "smoke_expected_text": "4"
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/unsloth-gpt-oss-20b-loom",
+        "publication_revision": "d04e90e003120ca101c82d18a6c9edf34f41315a",
+        "model_id": "openai/gpt-oss-20b",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "smoke_request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is two plus two? Reply with the digit only."
+          }
+        ],
+        "max_tokens": 256,
+        "temperature": 0,
+        "stream": false,
+        "reasoning_effort": "low"
+      },
+      "smoke_expected_text": "4"
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/bartowski-LFM3-1.7B-loom",
+        "publication_revision": "5738bc2164ea7add8679a9fc9567a9007bc5c270",
+        "model_id": "LiquidAI/LFM3-1.7B",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "smoke_request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is two plus two? Reply with the digit only."
+          }
+        ],
+        "max_tokens": 256,
+        "temperature": 0,
+        "stream": false,
+        "reasoning_effort": "high"
+      },
+      "smoke_expected_text": "4"
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/ggml-org-gemma-3-1b-it-loom",
+        "publication_revision": "a51f8456648a496ec86eeac0ace3733125dd0fc2",
+        "model_id": "google/gemma-3-1b-it",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "smoke_request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Calculate 2 + 2. Reply with a single numeral."
+          }
+        ],
+        "max_tokens": 32,
+        "temperature": 0,
+        "stream": false
+      },
+      "smoke_expected_text": "4"
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/bartowski-Qwen2.5-0.5B-Instruct-loom",
+        "publication_revision": "796fdd93ba49db80ffa8ba2895c99da36e6837bf",
+        "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "smoke_request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is two plus two? Reply with the digit only."
+          }
+        ],
+        "max_tokens": 32,
+        "temperature": 0,
+        "stream": false
+      },
+      "smoke_expected_text": "4"
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/unsloth-Qwen3-0.6B-loom",
+        "publication_revision": "07edacaa30cf67df31541f828f1d75b4c515e4ab",
+        "model_id": "Qwen/Qwen3-0.6B",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "smoke_request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is two plus two? Reply with the digit only."
+          }
+        ],
+        "max_tokens": 256,
+        "temperature": 0,
+        "stream": false,
+        "reasoning_effort": "high"
+      },
+      "smoke_expected_text": "4"
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/rippertnt-HyperCLOVAX-SEED-Text-Instruct-1.5B-loom",
+        "publication_revision": "072dfe18a680f4ceea981d275f72b5e2505d95da",
+        "model_id": "naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "smoke_request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is two plus two? Reply with the digit only."
+          }
+        ],
+        "max_tokens": 32,
+        "temperature": 0,
+        "stream": false
+      },
+      "smoke_expected_text": "4"
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/unsloth-Qwen3.5-0.8B-loom",
+        "publication_revision": "d535d391b75ab3aaa089163267745de4fb233f78",
+        "model_id": "Qwen/Qwen3.5-0.8B",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "smoke_request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is two plus two? Reply with the digit only."
+          }
+        ],
+        "max_tokens": 8,
+        "temperature": 0,
+        "stream": false
+      },
+      "smoke_expected_text": "4"
+    },
+    {
+      "selection": {
+        "repository": "loom-fun/unsloth-Llama-3.2-3B-Instruct-loom",
+        "publication_revision": "48c88b47439eea4e0c8d9ca994c2609c1019c275",
+        "model_id": "meta-llama/Llama-3.2-3B-Instruct",
+        "preset": "chat",
+        "variant": "gguf",
+        "programs": "source"
+      },
+      "smoke_request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is two plus two? Reply with the digit only."
+          }
+        ],
+        "max_tokens": 32,
+        "temperature": 0,
+        "stream": false
+      },
+      "smoke_expected_text": "4"
     }
   ]
 }
