@@ -73,6 +73,33 @@ class RefreshTests(unittest.TestCase):
     def snapshot(self):
         return {name: (self.repo / name).read_bytes() for name in R.INPUT_PATHS}
 
+    def test_exact_catalog_asset_exception(self):
+        old = self.old[0]
+        catalog = self.documents[R.CONFIG_PATHS[1]]
+        entry = next(x for x in catalog['entries'] if x['model_repository'] == old['repository'])
+        selected = {**old, 'publication_revision': self.metadata[old['repository']]['revision']}
+        size = catalog['max_gguf_bytes'] + 1
+        self.inspections[old['repository']]['selections'][R.key(old)]['gguf_bytes'] = size
+        entry['asset_policy_exception'] = {'selection': selected, 'max_gguf_bytes': size,
+                                           'reason': 'Approved extra draft asset for this revision'}
+        path = self.repo / R.CONFIG_PATHS[1]
+        path.write_text(R.formatted(catalog))
+        plan = self.plan()
+        row = next(x for x in plan['models'] if x['repository'] == old['repository'])
+        self.assertEqual(row['status'], 'updated')
+        R.validate_plan(plan)
+        self.assertEqual(json.loads(plan['proposed'][R.CONFIG_PATHS[1]]['text'])['max_gguf_bytes'], catalog['max_gguf_bytes'])
+        for field, value in [('publication_revision', 'f' * 40), ('variant', 'another')]:
+            changed = {**selected, field: value}
+            self.assertFalse(R.within_asset_policy(changed, size, catalog['max_gguf_bytes'], R.asset_policy_exceptions(catalog)))
+        for invalid in (None, 0, size + 1, True):
+            self.assertFalse(R.within_asset_policy(selected, invalid, catalog['max_gguf_bytes'], R.asset_policy_exceptions(catalog)))
+        for field, value in [('reason', ''), ('max_gguf_bytes', True), ('selection', {**selected, 'repository': 'loom-fun/other'})]:
+            bad = copy.deepcopy(catalog)
+            next(x for x in bad['entries'] if x['model_repository'] == old['repository'])['asset_policy_exception'][field] = value
+            with self.assertRaises(ValueError):
+                R.asset_policy_exceptions(bad)
+
     def reseal(self, plan):
         plan['plan_sha256'] = R.sha(R.canonical({k: v for k, v in plan.items() if k != 'plan_sha256'}))
 

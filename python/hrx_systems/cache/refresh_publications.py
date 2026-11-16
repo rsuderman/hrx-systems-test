@@ -343,7 +343,33 @@ def installed_inspection(batch, output, runtime=None):
     return parse(regular(sdk_evidence, 'inspection.json')), parse(regular(sdk_evidence, 'installed/sdk.json'))['identity']
 
 
-def model_rows(existing, metadata, inspections, include_new, max_bytes):
+def asset_policy_exceptions(catalog):
+    exceptions = {}
+    for entry in catalog['entries']:
+        if 'asset_policy_exception' not in entry:
+            continue
+        value = entry['asset_policy_exception']
+        if (not isinstance(value, dict) or set(value) != {'selection', 'max_gguf_bytes', 'reason'}
+                or type(value['max_gguf_bytes']) is not int or value['max_gguf_bytes'] <= 0
+                or not isinstance(value['reason'], str) or not value['reason'].strip()):
+            raise ValueError('invalid catalog asset policy exception')
+        selected = value['selection']
+        identity(selected)
+        if (set(selected) != set(CONFIG.FIELDS) or selected['repository'] != entry['model_repository']
+                or any(selected[k] != entry[k] for k in ('model_id', 'preset', 'variant'))
+                or selected['programs'] != 'source' or key(selected) in exceptions):
+            raise ValueError('asset policy exception differs from catalog selection')
+        exceptions[key(selected)] = value
+    return exceptions
+
+
+def within_asset_policy(selection, size, max_bytes, exceptions):
+    limit = exceptions.get(key(selection), {}).get('max_gguf_bytes', max_bytes)
+    return type(size) is int and 0 < size <= limit
+
+
+def model_rows(existing, metadata, inspections, include_new, max_bytes, exceptions=None):
+    exceptions = exceptions or {}
     rows, known = [], {x['selection']['repository'] for x in existing}
     available_assets = {a['sha256'] for x in existing for a in x['assets']}
     by_repository = {}
@@ -395,7 +421,7 @@ def model_rows(existing, metadata, inspections, include_new, max_bytes):
                         row.update(status='unsupported', reason='no locked GGUF parameter size')
                     elif not old and row['gguf_bytes'] > max_bytes:
                         row.update(status='outside_asset_policy', reason='GGUF bytes exceed catalog limit')
-                    elif old and old.get('cataloged') and (type(row['gguf_bytes']) is not int or not 0 < row['gguf_bytes'] <= max_bytes):
+                    elif old and old.get('cataloged') and not within_asset_policy(selection, row['gguf_bytes'], max_bytes, exceptions):
                         row.update(status='outside_asset_policy', reason='updated GGUF size is unknown or exceeds the existing catalog limit')
             rows.append(row)
     return rows
@@ -406,11 +432,12 @@ def proposed_configs(inputs, rows):
     accepted = [r for r in rows if r['status'] in ('updated', 'added')]
     mapping = {key(r['old_selection']): r for r in accepted if r['old_selection']}
     catalog = documents[CONFIG_PATHS[1]]
+    exceptions = asset_policy_exceptions(catalog)
     for entry in catalog['entries']:
         old = {'repository': entry['model_repository'], 'publication_revision': entry['publication_revision'],
                **{k: entry[k] for k in ('model_id', 'preset', 'variant')}, 'programs': 'source'}
         row = mapping.get(key(old))
-        if row and (type(row['gguf_bytes']) is not int or not 0 < row['gguf_bytes'] <= catalog['max_gguf_bytes']):
+        if row and not within_asset_policy(row['selection'], row['gguf_bytes'], catalog['max_gguf_bytes'], exceptions):
             raise ValueError('updated catalog model has no eligible locked GGUF size: ' + entry['model_repository'])
         if row:
             entry['publication_revision'] = row['selection']['publication_revision']
@@ -463,8 +490,9 @@ def make_plan(repo, existing, metadata, inspections, inspection_identity, includ
     inputs = {name: {'text': regular(repo, name)} for name in INPUT_PATHS}
     for record in inputs.values():
         record['sha256'] = sha(record['text'].encode())
-    max_bytes = parse(inputs[CONFIG_PATHS[1]]['text'])['max_gguf_bytes']
-    rows = model_rows(existing, metadata, inspections, include_new, max_bytes)
+    catalog = parse(inputs[CONFIG_PATHS[1]]['text'])
+    max_bytes = catalog['max_gguf_bytes']
+    rows = model_rows(existing, metadata, inspections, include_new, max_bytes, asset_policy_exceptions(catalog))
     proposed = proposed_configs(inputs, rows)
     document = {'schema_version': 1, 'author': author, 'include_new': include_new,
                 'explicit_choices': choices, 'inputs': inputs, 'existing': existing,
@@ -503,8 +531,9 @@ def validate_plan(plan):
             inspection = plan['inspections'].get(name, {})
             if inspection.get('status') == 'inspected' and any(inspection.get(k) != source[k] for k in ('card_sha256', 'lock_sha256')):
                 raise ValueError('SDK inspection describes different card/lock bytes')
+    catalog = parse(plan['inputs'][CONFIG_PATHS[1]]['text'])
     rows = model_rows(plan['existing'], plan['metadata'], plan['inspections'], plan['include_new'],
-                      parse(plan['inputs'][CONFIG_PATHS[1]]['text'])['max_gguf_bytes'])
+                      catalog['max_gguf_bytes'], asset_policy_exceptions(catalog))
     if rows != plan['models'] or proposed_configs(plan['inputs'], rows) != {k: v['text'] for k, v in plan['proposed'].items()}:
         raise ValueError('refresh plan does not match its saved selection evidence')
     if plan['suite'] != generated_suite(rows, plan['batch_id']):

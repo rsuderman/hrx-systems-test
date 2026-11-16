@@ -43,6 +43,12 @@ publications. Unknown asset sizes cannot pass the catalog size filter. The plan
 reports locked assets missing from known seed receipts; this is an estimate based
 on receipts, not a scan or hash of all cached weights.
 
+An explicitly approved exception for an existing catalog entry can be recorded as
+`asset_policy_exception` on that entry. It requires the exact six-field `selection`,
+a positive integer `max_gguf_bytes`, and a nonempty `reason`. Only that immutable
+selection may use the exception's size ceiling; the default catalog limit and new
+model discovery policy remain unchanged. Unknown or zero sizes remain ineligible.
+
 Apply a saved plan in its originating checkout:
 
 ```sh

@@ -4,7 +4,7 @@
   "entries": [
     {
       "model_repository": "loom-fun/unsloth-Qwen3-0.6B-loom",
-      "publication_revision": "07edacaa30cf67df31541f828f1d75b4c515e4ab",
+      "publication_revision": "ffe640e8f70da407505adc3fa0c1047f76e54940",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3-0.6B",
@@ -12,7 +12,7 @@
     },
     {
       "model_repository": "loom-fun/bartowski-Qwen2.5-0.5B-Instruct-loom",
-      "publication_revision": "796fdd93ba49db80ffa8ba2895c99da36e6837bf",
+      "publication_revision": "857f8443a06e22be2c77fc9e4080446e3af801b4",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
@@ -28,7 +28,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-Qwen3.5-0.8B-loom",
-      "publication_revision": "d535d391b75ab3aaa089163267745de4fb233f78",
+      "publication_revision": "874fabb4378fcf56c2c8c8c9b17ad92280c44101",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3.5-0.8B",
@@ -36,7 +36,7 @@
     },
     {
       "model_repository": "loom-fun/ggml-org-gemma-3-1b-it-loom",
-      "publication_revision": "a51f8456648a496ec86eeac0ace3733125dd0fc2",
+      "publication_revision": "00fabc5223b95eaf3b4bf83fab0f14c6e445f8cc",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "google/gemma-3-1b-it",
@@ -44,7 +44,7 @@
     },
     {
       "model_repository": "loom-fun/bartowski-Qwen2.5-1.5B-Instruct-loom",
-      "publication_revision": "c3a313d2605e033ea20f442515b6d251df9da3f8",
+      "publication_revision": "d765da7a693ab710787b13a631d635d7471ce4f0",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen2.5-1.5B-Instruct",
@@ -68,7 +68,7 @@
     },
     {
       "model_repository": "loom-fun/ggml-org-LFM3-Omni-2B-loom",
-      "publication_revision": "090bb7a7017d4fcd8e81c904d33231aea964b9ad",
+      "publication_revision": "f0a82a37c02348b61f3744a390037bff0864b5fa",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "LiquidAI/LFM3-Omni-2B",
@@ -76,7 +76,7 @@
     },
     {
       "model_repository": "loom-fun/bartowski-LFM3-1.7B-loom",
-      "publication_revision": "5738bc2164ea7add8679a9fc9567a9007bc5c270",
+      "publication_revision": "cffc78e6fdb4087e99925d6374befef52cefad30",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "LiquidAI/LFM3-1.7B",
@@ -84,7 +84,7 @@
     },
     {
       "model_repository": "loom-fun/rippertnt-HyperCLOVAX-SEED-Text-Instruct-1.5B-loom",
-      "publication_revision": "072dfe18a680f4ceea981d275f72b5e2505d95da",
+      "publication_revision": "f3a7b97029be5b8cae5700f19c7fac0d9f31ab8e",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B",
@@ -92,7 +92,7 @@
     },
     {
       "model_repository": "loom-fun/ggml-org-Qwen3-1.7B-loom",
-      "publication_revision": "ce517a99f891ca35bc5c3dc7e638087151c20ac0",
+      "publication_revision": "5998f4857e6d97a8feffcb8a93c8bed815905d00",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3-1.7B",
@@ -100,7 +100,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-Qwen3.5-2B-loom",
-      "publication_revision": "eea871c6bb50aca61dcbff4be0835f57cf4a5cfc",
+      "publication_revision": "e887d0152bcb47e8d91a379481adb556ac713031",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3.5-2B",
@@ -108,7 +108,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-Llama-3.2-3B-Instruct-loom",
-      "publication_revision": "48c88b47439eea4e0c8d9ca994c2609c1019c275",
+      "publication_revision": "7680cc5682eb6273b8d7058ad630d235dd4c7e87",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "meta-llama/Llama-3.2-3B-Instruct",
@@ -116,7 +116,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-Qwen3-4B-Instruct-2507-loom",
-      "publication_revision": "dc19cc1797efb4c9b5dbae1c333733b267a8d60d",
+      "publication_revision": "7c1ede3914ad0b47d3329d5d0c724bb28ac5cd28",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3-4B-Instruct-2507",
@@ -124,7 +124,7 @@
     },
     {
       "model_repository": "loom-fun/XHToken-Spark-X2.5-4B-loom",
-      "publication_revision": "9bef5116fa0535f708dd60d125ca65ee60da70a7",
+      "publication_revision": "09d0bc2f9e710fa694555aed9865c1e9c74ee250",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "XHToken/Spark-X2.5-4B",
@@ -132,7 +132,7 @@
     },
     {
       "model_repository": "loom-fun/bartowski-Spark-X2.6-4B-loom",
-      "publication_revision": "4dc9cd09f29d68263798cd1274c095794ecbe5e5",
+      "publication_revision": "af10d88b8c1aeea525bdb5aef473995e5d0e1fa2",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "XHToken/Spark-X2.6-4B",
@@ -140,7 +140,7 @@
     },
     {
       "model_repository": "loom-fun/ggml-org-Qwen3-4B-loom",
-      "publication_revision": "b78cd1450325ac8a160b6b6df374429ae4b2a090",
+      "publication_revision": "1a563f027dc9c0437fbb32a275a7c58c89b817cc",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3-4B",
@@ -148,7 +148,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-Qwen3-VL-4B-Instruct-loom",
-      "publication_revision": "acd6287b949e971c7d9c13ad5f4a8122d183e0ec",
+      "publication_revision": "6e206f0cb976b4f8925f13edf6c352460e0f65d0",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3-VL-4B-Instruct",
@@ -156,7 +156,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-Qwen3.5-4B-loom",
-      "publication_revision": "189cd41968e1a6a94e577b857203066592a057f3",
+      "publication_revision": "6e8e69042ec764ba92c560d4be4f7d7c8141f2f8",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3.5-4B",
@@ -164,7 +164,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-gemma-4-E2B-it-loom",
-      "publication_revision": "9f95fc6474e4762cd1c5d12dec227f3f5e7e3517",
+      "publication_revision": "dd88fa7cee3599537dacba343d404c5290d32539",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "google/gemma-4-E2B-it",
@@ -172,7 +172,7 @@
     },
     {
       "model_repository": "loom-fun/bartowski-Qwen2.5-7B-Instruct-loom",
-      "publication_revision": "9dde8cd44ff1e8723f2d991a5bf9a23908200550",
+      "publication_revision": "68b8c03ea13acd15d5abac14a9379bafdd9cc977",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen2.5-7B-Instruct",
@@ -188,7 +188,7 @@
     },
     {
       "model_repository": "loom-fun/ggml-org-Qwen2.5-VL-7B-Instruct-loom",
-      "publication_revision": "8453db8ea8884565fff93ae7ff7b4116ef591737",
+      "publication_revision": "32fa3226de07e2153905187ad3669b3ee9315b89",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen2.5-VL-7B-Instruct",
@@ -196,7 +196,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-gemma-4-E4B-it-loom",
-      "publication_revision": "0531484a1e1e7df4efe9746f0b842f9603cb5c21",
+      "publication_revision": "54e0c379cdfc0e79f8457331facd211ed472b12a",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "google/gemma-4-E4B-it",
@@ -204,7 +204,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-Qwen3-8B-loom",
-      "publication_revision": "872ff0b9d0405eb5294a5e3d23b5a08649c936c4",
+      "publication_revision": "e81856e41bb0dd2e5be107a13f7fef5339e23373",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3-8B",
@@ -212,7 +212,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-Qwen3-VL-8B-Instruct-loom",
-      "publication_revision": "a5f987bab5668d0d92b580b4c8ba4b8f64252b9b",
+      "publication_revision": "51fb9307ae27d31dfc2db88d48c3ea73a2c5d00b",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3-VL-8B-Instruct",
@@ -220,7 +220,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-Ornith-1.0-9B-loom",
-      "publication_revision": "d6eb25f3578826eb213263fd08c8551934548398",
+      "publication_revision": "5f4eb3123efeb69cf7b09dc85d4e6eefa0766116",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "deepreinforce-ai/Ornith-1.0-9B",
@@ -228,7 +228,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-gemma-4-12B-it-loom",
-      "publication_revision": "eb1262df53863a1cca3d8cde538d758ae8c16948",
+      "publication_revision": "f337d7698c539b62a01d3f765ee3b6ba1d51a32a",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "google/gemma-4-12B-it",
@@ -236,7 +236,7 @@
     },
     {
       "model_repository": "loom-fun/bartowski-Ornith-1.5-9B-loom",
-      "publication_revision": "e0087c08a38d6d720415079e177989c4f013a249",
+      "publication_revision": "2b6904aef69d7fdc826b8a61c1e3e2a848087902",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "ornith-ai/Ornith-1.5-9B",
@@ -244,7 +244,7 @@
     },
     {
       "model_repository": "loom-fun/nvidia-NVIDIA-Nemotron-3.5-Bolt-E4B-4GB-loom",
-      "publication_revision": "3a7f2340372d8a05a2495f5b106409cca9850cb3",
+      "publication_revision": "3d5406edc9a4d340fb4f2b6e536b136a63940b96",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "nemotron-3.5-bolt-e4b",
@@ -252,7 +252,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-Qwen3.5-9B-loom",
-      "publication_revision": "3910739ab37a9e9dfd2856054c0c7dbca8a9c39f",
+      "publication_revision": "4fc338428b8982418035200d302d3a9dc5ae0b56",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3.5-9B",
@@ -260,7 +260,7 @@
     },
     {
       "model_repository": "loom-fun/bartowski-Mellum2.1-12B-A2.5B-Thinking-loom",
-      "publication_revision": "8433eb84be2ac823ec495d50abeac4813e6b0ce2",
+      "publication_revision": "6cfb6cdfa6c529bc0be66bc2a51e139fd79638f5",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "JetBrains/Mellum2.1-12B-A2.5B-Thinking",
@@ -268,7 +268,7 @@
     },
     {
       "model_repository": "loom-fun/ggml-org-Qwen3-14B-loom",
-      "publication_revision": "17207bf1c898e0996b4bdcdf2a685f95fd42b511",
+      "publication_revision": "1c57eca307d6cd9800553ecd7ccb4d3a8410bddd",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3-14B",
@@ -276,7 +276,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-gpt-oss-20b-loom",
-      "publication_revision": "d04e90e003120ca101c82d18a6c9edf34f41315a",
+      "publication_revision": "abf68635c8939d4bf113881972612b4728648b04",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "openai/gpt-oss-20b",
@@ -284,7 +284,7 @@
     },
     {
       "model_repository": "loom-fun/ggml-org-LFM2.5-24B-A2B-loom",
-      "publication_revision": "f8cfceaf8ec9cb3c068a979709ced39dbd9bf28a",
+      "publication_revision": "041a75a44c335efe401cb59c2bbd8a7b4de74ed6",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "LiquidAI/LFM2.5-24B-A2B",
@@ -300,7 +300,7 @@
     },
     {
       "model_repository": "loom-fun/lmstudio-community-gemma-4-26B-A4B-it-loom",
-      "publication_revision": "0dd062a88f885374e0e5f4016651025dc256fcab",
+      "publication_revision": "77c5ebd14a9ed322ab4364e76d78effeb5bcb41e",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "google/gemma-4-26B-A4B-it",
@@ -308,7 +308,7 @@
     },
     {
       "model_repository": "loom-fun/ggml-org-Qwen3-Coder-30B-A3B-Instruct-loom",
-      "publication_revision": "bf23166815d779643daebaef104f94e3a8babf7d",
+      "publication_revision": "2f8dd77b86c413e7dd4cd54199446ffeb72a4353",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
@@ -316,7 +316,7 @@
     },
     {
       "model_repository": "loom-fun/bartowski-Qwen3.8-27B-loom",
-      "publication_revision": "f3966d7cd81a8b9cf8e979e0ed5fc70ec42c98f3",
+      "publication_revision": "6ddd193aef40952f276d8f5fbeb01c055c6986b0",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "qwen3.8-27b",
@@ -324,7 +324,7 @@
     },
     {
       "model_repository": "loom-fun/unsloth-Qwen3-30B-A3B-Instruct-2507-loom",
-      "publication_revision": "edf534243114b0432fb1fc107502420bc0b32d7e",
+      "publication_revision": "4ef4fc4e89c70f78fba0b0dad7955d6ab4c1db8d",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
@@ -340,27 +340,39 @@
     },
     {
       "model_repository": "loom-fun/unsloth-gemma-4-31B-it-loom",
-      "publication_revision": "045f0d496047a2d5b22cb5a566ab32aa37e8587a",
+      "publication_revision": "259af7e1df784ecf71b5051ab7f36c0d00e39d77",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "google/gemma-4-31B-it",
       "gguf_bytes": 19236370336
     },
     {
-      "model_repository": "loom-fun/ggml-org-Laguna-XS-2.1-loom",
-      "publication_revision": "ca63b768374f6d6636c4111d5a6990c7dc97a8cf",
-      "preset": "chat",
-      "variant": "gguf",
-      "model_id": "poolside/Laguna-XS-2.1",
-      "gguf_bytes": 19563570240
-    },
-    {
       "model_repository": "loom-fun/bartowski-Qwen2.5-32B-Instruct-loom",
-      "publication_revision": "3a6e9973b22808a13df0a2125ab83c3f43eb1eb9",
+      "publication_revision": "e2a2460f20c7be50f35169c03b50f05982ce8423",
       "preset": "chat",
       "variant": "gguf",
       "model_id": "Qwen/Qwen2.5-32B-Instruct",
       "gguf_bytes": 19851336576
+    },
+    {
+      "model_repository": "loom-fun/ggml-org-Laguna-XS-2.1-loom",
+      "publication_revision": "e1e46be520e1b6cd025b07f249ffd14a4478357a",
+      "preset": "chat",
+      "variant": "gguf",
+      "model_id": "poolside/Laguna-XS-2.1",
+      "gguf_bytes": 20058305952,
+      "asset_policy_exception": {
+        "selection": {
+          "repository": "loom-fun/ggml-org-Laguna-XS-2.1-loom",
+          "publication_revision": "e1e46be520e1b6cd025b07f249ffd14a4478357a",
+          "model_id": "poolside/Laguna-XS-2.1",
+          "preset": "chat",
+          "variant": "gguf",
+          "programs": "source"
+        },
+        "max_gguf_bytes": 20058305952,
+        "reason": "User approved the additional 494735712-byte draft asset for this exact November 16 publication."
+      }
     }
   ]
 }
