@@ -213,6 +213,9 @@ class TemporaryExclusionTests(unittest.TestCase):
         (self.repo / 'config').mkdir(parents=True)
         for name in ('runtime.json', 'sdk-requirements.lock.json', 'ci-model-exclusions.json'):
             (self.repo / 'config' / name).write_bytes((ROOT / 'config' / name).read_bytes())
+        # Saved nine-rule plans remain replayable after current-source pruning.
+        M.write(self.repo / 'config/ci-model-exclusions.json',
+                M.read(ROOT / 'tests/fixtures/runtime-policy/historical-ci-exclusions.json'))
         self.policy = M.read(self.repo / 'config/ci-model-exclusions.json')
         self.assertEqual(len(self.policy['entries']), 9)
         self.selections = [entry['selection'] for entry in self.policy['entries']]
@@ -252,6 +255,17 @@ class TemporaryExclusionTests(unittest.TestCase):
             for model in raw['models']: model['status'] = 'passed'
             M.write(out / 'results/suite-result.json', raw)
         return out, M.finish(out, stages or self.stages, 'https://github.com/a/b/actions/artifacts/123')
+
+    def test_current_seven_legacy_exclusions_leave_native_02_inventory_enabled(self):
+        current = M.read(ROOT / 'config/ci-model-exclusions.json')
+        self.assertEqual(len(current['entries']), 7)
+        M.write(self.repo / 'config/ci-model-exclusions.json', current)
+        _, old_release = self.make_plan('current-old-release')
+        self.assertEqual([len(lane['excluded_entries']) for lane in old_release['lanes']], [7, 0])
+        self.release = 'v0.2.0'
+        _, native_release = self.make_plan('current-native-release')
+        self.assertEqual([len(lane['expected_entries']) for lane in native_release['lanes']], [60, 60])
+        self.assertEqual([len(lane['excluded_entries']) for lane in native_release['lanes']], [0, 0])
 
     def test_exact_nine_release_exclusions_and_preparation_snapshots(self):
         path, plan = self.make_plan()

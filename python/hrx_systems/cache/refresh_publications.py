@@ -427,6 +427,33 @@ def model_rows(existing, metadata, inspections, include_new, max_bytes, exceptio
     return rows
 
 
+def replace_profiles(profiles, mapping):
+    """Move matching exact rules and discard superseded updated-family pins."""
+    indexed = {key(entry['selection']): entry for entry in profiles}
+    if len(indexed) != len(profiles):
+        raise ValueError('duplicate exact-selection test profile')
+    logical = lambda selection: tuple(selection[field] for field in FIELDS if field != 'publication_revision')
+    targets = {}
+    for row in mapping.values():
+        family = logical(row['old_selection'])
+        if family in targets and targets[family] != row['selection']:
+            raise ValueError('conflicting publication targets for test profile family')
+        targets[family] = row['selection']
+    result = {}
+    for entry in profiles:
+        selection = entry['selection']
+        row = mapping.get(key(selection))
+        if row:
+            entry = {**copy.deepcopy(entry), 'selection': copy.deepcopy(row['selection'])}
+        elif logical(selection) in targets and selection != targets[logical(selection)]:
+            continue
+        new_key = key(entry['selection'])
+        if new_key in result and result[new_key] != entry:
+            raise ValueError('conflicting exact-selection test profile')
+        result[new_key] = copy.deepcopy(entry)
+    return list(result.values())
+
+
 def proposed_configs(inputs, rows):
     documents = {name: parse(record['text']) for name, record in inputs.items()}
     accepted = [r for r in rows if r['status'] in ('updated', 'added')]
@@ -457,20 +484,7 @@ def proposed_configs(inputs, rows):
         target = documents[name]
         for part in path:
             target = target[part]
-        indexed = {key(x['selection']): x for x in target}
-        if len(indexed) != len(target):
-            raise ValueError('duplicate exact-selection test profile')
-        additions = []
-        for entry in target:
-            row = mapping.get(key(entry['selection']))
-            if row:
-                addition = {**copy.deepcopy(entry), 'selection': copy.deepcopy(row['selection'])}
-                new_key = key(row['selection'])
-                if new_key in indexed and indexed[new_key] != addition:
-                    raise ValueError('conflicting exact-selection test profile')
-                if new_key not in indexed:
-                    additions.append(addition); indexed[new_key] = addition
-        target.extend(sorted(additions, key=lambda x: key(x['selection'])))
+        target[:] = replace_profiles(target, mapping)
     return {name: formatted(documents[name]) for name in CONFIG_PATHS}
 
 

@@ -61,7 +61,11 @@ class ModelSampleTests(unittest.TestCase):
                 execution = profile['published_execution']
                 self.assertGreater(execution['rows'], 0)
                 self.assertGreater(execution['context_capacity'], 0)
-                self.assertGreaterEqual(execution['pool_capacity'], execution['context_capacity'])
+                native = json.loads((ROOT / 'config/runtime-policies/0.2.0/policy.json').read_text())['native_publications']
+                if any(rule['selection'] == entry['selection'] for rule in native):
+                    self.assertNotIn('pool_capacity', execution)
+                else:
+                    self.assertGreaterEqual(execution['pool_capacity'], execution['context_capacity'])
                 self.assertGreater(execution['prefill_capacity'], 0)
 
     def test_requests_keep_the_strict_assertion_and_explicit_reasoning_budget(self):

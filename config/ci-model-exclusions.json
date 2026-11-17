@@ -80,28 +80,6 @@
         "programs": "source"
       },
       "reason": "v0.1.0 compilation rejects the published GDN convolution index.assume range."
-    },
-    {
-      "selection": {
-        "repository": "loom-fun/ggml-org-Qwen3-14B-loom",
-        "publication_revision": "4b7f80710c54cb1b282e0b1c6cdb43b74a00a238",
-        "model_id": "Qwen/Qwen3-14B",
-        "preset": "chat",
-        "variant": "gguf",
-        "programs": "source"
-      },
-      "reason": "v0.1.0 response did not satisfy the configured exact-text assertion."
-    },
-    {
-      "selection": {
-        "repository": "loom-fun/bartowski-MiniCPM-V-4.7-35B-A3B-loom",
-        "publication_revision": "03376cecc872b32ebe95c90b7044fe362768502a",
-        "model_id": "openbmb/MiniCPM-V-4.7-35B-A3B",
-        "preset": "chat",
-        "variant": "gguf",
-        "programs": "source"
-      },
-      "reason": "v0.1.0 response did not satisfy the configured exact-text assertion."
     }
   ]
 }

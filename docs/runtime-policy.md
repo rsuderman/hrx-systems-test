@@ -23,8 +23,10 @@ and local-version forms; this is not a promise about later SDK versions.
 
 ## Request profiles
 
-`config/runtime-policies/0.2.0/policy.json` lists three exact six-field selection
-identities: Qwen3 14B and the two MiniCPM V 4.7 publications qualified in the spec.
+`config/runtime-policies/0.2.0/policy.json` retains one exact six-field selection
+identity for the inaccessible legacy OpenBMB MiniCPM V 4.7 publication. Updated
+Qwen3 14B and Bartowski MiniCPM V selections carry their existing exact requests
+in model test profiles; their superseded runtime rules have been removed.
 Matching 0.2.0 selections receive only `reasoning_effort: none`. All other request
 fields and the exact final-answer assertion remain intact. A changed publication
 revision, model ID, repository, preset, variant or programs selection receives no
@@ -88,6 +90,11 @@ preserving Docker's existing container policy.
 - `server_args(policy)` translates the already validated launch block into native
   arguments. Default 0.1.0 produces `[]`; fixed produces
   `['--pool_backing=fixed']`; elastic produces one `--memory_bytes=BYTES` argument.
+
+The current source retains active exact rules rather than revision history.
+Validation checks each rule and duplicate identity without requiring a fixed
+number of logical families, so historical saved three-rule policies still replay
+from their embedded content.
 
 The frozen policy embeds its configuration content and both canonical-content and
 source-byte identities. The request-profile and seccomp descriptors are derived

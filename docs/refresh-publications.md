@@ -23,8 +23,11 @@ unsupported card is reported rather than interpreted through guessed schema rule
 
 Existing selections retain model ID, preset and variant. Missing/private repositories
 stay in the catalog and are reported unavailable. Exact-revision test/request
-overrides are preserved and copied to updated identities without changing their
-values. Historical CI exclusions are retained; they are not extended to new revisions.
+overrides matching an updated exact identity move to its new revision without
+changing their values. Superseded revisions of that logical selection are removed;
+unavailable and unrelated selections retain their rules. An existing destination
+rule must agree or planning fails. Dormant historical rules do not create new
+overrides. Saved prepared policies remain self-contained. Historical CI exclusions are retained; they are not extended to new revisions.
 
 `--include-new` discovers additional eligible source/text-or-decision selections
 within the existing under-20GB GGUF catalog limit. It adds catalog entries, not
@@ -96,3 +99,10 @@ Those steps own asset acquisition, local compatibility results and the later
 activation of all receipt aliases. Existing cache entries stay active until that
 activation. The refresh command does not remove models, modify the host, commit,
 push or silently bring new weights into CI.
+
+The current `catalog/model-size-index.csv` inventory is reconciled separately
+from the four JSON files owned by this transaction. Use the same immutable
+publication selection, the selected service's model/vision/draft parameter groups
+and their locked asset sizes; never carry publisher hints to a new revision
+without exact-current provenance. Blank hints and `unknown` memory qualification
+are preferable to transferring an older publication's advisory values.

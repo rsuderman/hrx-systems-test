@@ -112,13 +112,33 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual((self.repo / R.INPUT_PATHS[-1]).read_bytes(), before[R.INPUT_PATHS[-1]])
         profiles = json.loads((self.repo / R.CONFIG_PATHS[2]).read_text())['overrides']
         for original in self.documents[R.CONFIG_PATHS[2]]['overrides']:
-            self.assertIn(original, profiles)
+            self.assertNotIn(original, profiles)
             target = next(r['selection'] for r in plan['models'] if r['old_selection'] == original['selection'])
             self.assertIn({**original, 'selection': target}, profiles)
         policy = json.loads((self.repo / R.CONFIG_PATHS[3]).read_text())
         self.assertEqual(policy['seccomp'], self.documents[R.CONFIG_PATHS[3]]['seccomp'])
         self.assertEqual(policy['default_launch'], self.documents[R.CONFIG_PATHS[3]]['default_launch'])
-        self.assertEqual(len(policy['request_profiles']['overrides']), 2)
+        self.assertEqual(len(policy['request_profiles']['overrides']), 1)
+
+    def test_replacement_prunes_history_preserves_unrelated_and_rejects_conflicts(self):
+        old = self.old[0]
+        row = next(row for row in self.plan()['models'] if row['old_selection'] == old)
+        mapping = {R.key(old): row}
+        rule = {'selection': old, 'smoke_expected_text': '4'}
+        historical = {**rule, 'selection': {**old, 'publication_revision': 'e' * 40}, 'smoke_expected_text': 'historical'}
+        target = {**rule, 'selection': row['selection']}
+        unrelated = {**rule, 'selection': self.old[1]}
+        self.assertEqual(R.replace_profiles([historical, rule, target, unrelated], mapping), [target, unrelated])
+        # A dormant historical rule does not authorize a new exact override.
+        self.assertEqual(R.replace_profiles([historical, unrelated], mapping), [unrelated])
+        with self.assertRaisesRegex(ValueError, 'conflicting exact'):
+            R.replace_profiles([rule, {**target, 'smoke_expected_text': 'different'}], mapping)
+        with self.assertRaisesRegex(ValueError, 'duplicate exact'):
+            R.replace_profiles([rule, rule], mapping)
+        conflicting = {**row, 'old_selection': historical['selection'],
+                       'selection': {**row['selection'], 'publication_revision': 'f' * 40}}
+        with self.assertRaisesRegex(ValueError, 'conflicting publication targets'):
+            R.replace_profiles([rule], {**mapping, R.key(historical['selection']): conflicting})
 
     def test_saved_evidence_produces_deterministic_configuration(self):
         a, b = self.plan(), self.plan()

@@ -82,13 +82,14 @@ class RuntimePolicyTests(unittest.TestCase):
         from types import SimpleNamespace
         from hrx_systems.selection import configuration as CONFIG, inventory as INV
         targets = [
-            ('loom-fun/ggml-org-Qwen3-14B-loom', 'Qwen/Qwen3-14B',
-             '17207bf1c898e0996b4bdcdf2a685f95fd42b511'),
-            ('loom-fun/bartowski-MiniCPM-V-4.7-35B-A3B-loom', 'openbmb/MiniCPM-V-4.7-35B-A3B',
-             '0b87ba7fb6fb8cebfc378a148696d4f586c1ff12')]
+            ('loom-fun/ggml-org-Qwen3-14B-loom', 'Qwen/Qwen3-14B'),
+            ('loom-fun/bartowski-MiniCPM-V-4.7-35B-A3B-loom', 'openbmb/MiniCPM-V-4.7-35B-A3B')]
         defaults = CONFIG.profiles()['defaults']['text']
         selected = SimpleNamespace(service={'kind': 'text'}, settings={'execution': {'rows': 4}})
-        for repository, model, revision in targets:
+        native = json.loads((ROOT / POLICY.CONFIG_PATH).read_text())['native_publications']
+        for repository, model in targets:
+            revision = next(rule['selection']['publication_revision'] for rule in native
+                            if rule['selection']['repository'] == repository)
             identity = dict(repository=repository, model_id=model, publication_revision=revision,
                             preset='chat', variant='gguf', programs='source')
             with self.subTest(model=model):
@@ -115,15 +116,10 @@ class RuntimePolicyTests(unittest.TestCase):
 
     def historical_config(self):
         config = json.loads((ROOT / POLICY.CONFIG_PATH).read_text())
-        unique = {}
-        for entry in config['request_profiles']['overrides']:
-            logical = tuple(entry['selection'][field] for field in POLICY.SELECTION_FIELDS if field != 'publication_revision')
-            unique.setdefault(logical, entry)
-        config['request_profiles']['overrides'] = list(unique.values())
-        self.assertEqual(len(unique), 3)
+        config['request_profiles'] = json.loads((ROOT / 'tests/fixtures/runtime-policy/historical-request-profiles.json').read_text())
         return config
 
-    def test_revision_variants_preserve_three_families_and_all_exact_guards(self):
+    def test_historical_revision_variants_preserve_all_exact_guards(self):
         original = self.historical_config()
         self.assertEqual(POLICY._validate_config(copy.deepcopy(original)), original)
         variants = copy.deepcopy(original)
@@ -141,19 +137,26 @@ class RuntimePolicyTests(unittest.TestCase):
         for config in invalid:
             with self.subTest(config=config), self.assertRaises(ValueError): POLICY._validate_config(config)
 
-    def test_family_cardinality_remains_bounded_independently_of_revisions(self):
-        original = self.historical_config()
-        too_few = copy.deepcopy(original); too_few['request_profiles']['overrides'].pop()
-        too_many = copy.deepcopy(original)
-        row = copy.deepcopy(original['request_profiles']['overrides'][0]); row['selection']['variant'] += '-different'
-        too_many['request_profiles']['overrides'].append(row)
-        one_family = copy.deepcopy(original)
-        row = original['request_profiles']['overrides'][0]
-        one_family['request_profiles']['overrides'] = [{**copy.deepcopy(row), 'selection': {
-            **row['selection'], 'publication_revision': digit * 40}} for digit in ('a', 'b', 'c')]
-        for config in (too_few, too_many, one_family):
-            with self.subTest(config=config), self.assertRaisesRegex(ValueError, 'three logical'):
+    def test_pruned_and_historical_family_counts_validate_independently(self):
+        historical = self.historical_config()
+        for count in (0, 1, 2, 3):
+            config = copy.deepcopy(historical)
+            config['request_profiles']['overrides'] = config['request_profiles']['overrides'][:count]
+            self.assertEqual(POLICY._validate_config(config), config)
+        for invalid in ({}, '', None):
+            config = copy.deepcopy(historical)
+            config['request_profiles']['overrides'] = invalid
+            with self.assertRaises(ValueError):
                 POLICY._validate_config(config)
+        snap = snapshot()
+        config = POLICY._configuration()
+        config['content'] = historical
+        config['content_sha256'] = POLICY.digest(historical)
+        with patch.object(POLICY, '_configuration', return_value=config):
+            saved = resolve(snap)
+        with patch.object(POLICY, '_configuration', side_effect=AssertionError('live config read')):
+            self.assertEqual(POLICY.validate(saved, snap), saved)
+        self.assertEqual(len(saved['request_profiles']['overrides']), 3)
 
     def test_actual_refresh_configuration_producer_feeds_02_policy_and_frozen_validation(self):
         from hrx_systems.cache import refresh_publications as REFRESH
@@ -178,14 +181,17 @@ class RuntimePolicyTests(unittest.TestCase):
             REFRESH.apply_plan(plan, repo)
             with patch.object(POLICY, 'REPO', repo): policy = resolve(snap)
             self.assertEqual(POLICY.validate(policy, snap), policy)
-            self.assertEqual(len(policy['request_profiles']['overrides']), 4)
+            self.assertEqual(len(policy['request_profiles']['overrides']), 3)
             self.assertEqual(policy['launch'], before['launch'])
             self.assertEqual(policy['seccomp'], before['seccomp'])
             request = {'messages': [], 'max_tokens': 256, 'temperature': 0}
-            for selected in (old, {**old, 'publication_revision': revision}):
-                actual = POLICY.request_profile(policy, selected, request, '4')
-                self.assertEqual(actual['smoke_request'], {**request, 'reasoning_effort': 'none'})
-                self.assertEqual(actual['smoke_expected_text'], '4')
+            selected = {**old, 'publication_revision': revision}
+            actual = POLICY.request_profile(policy, selected, request, '4')
+            self.assertEqual(actual['smoke_request'], {**request, 'reasoning_effort': 'none'})
+            self.assertEqual(actual['smoke_expected_text'], '4')
+            self.assertEqual(POLICY.request_profile(policy, old, request, '4')['smoke_request'], request)
+            self.assertEqual(POLICY.request_profile(before, old, request, '4')['smoke_request'],
+                             {**request, 'reasoning_effort': 'none'})
             unrelated = {**old, 'publication_revision': 'f' * 40}
             self.assertEqual(POLICY.request_profile(policy, unrelated, request, '4')['smoke_request'], request)
 

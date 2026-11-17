@@ -24,35 +24,9 @@
     "overrides": [
       {
         "selection": {
-          "repository": "loom-fun/ggml-org-Qwen3-14B-loom",
-          "publication_revision": "4b7f80710c54cb1b282e0b1c6cdb43b74a00a238",
-          "model_id": "Qwen/Qwen3-14B",
-          "preset": "chat",
-          "variant": "gguf",
-          "programs": "source"
-        },
-        "request_fields": {
-          "reasoning_effort": "none"
-        }
-      },
-      {
-        "selection": {
           "repository": "loom-fun/openbmb-MiniCPM-V-4.7-35B-A3B-loom",
           "publication_revision": "d2183a71a44a0defe94f53823c674b7be343843d",
           "model_id": "minicpm-v-4.7-35b-a3b",
-          "preset": "chat",
-          "variant": "gguf",
-          "programs": "source"
-        },
-        "request_fields": {
-          "reasoning_effort": "none"
-        }
-      },
-      {
-        "selection": {
-          "repository": "loom-fun/bartowski-MiniCPM-V-4.7-35B-A3B-loom",
-          "publication_revision": "03376cecc872b32ebe95c90b7044fe362768502a",
-          "model_id": "openbmb/MiniCPM-V-4.7-35B-A3B",
           "preset": "chat",
           "variant": "gguf",
           "programs": "source"
