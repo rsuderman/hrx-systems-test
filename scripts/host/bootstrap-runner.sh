@@ -4,11 +4,11 @@ set -euo pipefail
 
 root="${HRX_SYSTEMS_ROOT:-$HOME/.local/share/hrx-systems-test}"
 runner="$root/runner"
-label="${HRX_RUNNER_LABEL-hrx-systems-test-bootstrap}"
+label="${HRX_RUNNER_LABEL-}"
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 check_label() {
-  [[ "$label" != hrx-systems-test-bootstrap ]] || return 0
+  [[ -n "$label" ]] || die 'set HRX_RUNNER_LABEL to an enabled hardware label'
   bash "$repo_root/scripts/host/check-runner-hardware.sh" --label "$label"
 }
 
@@ -23,8 +23,8 @@ Usage: scripts/host/bootstrap-runner.sh COMMAND [ARGS]
   start                       Run the registered agent in the foreground
 
 HRX_SYSTEMS_ROOT selects an absolute external state directory.
-HRX_RUNNER_LABEL selects one custom registration label (default during rollout:
-hrx-systems-test-bootstrap). hrx-gfx1151 requires a matching sole AMD GPU.
+HRX_RUNNER_LABEL is required for check and register; select one enabled hardware
+label explicitly. hrx-gfx1151 requires a matching sole AMD GPU.
 Check physical identity alone: bash scripts/host/check-runner-hardware.sh --label hrx-gfx1151
 Default: $HOME/.local/share/hrx-systems-test
 Run as the intended non-root runner account. No sudo or package installs are run.

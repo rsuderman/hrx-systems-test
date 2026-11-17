@@ -67,8 +67,8 @@ class RunnerHardwareTests(unittest.TestCase):
                 change()
                 self.assertEqual(self.check()['status'], 'failed')
 
-    def test_legacy_does_not_require_devices(self):
-        self.assertEqual(H.check(H.LEGACY_LABEL, devices=Path('/nonexistent'))['status'], 'legacy')
+    def test_legacy_label_is_no_longer_an_enabled_registration_target(self):
+        self.assertEqual(H.check('hrx-systems-test-bootstrap', devices=Path('/nonexistent'))['status'], 'failed')
 
     def registration(self, label=None, registered=False):
         state = self.root / 'state'
@@ -104,12 +104,21 @@ class RunnerHardwareTests(unittest.TestCase):
         self.assertEqual((state / 'helper-arguments').read_text().splitlines()[-2:], ['--label', 'hrx-gfx1151'])
         self.assertNotIn('--token', (state / 'arguments').read_text())
 
-    def test_legacy_registration_needs_no_python(self):
+    def test_registration_requires_an_explicit_hardware_label(self):
         state, env, command = self.registration()
         result = subprocess.run(command, env=env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(H.LEGACY_LABEL, (state / 'arguments').read_text())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('set HRX_RUNNER_LABEL', result.stderr)
+        self.assertFalse((state / 'arguments').exists())
         self.assertFalse((state / 'helper-arguments').exists())
+
+    def test_registration_rejects_retired_label_through_real_sdk_free_helper(self):
+        state, env, command = self.registration('hrx-systems-test-bootstrap')
+        (self.root / 'bin/python3').unlink()
+        result = subprocess.run(command, env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unsupported hardware label', result.stdout)
+        self.assertFalse((state / 'arguments').exists())
 
     def test_preflight_failure_does_not_register(self):
         state, env, command = self.registration('hrx-gfx1151')
@@ -164,12 +173,13 @@ if sys.argv[1] == 'run':
             self.assertEqual(list(shared.iterdir()), [shared / 'immutable'])
             self.assertEqual((shared / 'immutable').read_text(), 'retained')
 
-    def test_temporary_choices_keep_legacy_default_and_use_single_selector(self):
+    def test_smoke_choices_use_only_enabled_hardware_and_single_selector(self):
         for name in ('runner-pickup.yml', 'runner-bootstrap.yml'):
             text = (ROOT / '.github/workflows' / name).read_text()
-            self.assertIn('default: hrx-systems-test-bootstrap', text)
+            self.assertIn('default: hrx-gfx1151', text)
             self.assertIn('type: choice', text)
-            self.assertIn('- hrx-systems-test-bootstrap\n          - hrx-gfx1151', text)
+            self.assertIn('options:\n          - hrx-gfx1151', text)
+            self.assertNotIn('hrx-systems-test-bootstrap', text)
             self.assertIn('runs-on: ${{ inputs.hardware }}', text)
             self.assertIn('HRX_RUNNER_LABEL: ${{ inputs.hardware }}', text)
             self.assertIn('requested_label=%s', text)

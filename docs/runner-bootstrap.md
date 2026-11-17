@@ -69,9 +69,14 @@ keeps GitHub's automatic labels, uses the private external work directory and
 refuses to overwrite an existing `.runner`. Keep `start` running in the
 foreground during initial checks; Ctrl-C stops it.
 
+New registrations and local `check` commands require an explicit
+`HRX_RUNNER_LABEL`; there is no legacy registration default. Both smoke workflows
+default to the enabled hardware label.
+
 For an existing runner, the repository owner adds `hrx-gfx1151` in **Settings →
 Actions → Runners → the existing runner → Labels**. Preserve automatic labels and
-retain `hrx-systems-test-bootstrap` through the migration. Check that the original
+retain any older selector until its source migration and queued jobs are
+accepted. Check that the original
 registration is online and has the requested label; do not re-register, copy
 credentials or restart its service for a label update. Dogwood must remain the
 sole runner eligible for this hardware label.
@@ -198,7 +203,8 @@ explicit label or host assignment rather than weakening the check. Missing or
 unreadable cache data requires owner reseeding/read-access repair, not automatic
 download fallback or changed model expectations.
 
-During migration the legacy label remains on Dogwood. Before retiring it,
+During a staged migration, retain the old label until both smoke checks, the
+ordinary cutover run and the operator guide are accepted. Before retiring it,
 reverting the routing change restores the old selector. After retirement, the
 owner must first restore `hrx-systems-test-bootstrap`, then revert routing.
 Audit active and queued older workflows before removing only that custom label;

@@ -3,11 +3,10 @@ on:
   workflow_dispatch:
     inputs:
       hardware:
-        description: Runner label to prove (legacy default during rollout)
+        description: Enabled runner hardware to prove
         type: choice
-        default: hrx-systems-test-bootstrap
+        default: hrx-gfx1151
         options:
-          - hrx-systems-test-bootstrap
           - hrx-gfx1151
 permissions:
   contents: read

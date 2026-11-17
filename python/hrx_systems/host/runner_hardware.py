@@ -7,7 +7,6 @@ import re
 from hrx_systems.host.hardware_advisory import observe_amd
 
 
-LEGACY_LABEL = 'hrx-systems-test-bootstrap'
 TARGETS = {'hrx-gfx1151': 110501}
 
 
@@ -19,9 +18,6 @@ def check(label, device_uri='amdgpu://0', *, sysfs=Path('/sys/class/drm'),
     try:
         if not isinstance(label, str) or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,62}', label):
             raise ValueError('expected one lowercase runner label')
-        if label == LEGACY_LABEL:
-            result.update(status='legacy', reason='physical identity check not enabled for legacy label')
-            return result
         if label not in TARGETS:
             raise ValueError('unsupported hardware label')
         if device_uri != 'amdgpu://0':
@@ -62,4 +58,4 @@ def main(argv=None):
     args = parser.parse_args(argv)
     result = check(args.label, args.device_uri)
     print(json.dumps(result, sort_keys=True))
-    return 0 if result['status'] in ('passed', 'legacy') else 1
+    return 0 if result['status'] == 'passed' else 1
