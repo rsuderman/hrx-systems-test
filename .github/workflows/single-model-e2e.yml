@@ -7,6 +7,11 @@ on:
       timezone: America/Los_Angeles
   workflow_dispatch:
     inputs:
+      hardware:
+        description: Explicit enabled runner hardware (Dogwood only)
+        type: choice
+        options: [hrx-gfx1151]
+        default: hrx-gfx1151
       runtime_source:
         description: Both latest SDKs, one latest SDK, or an exact pinned/replay diagnostic
         type: choice
@@ -50,12 +55,13 @@ concurrency:
 jobs:
   plan:
     name: Freeze common inventory and both runtime selections
-    runs-on: [self-hosted, linux, hrx-systems-test-bootstrap]
+    runs-on: ${{ inputs.hardware || 'hrx-gfx1151' }}
     timeout-minutes: 15
     outputs:
       ready: ${{ steps.resolve.outputs.ready == 'true' && steps.upload_plan.outcome == 'success' }}
       first_lane: ${{ steps.resolve.outputs.first_lane }}
       second_lane: ${{ steps.resolve.outputs.second_lane }}
+      hardware: ${{ steps.resolve.outputs.hardware }}
     env:
       CONFIGURED_CACHE_ROOT: ${{ vars.HRX_SYSTEMS_ROOT }}
       RAW_DISPATCH_INPUTS: ${{ toJSON(inputs) }}
@@ -81,7 +87,15 @@ jobs:
           pathlib.Path(sys.argv[1]).write_text(json.dumps(value or {}))
           PYTHON
           python3 -u -I python/run.py paired-ci plan --root "$root" --output "$base/plan" \
-            --inputs "$base/dispatch-inputs.json" --event "$GITHUB_EVENT_NAME" --github-output "$GITHUB_OUTPUT"
+            --inputs "$base/dispatch-inputs.json" --event "$GITHUB_EVENT_NAME" --github-output "$GITHUB_OUTPUT" --preflight
+      - name: Retain planning hardware identity
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: model-planning-hardware-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hrx-model-tests/${{ github.run_id }}-${{ github.run_attempt }}/plan/runner-hardware.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload frozen plan
         id: upload_plan
         if: ${{ !cancelled() && steps.resolve.outcome == 'success' }}
@@ -98,6 +112,7 @@ jobs:
     uses: ./.github/workflows/_model-verification-worker.yml
     with:
       lane_id: ${{ needs.plan.outputs.first_lane }}
+      hardware: ${{ needs.plan.outputs.hardware }}
     secrets:
       HRX_ACTIONS_TOKEN: ${{ secrets.HRX_ACTIONS_TOKEN }}
   second:
@@ -107,6 +122,7 @@ jobs:
     uses: ./.github/workflows/_model-verification-worker.yml
     with:
       lane_id: ${{ needs.plan.outputs.second_lane }}
+      hardware: ${{ needs.plan.outputs.hardware }}
       previous_cleanup_safe: ${{ needs.first.outputs.cleanup_safe == 'true' && 'true' || 'false' }}
     secrets:
       HRX_ACTIONS_TOKEN: ${{ secrets.HRX_ACTIONS_TOKEN }}
@@ -114,7 +130,7 @@ jobs:
     name: Report both runtime results
     needs: [plan, first, second]
     if: always()
-    runs-on: [self-hosted, linux, hrx-systems-test-bootstrap]
+    runs-on: ${{ inputs.hardware || 'hrx-gfx1151' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

@@ -40,6 +40,112 @@ class PairedTests(unittest.TestCase):
         self.assertEqual(M.normalize('push',{'runtime_source':'release'})['runtime_source'],'both')
         with self.assertRaises(ValueError):M.normalize('workflow_dispatch',{'runtime_source':'actions-replay'})
         with self.assertRaises(ValueError):M.normalize('workflow_dispatch',{'cycles':False})
+    def test_hardware_normalization_for_push_schedule_and_manual_events(self):
+        for event in ('push', 'schedule', 'workflow_dispatch'):
+            self.assertEqual(M.normalize(event, {})['hardware'], 'hrx-gfx1151')
+        self.assertEqual(M.normalize('push', {'hardware':'unrequested'})['hardware'], 'hrx-gfx1151')
+        for hardware in ('hrx-systems-test-bootstrap', 'hrx-gfx9999', '', [], None):
+            with self.subTest(hardware=hardware), self.assertRaises(ValueError):
+                M.normalize('workflow_dispatch', {'hardware':hardware})
+        # Device selection is independent; the physical preflight enforces v1's
+        # sole-device restriction before any acquisition.
+        self.assertEqual(M.normalize('workflow_dispatch', {'device_uri':'amdgpu://1'})['device_uri'], 'amdgpu://1')
+
+    def physical(self):
+        return dict(requested_label='hrx-gfx1151', device_uri='amdgpu://0', render_node='/dev/dri/renderD128',
+                    gfx_target_version=110501, status='passed', reason='physical AMD render/KFD identity matches')
+
+    def test_planning_preflight_precedes_inventory_and_freezes_runner_identity(self):
+        frozen={'entries':[{'entry':{'id':'example'},'selection':{'model_id':'example'}}]}
+        output = self.root/'hardware-plan'
+        def freeze(*args):
+            self.assertEqual(M.read(output/'runner-hardware.json'), self.physical())
+            return frozen
+        with patch.dict(os.environ, RUNNER_NAME='dogwood-fixture'), patch.object(M.H, 'check', return_value=self.physical()) as check, \
+                patch.object(M.S, 'freeze', side_effect=freeze):
+            plan=M.plan(self.root, output, M.normalize('workflow_dispatch', {'runtime_source':'release'}), preflight=True)
+        check.assert_called_once_with('hrx-gfx1151', 'amdgpu://0')
+        self.assertEqual(plan['planning_runner'], 'dogwood-fixture')
+        self.assertEqual(plan['runner_hardware'], self.physical())
+        self.assertEqual(plan['inputs']['hardware'], 'hrx-gfx1151')
+
+    def test_actual_planner_cli_normalizes_events_and_emits_hardware_handoff(self):
+        frozen={'entries':[{'entry':{'id':'example'},'selection':{'model_id':'example'}}]}
+        inputs=self.root/'dispatch-inputs.json';M.write(inputs,{'hardware':'hrx-gfx1151'})
+        for event in ('push','schedule','workflow_dispatch'):
+            with self.subTest(event=event),patch.dict(os.environ,RUNNER_NAME='dogwood-fixture'), \
+                    patch.object(M.H,'check',return_value=self.physical()),patch.object(M.S,'freeze',return_value=frozen), \
+                    patch.object(M.R,'freeze_selection',return_value={'schema_version':1,'source':{'kind':'fixture'}}):
+                output=self.root/('cli-plan-'+event);github_output=self.root/('github-output-'+event)
+                self.assertEqual(M.main(['plan','--root',str(self.root),'--output',str(output),
+                    '--inputs',str(inputs),'--event',event,'--github-output',str(github_output),'--preflight']),0)
+                self.assertIn('hardware=hrx-gfx1151\n',github_output.read_text())
+                self.assertEqual(M.load_plan(output/'ci-plan.json')['planning_runner'],'dogwood-fixture')
+
+    def test_failed_planning_physical_check_retains_reason_before_inventory_or_runtime_resolution(self):
+        record={**self.physical(), 'status':'failed', 'reason':'physical gfx mismatch'}
+        with patch.object(M.H, 'check', return_value=record), patch.object(M.S, 'freeze') as freeze, \
+                patch.object(M.R, 'freeze_selection') as sdk:
+            with self.assertRaisesRegex(ValueError, 'physical gfx mismatch'):
+                M.plan(self.root, self.root/'bad-hardware', M.normalize('push',{}), preflight=True)
+        freeze.assert_not_called();sdk.assert_not_called()
+        self.assertEqual(M.read(self.root/'bad-hardware/runner-hardware.json'), record)
+
+    def test_worker_rejects_label_or_runner_mismatch_before_snapshot_loading(self):
+        self.doc['planning_runner']='dogwood-fixture';M.write(self.path,self.doc)
+        for runner, hardware in [('elsewhere','hrx-gfx1151'), ('dogwood-fixture','hrx-gfx9999')]:
+            with self.subTest(runner=runner), patch.dict(os.environ, RUNNER_NAME=runner), \
+                    patch.object(M, 'load_plan') as load, self.assertRaisesRegex(ValueError,'differs'):
+                M.initialize(self.path,'latest-release',self.root/'misrouted',hardware=hardware,preflight=True)
+            load.assert_not_called()
+        self.assertFalse((self.root/'misrouted').exists())
+
+    def test_actual_worker_cli_handoff_checks_physical_identity_and_writes_workflow(self):
+        self.doc.update(planning_runner='dogwood-fixture',runner_hardware=self.physical());M.write(self.path,self.doc)
+        output=self.root/'cli-worker';envfile=self.root/'github-env'
+        with patch.dict(os.environ, RUNNER_NAME='dogwood-fixture'), patch.object(M.H,'check',return_value=self.physical()) as check:
+            self.assertEqual(M.main(['initialize','--plan',str(self.path),'--lane','latest-release',
+                '--output',str(output),'--hardware','hrx-gfx1151','--preflight','--github-env',str(envfile)]),0)
+        check.assert_called_once_with('hrx-gfx1151','amdgpu://0')
+        self.assertEqual(M.read(output/'runner-hardware.json'),self.physical())
+        self.assertEqual(M.read(output/'workflow.json')['normalized_inputs']['hardware'],'hrx-gfx1151')
+        self.assertIn('E2E_OUTPUT='+str(output),envfile.read_text())
+
+    def test_failed_worker_physical_identity_is_saved_before_preparation(self):
+        record={**self.physical(),'status':'failed','reason':'ambiguous physical device'}
+        with patch.object(M.H,'check',return_value=record), self.assertRaisesRegex(ValueError,'ambiguous physical device'):
+            M.initialize(self.path,'latest-release',self.root/'bad-worker',hardware='hrx-gfx1151',preflight=True)
+        self.assertEqual(M.read(self.root/'bad-worker/runner-hardware.json'),record)
+        self.assertFalse((self.root/'bad-worker/worker-state.json').exists())
+
+    def test_historical_plans_and_results_keep_legacy_metadata_behavior(self):
+        self.doc['inputs'].pop('hardware');M.write(self.path,self.doc)
+        for lane in ('latest-release','latest-ci'):
+            out=self.init(lane);self.raw(out)
+            M.finish(out,self.stages,'https://github.com/a/b/actions/artifacts/123')
+            self.assertNotIn('hardware',M.read(out/'workflow.json')['normalized_inputs'])
+        self.assertEqual(M.aggregate(self.path,self.root,self.root/'legacy-summary')['status'],'passed')
+        self.assertNotIn('Requested hardware:',(self.root/'legacy-summary/summary.md').read_text())
+
+    def test_comparison_preserves_physical_attribution_and_rejects_worker_tampering(self):
+        self.doc.update(planning_runner='dogwood-fixture',runner_hardware=self.physical());M.write(self.path,self.doc)
+        with patch.dict(os.environ,RUNNER_NAME='dogwood-fixture'),patch.object(M.H,'check',return_value=self.physical()):
+            for lane in ('latest-release','latest-ci'):
+                out=self.root/lane
+                M.initialize(self.path,lane,out,hardware='hrx-gfx1151',preflight=True)
+                self.raw(out);M.finish(out,self.stages,'https://github.com/a/b/actions/artifacts/123')
+        self.assertEqual(M.aggregate(self.path,self.root,self.root/'hardware-summary')['status'],'passed')
+        summary=(self.root/'hardware-summary/summary.md').read_text()
+        for text in ('hrx-gfx1151','dogwood-fixture','/dev/dri/renderD128','110501'):self.assertIn(text,summary)
+        path=self.root/'latest-ci/lane-result.json';original=M.read(path)
+        for field, value, message in [('runner','elsewhere','runner'),('hardware','hrx-gfx9999','hardware'),
+                                      ('gfx_target_version',110500,'physical')]:
+            row=copy.deepcopy(original)
+            if field=='runner':row['workflow']['runner']=value
+            elif field=='hardware':row['workflow']['normalized_inputs']['hardware']=value
+            else:row['runner_hardware'][field]=value
+            M.write(path,row)
+            with self.assertRaisesRegex(ValueError,message):M.aggregate(self.path,self.root,self.root/'hardware-summary')
     def test_metadata_failure_is_frozen_without_losing_second_lane(self):
         from types import SimpleNamespace
         frozen={'entries':[{'entry':{'id':'example'},'selection':{'model_id':'example'}}]}
@@ -91,6 +197,14 @@ class PairedTests(unittest.TestCase):
         self.assertIn('needs: [plan, first]',outer);self.assertIn('needs.first.outputs.cleanup_safe',outer)
         self.assertIn('cancel-in-progress: false',outer);self.assertNotIn('concurrency:',worker)
         self.assertIn("env.BLOCKED != 'true'",worker);self.assertIn('LANE_UPLOAD',worker)
+        self.assertEqual(outer.count("runs-on: ${{ inputs.hardware || 'hrx-gfx1151' }}"),2)
+        self.assertEqual(outer.count('hardware: ${{ needs.plan.outputs.hardware }}'),2)
+        self.assertIn('runs-on: ${{ inputs.hardware }}',worker)
+        self.assertIn('--hardware "$REQUESTED_HARDWARE" --preflight',worker)
+        self.assertIn('"$GITHUB_OUTPUT" --preflight',outer)
+        self.assertNotIn('hrx-systems-test-bootstrap',outer+worker)
+        self.assertIn("group: hrx-single-model-hardware",outer)
+        self.assertIn("cron: '0 4 * * *'",outer)
 
 class TemporaryExclusionTests(unittest.TestCase):
     def setUp(self):
@@ -285,6 +399,7 @@ class TemporaryExclusionTests(unittest.TestCase):
         self.assertEqual(raw['workflow'], M.read(out / 'workflow.json'))
         self.assertNotIn('model_selection', raw['workflow'])
         self.assertIn(raw['workflow']['run_url'], summary.read_text())
+        self.assertIn('**Requested hardware:** hrx-gfx1151', summary.read_text())
         self.assertNotIn('](index.html)', summary.read_text())
         self.assertEqual(len(M.read(out / 'lane-selection.json')['excluded_entries']), 9 if lane == 'latest-release' else 0)
 

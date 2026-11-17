@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from ..layout import REPO_ROOT as REPO
 from ..sdk import actions as A, releases as R, environment as SDK
 from ..selection import inventory as INVENTORY, snapshot as S
+from ..host import runner_hardware as H
 MAX_JSON = 32 * 1024 * 1024
 DOWNLOAD_ACTION = 'd3f86a106a0bac45b974a628896c90dbdf5c8093'
 
@@ -46,12 +47,13 @@ def contained(root, relative):
 
 
 def normalize(event, raw):
-    defaults = {'selection': 'cached', 'runtime_source': 'both', 'device_uri': 'amdgpu://0',
+    defaults = {'hardware': 'hrx-gfx1151', 'selection': 'cached', 'runtime_source': 'both', 'device_uri': 'amdgpu://0',
                 'cycles': 2, 'full_integrity': False, 'runtime_run_id': '',
                 'runtime_run_attempt': '', 'runtime_artifact_id': '', 'runtime_wheel_sha256': ''}
     if event not in ('push', 'schedule', 'workflow_dispatch'): raise ValueError('unsupported CI event')
     if not isinstance(raw, dict) or set(raw) - set(defaults): raise ValueError('unknown dispatch inputs')
     values = {**defaults, **raw} if event == 'workflow_dispatch' else defaults
+    if not isinstance(values['hardware'], str) or values['hardware'] not in H.TARGETS: raise ValueError('unsupported CI hardware label')
     if values['selection'] not in ('cached', 'suite'): raise ValueError('invalid model selection')
     if values['runtime_source'] not in ('both', 'release-latest', 'actions-main', 'release', 'actions-replay'):
         raise ValueError('invalid runtime selection')
@@ -136,9 +138,36 @@ def expected_entries(snapshot):
     return [{'id': row['entry']['id'], 'selection': row['selection']} for row in snapshot['entries']]
 
 
-def plan(root, output, values, *, repo=REPO, freezer=None):
+def physical_check(label, device_uri, output):
+    record = H.check(label, device_uri)
+    write(Path(output) / 'runner-hardware.json', record)
+    if record['status'] != 'passed':
+        raise ValueError('runner physical identity check failed: ' + record['reason'])
+    return record
+
+
+def assignment(document, hardware=None):
+    """Detect misplaced jobs before local cache consumption; this is not affinity."""
+    expected = document['inputs'].get('hardware')
+    if expected is not None and (not isinstance(expected, str) or expected not in H.TARGETS):
+        raise ValueError('unsupported frozen hardware label')
+    if hardware is not None and expected is not None and hardware != expected:
+        raise ValueError('worker hardware label differs from frozen plan')
+    if 'planning_runner' in document:
+        runner = document['planning_runner']
+        if not isinstance(runner, str) or not runner or len(runner) > 256:
+            raise ValueError('invalid planning runner identity')
+        if os.environ.get('RUNNER_NAME') != runner:
+            raise ValueError('worker runner differs from frozen planning runner')
+
+
+def plan(root, output, values, *, repo=REPO, freezer=None, preflight=False):
     root, output, repo = Path(root), Path(output), Path(repo)
     output.mkdir(parents=True, exist_ok=False)
+    observation = physical_check(values['hardware'], values['device_uri'], output) if preflight else None
+    runner = os.environ.get('RUNNER_NAME')
+    if preflight and (not runner or len(runner) > 256):
+        raise ValueError('CI preflight requires a bounded planning runner name')
     selection = S.freeze(values['selection'], root / 'cache', repo)
     write(output / 'selection-snapshot.json', selection)
     policy_path = repo / 'config/ci-model-exclusions.json'
@@ -181,6 +210,8 @@ def plan(root, output, values, *, repo=REPO, freezer=None):
                 'selection_snapshot_sha256': sha(output / 'selection-snapshot.json'),
                 'expected_entries': expected_entries(selection),
                 'lanes': lanes}
+    if runner: document['planning_runner'] = runner
+    if observation is not None: document['runner_hardware'] = observation
     if policy is not None:
         document.update(exclusion_policy='ci-model-exclusions.json',
                         exclusion_policy_sha256=sha(output / 'ci-model-exclusions.json'))
@@ -225,10 +256,14 @@ def load_plan(path):
     return value
 
 
-def initialize(plan_path, lane_id, output, previous_safe=True):
+def initialize(plan_path, lane_id, output, previous_safe=True, *, hardware=None, preflight=False):
+    # Guard the raw bounded plan before loading even its frozen inventory metadata.
+    assignment(read(plan_path), hardware)
     document = load_plan(plan_path); lane = next(x for x in document['lanes'] if x['id'] == lane_id)
     output = Path(output); output.mkdir(parents=True, exist_ok=False)
     values = document['inputs']
+    if preflight:
+        physical_check(hardware or values.get('hardware'), values['device_uri'], output)
     enabled = lane.get('expected_entries', document['expected_entries'])
     excluded = lane.get('excluded_entries', [])
     workflow = {'schema_version': 1, 'lane_id': lane_id, 'plan_sha256': sha(plan_path)}
@@ -303,6 +338,8 @@ def finish(attempt, stages, report_url=None, failure_url=None):
              'stages':stages,'report_url':url(report_url),'failure_url':url(failure_url),
              'workflow':read(attempt/'workflow.json'),'selected_runtime':read(attempt/'lane-selection.json')}
     value['excluded_entries'] = selection.get('excluded_entries', [])
+    if (attempt / 'runner-hardware.json').exists():
+        value['runner_hardware'] = read(attempt / 'runner-hardware.json')
     observed = [{'id': entry.get('id'), 'selection': entry.get('selection')}
                 for entry in raw.get('expected_entries', [])]
     if raw and observed != selection.get('expected_entries'):
@@ -319,6 +356,17 @@ def aggregate(plan_path, results_root, output):
         row=read(path); identity=row.get('lane_id')
         if identity not in expected or identity in rows: raise ValueError('unexpected/duplicate lane result')
         if row.get('workflow',{}).get('plan_sha256')!=sha(plan_path): raise ValueError('lane result belongs to another frozen plan')
+        if 'planning_runner' in plan and row.get('workflow', {}).get('runner') != plan['planning_runner']:
+            raise ValueError('lane result runner differs from frozen planning runner')
+        if plan['inputs'].get('hardware') is not None and row.get('workflow', {}).get('normalized_inputs', {}).get('hardware') != plan['inputs']['hardware']:
+            raise ValueError('lane result hardware differs from frozen plan')
+        if 'runner_hardware' in plan:
+            observation = row.get('runner_hardware', {})
+            if (set(observation) != set(plan['runner_hardware']) or len(json.dumps(observation)) > 2048
+                    or observation.get('status') != 'passed'
+                    or any(observation.get(key) != plan['runner_hardware'].get(key) for key in
+                           ('requested_label', 'device_uri', 'render_node', 'gfx_target_version'))):
+                raise ValueError('lane physical identity differs from frozen plan')
         if row.get('status') not in ('passed','failed','blocked') or type(row.get('cleanup_safe')) is not bool:
             raise ValueError('invalid lane outcome')
         if any(type(n) is not int or n < 0 for n in row.get('counts',{}).values()): raise ValueError('invalid lane counts')
@@ -336,7 +384,16 @@ def aggregate(plan_path, results_root, output):
     passed=all(x['status']=='passed' and x.get('cleanup_safe') for x in ordered)
     value={'schema_version':1,'status':'passed' if passed else 'failed','plan_sha256':sha(plan_path),'selected_at':plan['selected_at'],'lanes':ordered}
     write(output/'paired-result.json',value)
-    lines=['# Release and CI model verification','',f"Overall: **{value['status']}**. Runtime selections frozen at {plan['selected_at']}.",'','| Lane | SDK version / source | Result | Enabled | Excluded | Passed | Failed | Not run | Cleanup | Report |','| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |']
+    lines=['# Release and CI model verification','',f"Overall: **{value['status']}**. Runtime selections frozen at {plan['selected_at']}."]
+    if plan['inputs'].get('hardware'):
+        lines += ['', 'Requested hardware: `' + plan['inputs']['hardware'] + '`.']
+    def cell(text): return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('|', '&#124;').replace('\r', ' ').replace('\n', ' ')
+    for row in ordered:
+        observation = row.get('runner_hardware', {})
+        runner = row.get('workflow', {}).get('runner')
+        if runner:
+            lines += ['', f"{row['lane_id']}: runner **{cell(runner)}**, device `{cell(observation.get('device_uri', 'unavailable'))}`, render `{cell(observation.get('render_node', 'unavailable'))}`, raw gfx target `{cell(observation.get('gfx_target_version', 'unavailable'))}`."]
+    lines += ['', '| Lane | SDK version / source | Result | Enabled | Excluded | Passed | Failed | Not run | Cleanup | Report |','| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |']
     for row in ordered:
         c=row.get('counts',{});link='[Download report]('+row['report_url']+')' if row.get('report_url') else 'Unavailable'
         selected = row.get('selected_runtime',{}).get('selection',{})
@@ -349,7 +406,6 @@ def aggregate(plan_path, results_root, output):
     if excluded:
         lines += ['', '## Temporary exclusions', '', 'Excluded entries were not prepared or executed and are not counted as passes.', '',
                   '| Lane | Pipeline | Release | Reason | Evidence |', '| --- | --- | --- | --- | --- |']
-        def cell(text): return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('|', '&#124;').replace('\r', ' ').replace('\n', ' ')
         for lane, entry in excluded:
             selected = entry['selection']
             label = selected['repository'] + '@' + selected['publication_revision'][:12] + ' / ' + selected['variant']
@@ -360,18 +416,18 @@ def aggregate(plan_path, results_root, output):
 
 def _main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__);sub=parser.add_subparsers(dest='command',required=True)
-    p=sub.add_parser('plan');p.add_argument('--root',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--inputs',type=Path,required=True);p.add_argument('--event',required=True);p.add_argument('--github-output')
-    p=sub.add_parser('initialize');p.add_argument('--plan',type=Path,required=True);p.add_argument('--lane',required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--previous-safe',choices=('true','false'),default='true');p.add_argument('--github-env')
+    p=sub.add_parser('plan');p.add_argument('--root',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--inputs',type=Path,required=True);p.add_argument('--event',required=True);p.add_argument('--github-output');p.add_argument('--preflight',action='store_true')
+    p=sub.add_parser('initialize');p.add_argument('--plan',type=Path,required=True);p.add_argument('--lane',required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--previous-safe',choices=('true','false'),default='true');p.add_argument('--github-env');p.add_argument('--hardware');p.add_argument('--preflight',action='store_true')
     p=sub.add_parser('prepare-args');p.add_argument('--plan',type=Path,required=True);p.add_argument('--lane',required=True)
     p=sub.add_parser('mark-run');p.add_argument('--output',type=Path,required=True)
     p=sub.add_parser('finish');p.add_argument('--output',type=Path,required=True);p.add_argument('--stages',required=True);p.add_argument('--github-output');p.add_argument('--report-url');p.add_argument('--failure-url')
     p=sub.add_parser('aggregate');p.add_argument('--plan',type=Path,required=True);p.add_argument('--results',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
     args=parser.parse_args(argv)
     if args.command=='plan':
-        value=plan(args.root,args.output,normalize(args.event,read(args.inputs)));lanes=[x['id'] for x in value['lanes']]
-        outputs(args.github_output,{'ready':'true','first_lane':lanes[0],'second_lane':lanes[1] if len(lanes)>1 else ''});return 0
+        value=plan(args.root,args.output,normalize(args.event,read(args.inputs)),preflight=args.preflight);lanes=[x['id'] for x in value['lanes']]
+        outputs(args.github_output,{'ready':'true','hardware':value['inputs']['hardware'],'first_lane':lanes[0],'second_lane':lanes[1] if len(lanes)>1 else ''});return 0
     if args.command=='initialize':
-        outputs(args.github_env,initialize(args.plan,args.lane,args.output,args.previous_safe=='true'));return 0
+        outputs(args.github_env,initialize(args.plan,args.lane,args.output,args.previous_safe=='true',hardware=args.hardware,preflight=args.preflight));return 0
     if args.command=='prepare-args':
         value=load_plan(args.plan);lane=next(x for x in value['lanes'] if x['id']==args.lane);base=args.plan.parent
         values=['--selection-snapshot',str(contained(base,lane.get('selection_snapshot',value['selection_snapshot'])))]

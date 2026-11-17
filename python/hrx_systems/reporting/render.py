@@ -589,6 +589,9 @@ def render_markdown(report):
     runner = scalar(workflow, "runner")
     if runner is not None:
         lines.append(f'- **Runner:** {markdown(runner)}')
+    hardware_label = scalar(workflow.get('normalized_inputs'), 'hardware') if isinstance(workflow, dict) else None
+    if hardware_label is not None:
+        lines.append(f'- **Requested hardware:** {markdown(hardware_label)}')
     lines += ['', '## Server lifecycle', '']
     for key, label in (("start", "Server start"), ("shutdown", "Server shutdown"), ("cleanup", "Server cleanup")):
         outcome = report["server"][key]

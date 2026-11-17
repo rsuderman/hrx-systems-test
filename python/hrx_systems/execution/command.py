@@ -710,7 +710,7 @@ def run_host(args):
         allowed = {'schema_version', 'repository', 'run_id', 'run_attempt', 'ref', 'sha', 'runner', 'run_url',
                    'event_name', 'schedule', 'schedule_timezone', 'observed_at', 'observed_time_source', 'normalized_inputs', 'lane_id', 'plan_sha256'}
         normalized = workflow.get('normalized_inputs') if isinstance(workflow, dict) else None
-        input_keys = {'selection', 'runtime_source', 'device_uri', 'cycles', 'full_integrity',
+        input_keys = {'hardware', 'selection', 'runtime_source', 'device_uri', 'cycles', 'full_integrity',
                       'runtime_run_id', 'runtime_run_attempt', 'runtime_artifact_id', 'runtime_wheel_sha256'}
         if isinstance(workflow, dict) and 'normalized_inputs' in workflow and (not isinstance(normalized, dict) or set(normalized) - input_keys or
                 any(not isinstance(value, (str, int, bool)) or len(str(value)) > 2048 for value in normalized.values())):

@@ -2,6 +2,9 @@ name: One frozen runtime model verification
 on:
   workflow_call:
     inputs:
+      hardware:
+        type: string
+        required: true
       lane_id:
         type: string
         required: true
@@ -20,7 +23,7 @@ permissions:
   contents: read
 jobs:
   verify:
-    runs-on: [self-hosted, linux, hrx-systems-test-bootstrap]
+    runs-on: ${{ inputs.hardware }}
     timeout-minutes: 60
     outputs:
       cleanup_safe: ${{ steps.lane_result.outputs.cleanup_safe }}
@@ -28,6 +31,7 @@ jobs:
     env:
       CONFIGURED_CACHE_ROOT: ${{ vars.HRX_SYSTEMS_ROOT }}
       LANE_ID: ${{ inputs.lane_id }}
+      REQUESTED_HARDWARE: ${{ inputs.hardware }}
       PYTHONNOUSERSITE: '1'
       PYTHONPATH: ''
     steps:
@@ -50,8 +54,17 @@ jobs:
           plan="$RUNNER_TEMP/hrx-model-tests/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/plan/ci-plan.json"
           output="$RUNNER_TEMP/hrx-model-tests/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/$LANE_ID"
           python3 -I python/run.py paired-ci initialize --plan "$plan" --lane "$LANE_ID" \
-            --output "$output" --previous-safe "$PREVIOUS_SAFE" --github-env "$GITHUB_ENV"
+            --output "$output" --previous-safe "$PREVIOUS_SAFE" --github-env "$GITHUB_ENV" \
+            --hardware "$REQUESTED_HARDWARE" --preflight
           printf 'CI_PLAN=%s\n' "$plan" >> "$GITHUB_ENV"
+      - name: Retain worker hardware identity
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: model-hardware-${{ inputs.lane_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hrx-model-tests/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.lane_id }}/runner-hardware.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Prepare host-seeded pipelines and read-only cached assets
         id: prepare
         env:
@@ -170,6 +183,7 @@ jobs:
           name: model-verification-${{ inputs.lane_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ env.E2E_OUTPUT }}/workflow.json
+            ${{ env.E2E_OUTPUT }}/runner-hardware.json
             ${{ env.E2E_OUTPUT }}/ci-plan.json
             ${{ env.E2E_OUTPUT }}/lane-selection.json
             ${{ env.E2E_OUTPUT }}/stages.json
