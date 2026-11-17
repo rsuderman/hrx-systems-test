@@ -33,6 +33,8 @@ jobs:
             bash scripts/host/bootstrap-runner.sh check
           } 2>&1 | tee "$RUNNER_TEMP/hrx-runner-bootstrap.txt"
       - name: Check container storage boundary
+        env:
+          HRX_SYSTEMS_ROOT: ${{ runner.temp }}/hrx-runner-storage-${{ github.run_id }}-${{ github.run_attempt }}
         run: bash scripts/host/check-container-storage.sh
       - name: Upload host identity evidence
         if: always()

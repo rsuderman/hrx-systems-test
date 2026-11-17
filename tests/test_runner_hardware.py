@@ -126,6 +126,44 @@ class RunnerHardwareTests(unittest.TestCase):
 
 
 class SmokeWorkflowTests(unittest.TestCase):
+    def test_storage_step_uses_disposable_root_and_preserves_shared_cache(self):
+        workflow = (ROOT / '.github/workflows/runner-bootstrap.yml').read_text()
+        step = workflow.split('      - name: Check container storage boundary\n', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('HRX_SYSTEMS_ROOT: ${{ runner.temp }}/hrx-runner-storage-${{ github.run_id }}-${{ github.run_attempt }}', step)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shared = root / 'shared-cache'
+            shared.mkdir()
+            (shared / 'immutable').write_text('retained')
+            binary = root / 'bin'
+            binary.mkdir()
+            docker = binary / 'docker'
+            docker.write_text('''#!/usr/bin/env python3
+import json, os, pathlib, sys
+with open(os.environ['DOCKER_CALLS'], 'a') as stream: stream.write(json.dumps(sys.argv[1:]) + '\\n')
+if sys.argv[1] == 'run':
+ for arg in sys.argv:
+  if arg.startswith('type=bind,src=') and arg.endswith(',dst=/results'):
+   root = pathlib.Path(arg.removeprefix('type=bind,src=').removesuffix(',dst=/results'))
+   (root / 'status.txt').write_text('storage-check-passed\\n')
+''')
+            docker.chmod(0o700)
+            scratch = root / 'runner-temp/hrx-runner-storage-123-1'
+            command = step.split('        run: ', 1)[1].strip()
+            result = subprocess.run(['bash', '-c', command], cwd=ROOT,
+                env=dict(os.environ, PATH=str(binary) + os.pathsep + os.environ['PATH'],
+                         HRX_SYSTEMS_ROOT=str(scratch), DOCKER_CALLS=str(root / 'calls')), text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
+            self.assertIn('--read-only', calls[0])
+            self.assertIn('--cap-drop', calls[0])
+            self.assertTrue(any(str(scratch) in argument and argument.endswith(',dst=/assets,readonly') for argument in calls[0]))
+            self.assertEqual(calls[-1][:2], ['rm', '-f'])
+            self.assertEqual(list((scratch / 'cache/bootstrap').iterdir()), [])
+            self.assertEqual(list((scratch / 'results').iterdir()), [])
+            self.assertEqual(list(shared.iterdir()), [shared / 'immutable'])
+            self.assertEqual((shared / 'immutable').read_text(), 'retained')
+
     def test_temporary_choices_keep_legacy_default_and_use_single_selector(self):
         for name in ('runner-pickup.yml', 'runner-bootstrap.yml'):
             text = (ROOT / '.github/workflows' / name).read_text()
