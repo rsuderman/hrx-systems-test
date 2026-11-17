@@ -3,10 +3,11 @@
 Tools and design for validating published Hugging Face Loom model packages.
 Model assets are manually seeded and reused read-only; hosted pipelines and the
 pinned HRX inputs are prepared per attempt. Local commands and GitHub use the same
-stages, with one server hot-loading/unloading models. GitHub tests the latest
-available successful upstream main SDK on pushes to this repository's `main` and
-daily at 4 a.m. America/Los_Angeles. Manual controls retain release/sample replay;
-see [workflow scheduling](docs/specs/later-nightly.md).
+stages, with one server hot-loading/unloading models. GitHub compares the latest
+stable release and available successful upstream main SDK on pushes to this
+repository's `main` and daily at 4 a.m. America/Los_Angeles. The sole enabled
+hardware is Dogwood, selected by `hrx-gfx1151`. Manual controls retain
+release/sample replay; see [workflow scheduling](docs/specs/later-nightly.md).
 
 ## Run locally
 
@@ -61,9 +62,9 @@ directory rather than reusing one from the separate-stage example.
 - [Model-size inventory](catalog/model-size-index.csv): 60 pinned publications,
   selected presets and GGUF sizes. Runtime-memory requirements remain unknown;
   publisher hints are advisory and do not establish VRAM requirements.
-- [Runner bootstrap](docs/runner-bootstrap.md): prepare a local Linux machine,
-  register its GitHub agent, and check read-only container input mounts locally
-  or through a manually triggered workflow.
+- [Runner enrollment and operation](docs/runner-bootstrap.md): prepare the
+  dedicated account, register/start its agent, keep private runner state separate
+  from shared cached models, prove hardware pickup and enable CI routing.
 - [Runner pickup test](.github/workflows/runner-pickup.yml): manually dispatch a
   small job to the registered runner and receive execution evidence, before
   testing Docker or GPUs.

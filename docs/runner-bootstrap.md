@@ -1,90 +1,83 @@
-# Bootstrap a standalone GitHub runner
+# Enroll and operate a hardware runner
 
-This is the initial runner setup, separate from the model-testing system still
-being designed. It checks host prerequisites and container storage isolation.
-It does not install Loom, download models, register automatically, or enable a
-nightly. The repository remains local until you choose to publish it.
+Dogwood is the only enabled host, selected by the single custom label
+`hrx-gfx1151`. Labeling a runner does not enroll another hardware target into
+scheduled or push runs. The model workflow explicitly enables its hardware in
+source and consumes the host's published model and pipeline caches read-only.
 
-Use a dedicated non-root account on a Linux machine with working Docker and GPU
-drivers. The account needs Docker access; treat that account as trusted host
-infrastructure. Avoid using an account containing unrelated credentials. Install
-OS packages and configure Docker using the host's normal administration process;
-these scripts do not run sudo or modify groups/drivers.
+## Prepare the account and keep state separate
 
-## 1. Check and prepare the host
+Use a dedicated non-root Linux x64 account with functioning AMD drivers and
+Docker access. The account is trusted host infrastructure; Docker access grants
+host-level control. Host administrators install prerequisites and configure
+accounts, groups and device access. These repository scripts do not use sudo,
+change drivers, install packages or configure credentials.
 
-From the repository root, as the intended runner account:
+Run bootstrap commands from the repository as the intended runner account:
 
 ```sh
 export HRX_SYSTEMS_ROOT="$HOME/.local/share/hrx-systems-test"
+export HRX_RUNNER_LABEL=hrx-gfx1151
 bash scripts/host/bootstrap-runner.sh check
 bash scripts/host/bootstrap-runner.sh prepare
-```
-
-Keep this root outside the checkout. It contains `runner/` (including GitHub
-registration credentials), `work/`, persistent `cache/`, per-run `runs/` and
-`results/`. Keep ownership with the runner account. GPU device visibility in
-`check` is diagnostic; it does not prove GPU access or memory admission works
-inside a container.
-
-The runner requires outbound HTTPS to GitHub; acquisition will additionally need
-the image registry and Hugging Face. See [GitHub's runner requirements](https://docs.github.com/en/actions/reference/runners/self-hosted-runners).
-
-## 2. Download the runner
-
-The repository pins runner versions and checksums in
-`config/bootstrap-versions.env`. Install the pinned Linux x64 or arm64 runner:
-
-```sh
 bash scripts/host/bootstrap-runner.sh install-runner
 ```
 
-The script downloads from `github.com/actions/runner`, checks the supplied SHA256,
-and extracts only into an empty runner directory. Repeated installation refuses
-to overwrite existing state. Use GitHub's runner update process for upgrades.
-If native dependencies are missing, resolve them using GitHub's instructions
-before proceeding.
+This root is private runner state. Its `runner/` contains registration
+credentials; `work/`, `runs/` and `results/` contain execution state. Keep it owned
+by the runner account and outside the checkout. `install-runner` verifies the
+pinned official archive in `config/bootstrap-versions.env` and refuses a nonempty
+runner directory. Do not reinstall an existing registration.
 
-For a reviewed newer release, update the pins or pass `install-runner VERSION
-SHA256` explicitly. Obtain checksums from the official
-[runner releases](https://github.com/actions/runner/releases). After publishing
-the repository, use **Settings → Actions → Runners → New self-hosted runner**
-for its registration token and any host-specific instructions. See
-[GitHub's setup instructions](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners).
+The shared model root is a separate location, currently `/srv/loom-models` on
+Dogwood. Do not set the bootstrap state root to this cache. Model commands accept
+an explicit `--root` before considering `HRX_SYSTEMS_ROOT`, then the per-user
+default. GitHub model jobs use the repository Actions variable
+`HRX_SYSTEMS_ROOT` first, the runner environment second, then the per-user default.
+For Dogwood the repository variable selects `/srv/loom-models`; it does not move
+the private installed runner. Bootstrap's storage smoke step uses disposable
+`RUNNER_TEMP` fixtures, so it needs no write access to the shared cache.
 
-## 3. Register and start
-
-During the hardware-label rollout, new Dogwood registrations can explicitly set
-`HRX_RUNNER_LABEL=hrx-gfx1151` before `check` and `register`. The legacy default
-remains `hrx-systems-test-bootstrap` until rollout completes. Only the reviewed
-`hrx-gfx1151` hardware label is enabled; unknown labels fail. The read-only check
-can also run independently of Docker and the SDK:
+`check` requires Linux, a non-root account, curl, tar, sha256sum, Docker and
+`timeout`. Hardware labels also require host Python 3, without Loom or any SDK.
+Run only the read-only physical check independently:
 
 ```sh
 bash scripts/host/check-runner-hardware.sh --label hrx-gfx1151
 ```
 
-It requires `amdgpu://0`, exactly one render device and one nonzero KFD GPU
-identity, and matching AMD render/KFD target 110501. A match establishes physical
-identity, not runtime/pipeline compatibility or memory qualification. Registration
-checks that identity before invoking GitHub's configurator. Existing registrations
-must receive the new label additively through GitHub; do not reinstall or
-re-register them. Retain the legacy label during the transition.
+The supported mapping is raw KFD target 110501 for `hrx-gfx1151`, exactly one
+render device driven by amdgpu, one nonzero KFD GPU identity, and matching render
+minor. Only `amdgpu://0` is supported. Missing, ambiguous, unknown or mismatched
+identity fails. The result does not certify pipeline features or usable memory.
+
+## Register a new runner or update an existing one
+
+Keep the explicit `HRX_RUNNER_LABEL` in the intended account's shell, then run:
 
 ```sh
 bash scripts/host/bootstrap-runner.sh register https://github.com/OWNER/hrx-systems-test
 bash scripts/host/bootstrap-runner.sh start
 ```
 
-Registration invokes GitHub's interactive configurator; paste the registration
-token at its prompt rather than saving it in the repository or shell history.
-The script adds the selected single custom label and configures the external
-work directory. Set `HRX_RUNNER_NAME` before registration if a custom name is
-needed. Keep the foreground agent running while dispatching a check; Ctrl-C stops
-it. Existing registrations are preserved, never silently replaced.
+Obtain the short-lived registration token through **Settings → Actions → Runners
+→ New self-hosted runner** as the repository owner. Paste it into GitHub's
+interactive configurator; never save it in a command, source file or runner
+account's unrelated GitHub CLI credentials. Set `HRX_RUNNER_NAME` before
+registration if needed. The script forwards the selected single custom label,
+keeps GitHub's automatic labels, uses the private external work directory and
+refuses to overwrite an existing `.runner`. Keep `start` running in the
+foreground during initial checks; Ctrl-C stops it.
 
-For unattended operation later, stop the foreground agent, then use GitHub's
-service scripts from the runner directory:
+For an existing runner, the repository owner adds `hrx-gfx1151` in **Settings →
+Actions → Runners → the existing runner → Labels**. Preserve automatic labels and
+retain `hrx-systems-test-bootstrap` through the migration. Check that the original
+registration is online and has the requested label; do not re-register, copy
+credentials or restart its service for a label update. Dogwood must remain the
+sole runner eligible for this hardware label.
+
+For unattended service operation, the administrator stops any foreground runner
+and runs the official service commands separately from ordinary bootstrap:
 
 ```sh
 cd "$HRX_SYSTEMS_ROOT/runner"
@@ -93,133 +86,123 @@ sudo ./svc.sh start
 sudo ./svc.sh status
 ```
 
-This service setup is a separate host administration action, not performed by
-the bootstrap. See [GitHub's service documentation](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/configure-the-application).
-Keep `HRX_SYSTEMS_ROOT` configured consistently for interactive and workflow use.
+These are administrator commands, not commands performed by an agent or the
+bootstrap. Preserve the existing dedicated-account service during this rollout.
 
-## 4. Verify that GitHub assigns and executes work
+## Seed the cache and verify runner reads
 
-Publish `.github/workflows/runner-pickup.yml` on the repository's default branch.
-With the registered agent online, choose **Actions → Runner pickup test → Run
-workflow**. No repository variables, checkout, Docker image or GPU are required.
-The job targets the `hrx-systems-test-bootstrap` label added during registration.
-
-Alternatively, with the GitHub CLI authenticated:
+The cache owner seeds selected models with [seed-models.sh](seed-models.md) or
+the [suite seeder](../scripts/cache/seed-cached-models.sh),
+then seeds [original pipelines](seed-pipelines.md):
 
 ```sh
-gh workflow run runner-pickup.yml --repo OWNER/hrx-systems-test
-gh run list --repo OWNER/hrx-systems-test --workflow runner-pickup.yml --limit 5
-gh run watch RUN_ID --repo OWNER/hrx-systems-test --exit-status
+bash scripts/cache/seed-cached-models.sh --root /srv/loom-models
+bash scripts/cache/seed-pipelines.sh --root /srv/loom-models --selection cached
 ```
 
-Both pickup and bootstrap temporarily accept `hardware=hrx-gfx1151` in the UI
-or `-f hardware=hrx-gfx1151` with `gh workflow run`. Their default remains the
-legacy label. Pickup records the requested label and assigned runner; bootstrap
-also uploads the physical-device check. The production model workflow retains its
-legacy route at this checkpoint. Labeling a runner does not enable new hardware
-in scheduled model runs. Dogwood must remain the sole eligible hardware runner
-until a separate affinity design supports additional runners.
-
-Success is a green job with a **Runner pickup succeeded** summary and a
-`runner-pickup-RUN_ID-ATTEMPT` artifact containing the runner identity, commit,
-run ID and execution timestamp. This proves GitHub assigned the job, the agent
-executed shell work, and the artifact upload completed. It does not establish
-container/GPU/model readiness.
-
-If it remains **Queued**, check that the agent is online, registered to this
-repository, and has the selected custom label; also check whether it is busy
-with another job.
-The five-minute execution timeout does not bound the time spent queued. A job
-that executes but fails uploading evidence indicates a separate artifact/network
-problem; inspect its execution log and summary.
-
-The repository must be published and the runner registered before this can run
-on GitHub. Neither operation is performed by adding the workflow file.
-
-## 5. Test the container storage boundary
-
-The repository pins an official Alpine image by digest for the storage check:
+These are explicit operator acquisitions, separate from registration and smoke
+checks. Review the selected suite and both seed reports; do not reseed or evict
+assets during a model run. Do not download models merely to prove a label.
+The runner needs read access to manifests, pipeline entries/blobs and model
+assets, plus traversal of every parent directory. As the runner account inspect
+these paths before testing:
 
 ```sh
-bash scripts/host/check-container-storage.sh
+ls -ld /srv /srv/loom-models /srv/loom-models/cache
+ls -ld /srv/loom-models/cache/pipelines /srv/loom-models/cache/pipelines/entries
 ```
 
-Override `BOOTSTRAP_IMAGE` with another reviewed digest-pinned Linux image
-containing `/bin/sh` and `cat` if needed.
+Follow the seed guide's read-access procedure for the actual published files.
+Have the owner resolve an unreadable path; do not grant the runner cache-write
+access to make a check pass. Registration does not seed anything. Model tests
+attempt every locally published cached selection under the existing runtime
+exclusion rules; the hardware label adds no model eligibility or memory policy.
 
-The check uses tiny temporary fixtures under the external state root. A non-root
-container, with no network or extra capabilities, reads a read-only input mount,
-fails to write into it, and writes to its separate output mount. Owned containers
-and fixtures are removed afterward; no real cache assets are modified. Docker
-may pull the selected image if it is absent. This does not exercise actual
-`loom-fetch` staging, GPU drivers, VRAM measurement, inference or cache eviction.
+## Prove assignment, then request model verification
 
-For the GitHub path, set repository Actions variables:
-
-- `HRX_SYSTEMS_ROOT`: the same absolute external directory on the runner.
-- `BOOTSTRAP_IMAGE`: optional override of the pinned smoke-test image.
-
-Publish `.github/workflows/runner-bootstrap.yml` on the default branch, then
-select **Actions → Runner bootstrap check → Run workflow**. It uses the same
-checks as local execution, with a ten-minute limit and serialized dispatches.
-It has no push, pull-request or schedule trigger. The host orchestration invokes
-Docker; the storage-check workload receives neither host control access nor
-the runner's credentials. See [manual workflow dispatch](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
-
-## Next design and validation checkpoint
-
-Once the runner smoke check succeeds, decide the pinned Loom image and GPU
-device mapping, seed pipeline originals with [seed-pipelines.sh](seed-pipelines.md),
-then validate GPU telemetry and read-only pipeline staging with
-persistent assets. Start with one small model and verify a second run reuses its
-weights/tokenizer while downloading its pipeline again. The cache policy and
-model admission design remain in [the working design](design.md).
-
-To stop using this runner, stop its agent/service and remove its registration
-through GitHub's documented runner removal process. Do not delete shared cached
-assets as part of unregistering an agent.
-
-## Optional dedicated account (administrator commands)
-
-The initial test can use the current account and a temporary foreground agent.
-Before moving to a dedicated account, stop that agent so both registrations do
-not compete for the same label. The administrator can run the following from
-the committed repository checkout on this Linux host:
+With the runner online, choose **Actions → Runner pickup test → Run workflow**,
+then **Runner bootstrap check → Run workflow**, selecting
+`hardware=hrx-gfx1151`. Equivalent commands are:
 
 ```sh
-sudo useradd --create-home --shell /bin/bash hrx-runner
-sudo usermod -aG docker,video,render hrx-runner
-sudo install -d -o hrx-runner -g hrx-runner /home/hrx-runner/hrx-systems-test
-git archive HEAD | sudo -u hrx-runner tar -x -C /home/hrx-runner/hrx-systems-test
-sudo -iu hrx-runner
+gh workflow run runner-pickup.yml --ref main -f hardware=hrx-gfx1151
+gh workflow run runner-bootstrap.yml --ref main -f hardware=hrx-gfx1151
+gh run list --limit 10
 ```
 
-The Docker group grants host-level control; this account is trusted runner
-infrastructure, not an isolation boundary. The `video` and `render` groups are
-for later GPU validation. Verify group names on a different host before use.
-The archive copies committed setup files without copying personal GitHub
-credentials or the existing runner registration.
-
-In the new account's shell:
+Pickup executes shell work and uploads requested-label/runner evidence.
+Bootstrap additionally checks physical identity, host prerequisites and
+read-only container input/writable disposable output. These checks do not run a
+model. During an idle enrollment checkpoint, bound queue observation separately
+from the five-/ten-minute job execution timeouts: if no runner picks up a probe
+within 120 seconds, inspect online/busy/label state and cancel the unmatched run:
 
 ```sh
-cd /home/hrx-runner/hrx-systems-test
-export HRX_SYSTEMS_ROOT="$HOME/.local/share/hrx-systems-test"
-bash scripts/host/bootstrap-runner.sh check
-bash scripts/host/bootstrap-runner.sh prepare
-bash scripts/host/bootstrap-runner.sh install-runner
-bash scripts/host/bootstrap-runner.sh register https://github.com/rsuderman/hrx-systems-test
-bash scripts/host/bootstrap-runner.sh start
+gh run cancel RUN_ID
+gh run view RUN_ID --json status,conclusion,jobs
+gh run download RUN_ID --dir "$HOME/runner-proof-RUN_ID"
 ```
 
-Get a new registration token from the repository settings as the owner; do not
-copy the personal account's GitHub CLI authentication into the runner account.
-Install a persistent service only if desired using the earlier service commands,
-run by the administrator for this new account. Initial testing requires no
-service and no scheduled workflow.
+Retry after resolving assignment. Do not change production routing to rescue an
+unmatched smoke check. Confirm the original Dogwood runner name and requested
+label in the artifact, and renderD128/raw 110501 in bootstrap's physical record.
 
-For retirement, stop the owned agent and remove its repository registration in
-**Settings → Actions → Runners**, or use GitHub's removal instructions shown
-there. Remove only this runner's external state after confirming it has stopped;
-cached assets can be retained or moved separately. Removing the runner does not
-require deleting the GitHub repository or its test evidence.
+Dogwood's additive enrollment passed [pickup run 43985434183](https://github.com/rsuderman/hrx-systems-test/actions/runs/43985434183)
+and [bootstrap run 43985762611](https://github.com/rsuderman/hrx-systems-test/actions/runs/43985762611).
+Bootstrap keeps its fixture writes in runner scratch space; its physical and
+host diagnostics still identify the configured shared cache root.
+
+After both checks pass and cache reads are ready, choose **Cached-model
+verification → Run workflow** with `hardware=hrx-gfx1151`, `selection=cached` and
+`runtime_source=both`, or run:
+
+```sh
+gh workflow run single-model-e2e.yml --ref main \
+  -f hardware=hrx-gfx1151 -f selection=cached -f runtime_source=both
+```
+
+This performs real preparation and inference, with separate release and CI
+lanes. Inspect the combined summary and lane artifacts for requested hardware,
+actual runner, observed device, frozen inventory and confirmed cleanup. Model
+failures retain their real status; pickup success is not model success. See
+[paired runtime verification](paired-runtime-ci.md) for diagnostic single-lane
+and exact replay options.
+
+## Enable another hardware target in source
+
+The current explicit enrollment points are `TARGETS` in
+`python/hrx_systems/host/runner_hardware.py`, hardware validation/defaults in
+`python/hrx_systems/ci/paired.py`, manual choices in `runner-pickup.yml`,
+`runner-bootstrap.yml` and `single-model-e2e.yml`, and the default selectors in
+`single-model-e2e.yml`. The reusable `_model-verification-worker.yml` receives the
+frozen hardware choice and uses it directly. All workflow paths are under
+`.github/workflows/`. Keep choices, physical identity mappings, defaults and
+fixtures consistent. No discovery API, administrative discovery secret, runner
+group or generated enrollment file is involved.
+
+Before enabling another matching runner, replace the present separate-job
+layout with one assigned-runner job owning the inventory and both sequential
+lanes, or agree another explicit affinity design. A label selects a pool;
+post-assignment runner-name checks detect mistakes but cannot create affinity.
+Then introduce a hardware matrix/entry, scope concurrency to the physical device
+and include hardware in artifact/aggregate keys. Enroll the host, seed its cache
+and pass both smoke checks before enabling its source entry. An absent runner
+is unavailable coverage. Multi-GPU mapping and ARM64 SDK/container support remain
+separate work; keep Dogwood as the sole enabled target in this delivery.
+
+## Recovery, rollback and retirement
+
+An offline or busy runner, missing label or lack of source enrollment explains an
+unmatched queue. A physical mismatch fails before acquisition; correct the
+explicit label or host assignment rather than weakening the check. Missing or
+unreadable cache data requires owner reseeding/read-access repair, not automatic
+download fallback or changed model expectations.
+
+During migration the legacy label remains on Dogwood. Before retiring it,
+reverting the routing change restores the old selector. After retirement, the
+owner must first restore `hrx-systems-test-bootstrap`, then revert routing.
+Audit active and queued older workflows before removing only that custom label;
+preserve automatic labels, the private registration/service and shared cache.
+Remove a target from scheduled/push source routing before retiring its runner.
+Stopping/removing the actual service or registration is separate administrator
+work and never requires deleting shared model assets.

@@ -9,18 +9,27 @@ can delay scheduled jobs; no exact-time or missing-run monitor is promised.
 ## Inputs and ownership
 
 Push and schedule events have no dispatch inputs. Initialization explicitly sets
-all published cached selections, `actions-main`, two cycles, `amdgpu://0`, and
+all published cached selections, paired latest-release/latest-CI SDKs,
+`hardware=hrx-gfx1151`, two cycles, `amdgpu://0`, and
 normal unchanged-asset receipts. Manual dispatch uses these same defaults and
 retains explicit sample-suite, release/replay, device, cycle and full-integrity
 options. Invalid manual inputs fail before preparation, including zero cycles;
 missing-input defaults do not hide an explicitly invalid value.
 
+Dogwood is the sole enabled runner. The canonical
+[runner enrollment and operation guide](../runner-bootstrap.md) covers private
+runner state, service setup, shared cache access, smoke checks and explicit source
+enrollment. Adding a label alone does not enable another hardware target in push
+or scheduled runs. Additional matching runners require the documented affinity
+and concurrency changes before enrollment.
+
 The shared `config/runtime.json` retains the local pinned-release route. GitHub
 passes an explicit runtime source; it does not rewrite that configuration. One
-upstream main SDK is frozen per attempt, with verified artifact/wheel identities,
+upstream main SDK is frozen alongside the stable release per comparison, with verified artifact/wheel identities,
 actual tested source, requested HEAD, build age and a visible behind-HEAD relation.
 There is no rebuild, per-model source resolution or silent release fallback.
-The prepare step alone receives the upstream Actions-read credential.
+Only planning resolution and lane preparation receive the existing upstream
+Actions-read credential; hardware discovery requires no new secret.
 
 ## Membership and execution
 
@@ -33,8 +42,8 @@ filters cached membership. Hardware qualification remains advisory.
 
 All events invoke the same independent Bash Prepare, Run and Report commands.
 Model assets are read-only and verified through unchanged writer receipts;
-pipelines are fetched at their seeded publication revision. One preparation SDK
-and one serving server are shared across the batch. Continue after a model failure
+original pipelines are read from the host-seeded cache at their exact revision.
+One preparation SDK and one serving server are shared across each lane's batch. Continue after a model failure
 only when unload/quiescence is confirmed; unsafe cleanup leaves later entries
 explicitly not run. No automatic model download, cache repair or upstream fix is
 introduced. Existing `passed`, `failed`, `not_run`, `incomplete` statuses remain.

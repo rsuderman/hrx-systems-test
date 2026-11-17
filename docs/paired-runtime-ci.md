@@ -2,11 +2,37 @@
 
 The normal main push, nightly schedule and manual default compare the latest stable release with the latest eligible successful main SDK build. The outer workflow owns the hardware concurrency lock for the entire comparison. Its reusable worker has no competing lock.
 
+All planning, worker and comparison jobs select `hrx-gfx1151`; manual dispatch
+exposes the same explicit `hardware` choice. Dogwood is the sole eligible runner.
+Follow the canonical [runner enrollment and operation guide](runner-bootstrap.md)
+for account/service setup, private state versus shared cache, physical checks,
+seeding, smoke probes, source enrollment and rollback. A label selects a pool;
+it does not establish job affinity. Do not add a second matching runner before
+the guide's affinity/concurrency prerequisites are implemented.
+
 The planner freezes the ordered model denominator, exact seed bytes and aliases, authored suite entries, repository configuration hashes and both runtime references before either lane starts. Resolution failures become frozen error references: preparation accounts for every selected entry as a runtime setup failure without retrying a moving alias. A missing plan fails the comparison before GPU execution.
+
+CI planning checks the raw physical identity before inventory discovery or SDK
+resolution, then freezes the requested hardware and planning runner name. Each
+worker rejects a different requested label or assigned runner before loading its
+frozen inventory metadata, and repeats the physical check before preparation.
+The check is SDK-free and does not require advisory runtime mapping or memory
+qualification. The global lock, cache membership and model expectations remain
+independent of this hardware identity check.
 
 Each lane independently stages verified original pipelines from the host-seeded read-only cache, acquires its selected SDK once, starts one shared server, runs all selected entries, confirms teardown and publishes its report and bounded evidence. The release lane precedes the CI lane. Model, assertion, acquisition, rendering and upload failures do not by themselves block the second lane. The second lane requires confirmed cleanup: an unknown teardown, forced server shutdown or forced model removal produces a blocked second result with every entry marked not run. Cancellation prevents new GPU work; existing cleanup and aggregation remain eligible.
 
 The comparison artifact contains `paired-result.json` and `summary.md`; each lane has its own report, failure bundle and `lane-result.json`. Results retain SDK identities, the common plan digest, frozen inputs, runtime policy and any migration reports. An unavailable lane result is a failed comparison, never a successful partial run. Runtime 0.1.0 keeps its published pipelines; the qualified 0.2.0 family uses the versioned upgrader and pinned runtime policy in either lane.
+
+`runner-hardware.json` records the requested label, device URI, render node,
+raw gfx target and check status. Separate planning/worker artifacts retain that
+bounded record even when a physical check fails; successful worker records also
+travel into lane results and the combined summary. Workflow metadata stores only
+the scalar normalized hardware choice alongside its existing runner identity.
+Historical saved plans/results without these fields retain their legacy report
+behavior. Metadata-only local planning remains available without `--preflight`;
+GitHub planning and worker initialization explicitly require it. A runner-name
+guard detects misassignment and cannot make a multi-runner pool safe.
 
 Manual `runtime_source` choices retain single-lane diagnostics: `release-latest`, `actions-main`, configured pinned `release`, and exact `actions-replay` with run, attempt, artifact and wheel digest. Local preparation defaults remain unchanged.
 

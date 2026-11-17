@@ -12,8 +12,8 @@ bash scripts/report/generate-model-report.sh --results "$attempt/results" --outp
 
 The same workflow runs on pushes to this testing repository's `main`, daily at
 4 a.m. in `America/Los_Angeles`, and by manual dispatch. Its default is every
-published cached selection, the latest available successful upstream main Actions
-SDK, two cycles, `amdgpu://0` and normal unchanged-asset receipts. Manual controls
+published cached selection, paired latest stable release/latest eligible main
+Actions SDKs, hardware `hrx-gfx1151`, two cycles, `amdgpu://0` and normal unchanged-asset receipts. Manual controls
 retain explicit release/replay, sample suite, device, cycle and full-integrity
 overrides. Invalid manual values fail; zero cycles is not replaced by a default.
 
@@ -27,6 +27,8 @@ All triggers use the existing hardware concurrency group, without canceling a
 running verification. Operators must still keep manual seeders, downloads and
 cache maintenance idle during verification; GitHub concurrency does not coordinate
 unrelated local processes. See [nightly behavior](specs/later-nightly.md).
+Use the [runner enrollment guide](runner-bootstrap.md) for startup, cache access,
+manual smoke/model dispatch and the source changes required to enable hardware.
 
 ## Local commands
 
