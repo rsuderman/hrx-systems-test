@@ -1,12 +1,22 @@
 name: Runner pickup test
 on:
   workflow_dispatch:
+    inputs:
+      hardware:
+        description: Runner label to prove (legacy default during rollout)
+        type: choice
+        default: hrx-systems-test-bootstrap
+        options:
+          - hrx-systems-test-bootstrap
+          - hrx-gfx1151
 permissions:
   contents: read
 jobs:
   pickup:
-    runs-on: [self-hosted, linux, hrx-systems-test-bootstrap]
+    runs-on: ${{ inputs.hardware }}
     timeout-minutes: 5
+    env:
+      HRX_RUNNER_LABEL: ${{ inputs.hardware }}
     steps:
       - name: Execute work on the assigned runner
         shell: bash
@@ -16,6 +26,7 @@ jobs:
           {
             printf 'status=executed\n'
             printf 'runner=%s\n' "$RUNNER_NAME"
+            printf 'requested_label=%s\n' "$HRX_RUNNER_LABEL"
             printf 'os=%s\n' "$RUNNER_OS"
             printf 'architecture=%s\n' "$RUNNER_ARCH"
             printf 'repository=%s\n' "$GITHUB_REPOSITORY"

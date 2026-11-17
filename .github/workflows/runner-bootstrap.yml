@@ -1,6 +1,14 @@
 name: Runner bootstrap check
 on:
   workflow_dispatch:
+    inputs:
+      hardware:
+        description: Runner label to prove (legacy default during rollout)
+        type: choice
+        default: hrx-systems-test-bootstrap
+        options:
+          - hrx-systems-test-bootstrap
+          - hrx-gfx1151
 permissions:
   contents: read
 concurrency:
@@ -8,14 +16,29 @@ concurrency:
   cancel-in-progress: false
 jobs:
   bootstrap:
-    runs-on: [self-hosted, linux, hrx-systems-test-bootstrap]
+    runs-on: ${{ inputs.hardware }}
     timeout-minutes: 10
     env:
       HRX_SYSTEMS_ROOT: ${{ vars.HRX_SYSTEMS_ROOT }}
       BOOTSTRAP_IMAGE: ${{ vars.BOOTSTRAP_IMAGE }}
+      HRX_RUNNER_LABEL: ${{ inputs.hardware }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Check host prerequisites
-        run: bash scripts/host/bootstrap-runner.sh check
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf 'requested_label=%s\nrunner=%s\n' "$HRX_RUNNER_LABEL" "$RUNNER_NAME"
+            bash scripts/host/bootstrap-runner.sh check
+          } 2>&1 | tee "$RUNNER_TEMP/hrx-runner-bootstrap.txt"
       - name: Check container storage boundary
         run: bash scripts/host/check-container-storage.sh
+      - name: Upload host identity evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runner-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hrx-runner-bootstrap.txt
+          if-no-files-found: error
+          retention-days: 7

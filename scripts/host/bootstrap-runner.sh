@@ -4,6 +4,13 @@ set -euo pipefail
 
 root="${HRX_SYSTEMS_ROOT:-$HOME/.local/share/hrx-systems-test}"
 runner="$root/runner"
+label="${HRX_RUNNER_LABEL-hrx-systems-test-bootstrap}"
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+check_label() {
+  [[ "$label" != hrx-systems-test-bootstrap ]] || return 0
+  bash "$repo_root/scripts/host/check-runner-hardware.sh" --label "$label"
+}
 
 die() { echo "Error: $*" >&2; exit 1; }
 usage() {
@@ -16,6 +23,9 @@ Usage: scripts/host/bootstrap-runner.sh COMMAND [ARGS]
   start                       Run the registered agent in the foreground
 
 HRX_SYSTEMS_ROOT selects an absolute external state directory.
+HRX_RUNNER_LABEL selects one custom registration label (default during rollout:
+hrx-systems-test-bootstrap). hrx-gfx1151 requires a matching sole AMD GPU.
+Check physical identity alone: bash scripts/host/check-runner-hardware.sh --label hrx-gfx1151
 Default: $HOME/.local/share/hrx-systems-test
 Run as the intended non-root runner account. No sudo or package installs are run.
 EOF
@@ -25,6 +35,7 @@ EOF
 case "${1:-help}" in
   help|--help|-h) usage ;;
   check)
+    check_label
     [[ "$(uname -s)" = Linux ]] || die 'Linux is required'
     [[ "$(id -u)" != 0 ]] || die 'use the intended non-root runner account'
     for tool in curl tar sha256sum docker timeout; do
@@ -80,9 +91,10 @@ case "${1:-help}" in
     [[ -x "$runner/config.sh" ]] || die 'install-runner must be completed first'
     [[ ! -f "$runner/.runner" ]] || die 'runner is already registered; do not overwrite it'
     [[ "$(id -u)" != 0 ]] || die 'register as the intended non-root runner account'
+    check_label
     cd "$runner"
     ./config.sh --url "$2" --name "${HRX_RUNNER_NAME:-$(hostname)-hrx-bootstrap}" \
-      --labels hrx-systems-test-bootstrap --work "$root/work"
+      --labels "$label" --work "$root/work"
     ;;
   start)
     [[ -f "$runner/.runner" ]] || die 'register must be completed first'

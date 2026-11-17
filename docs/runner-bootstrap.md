@@ -54,6 +54,23 @@ for its registration token and any host-specific instructions. See
 
 ## 3. Register and start
 
+During the hardware-label rollout, new Dogwood registrations can explicitly set
+`HRX_RUNNER_LABEL=hrx-gfx1151` before `check` and `register`. The legacy default
+remains `hrx-systems-test-bootstrap` until rollout completes. Only the reviewed
+`hrx-gfx1151` hardware label is enabled; unknown labels fail. The read-only check
+can also run independently of Docker and the SDK:
+
+```sh
+bash scripts/host/check-runner-hardware.sh --label hrx-gfx1151
+```
+
+It requires `amdgpu://0`, exactly one render device and one nonzero KFD GPU
+identity, and matching AMD render/KFD target 110501. A match establishes physical
+identity, not runtime/pipeline compatibility or memory qualification. Registration
+checks that identity before invoking GitHub's configurator. Existing registrations
+must receive the new label additively through GitHub; do not reinstall or
+re-register them. Retain the legacy label during the transition.
+
 ```sh
 bash scripts/host/bootstrap-runner.sh register https://github.com/OWNER/hrx-systems-test
 bash scripts/host/bootstrap-runner.sh start
@@ -61,7 +78,7 @@ bash scripts/host/bootstrap-runner.sh start
 
 Registration invokes GitHub's interactive configurator; paste the registration
 token at its prompt rather than saving it in the repository or shell history.
-The script adds the `hrx-systems-test-bootstrap` label and configures the external
+The script adds the selected single custom label and configures the external
 work directory. Set `HRX_RUNNER_NAME` before registration if a custom name is
 needed. Keep the foreground agent running while dispatching a check; Ctrl-C stops
 it. Existing registrations are preserved, never silently replaced.
@@ -95,6 +112,14 @@ gh run list --repo OWNER/hrx-systems-test --workflow runner-pickup.yml --limit 5
 gh run watch RUN_ID --repo OWNER/hrx-systems-test --exit-status
 ```
 
+Both pickup and bootstrap temporarily accept `hardware=hrx-gfx1151` in the UI
+or `-f hardware=hrx-gfx1151` with `gh workflow run`. Their default remains the
+legacy label. Pickup records the requested label and assigned runner; bootstrap
+also uploads the physical-device check. The production model workflow retains its
+legacy route at this checkpoint. Labeling a runner does not enable new hardware
+in scheduled model runs. Dogwood must remain the sole eligible hardware runner
+until a separate affinity design supports additional runners.
+
 Success is a green job with a **Runner pickup succeeded** summary and a
 `runner-pickup-RUN_ID-ATTEMPT` artifact containing the runner identity, commit,
 run ID and execution timestamp. This proves GitHub assigned the job, the agent
@@ -102,8 +127,8 @@ executed shell work, and the artifact upload completed. It does not establish
 container/GPU/model readiness.
 
 If it remains **Queued**, check that the agent is online, registered to this
-repository, and has all three requested labels (`self-hosted`, `linux`, and
-`hrx-systems-test-bootstrap`); also check whether it is busy with another job.
+repository, and has the selected custom label; also check whether it is busy
+with another job.
 The five-minute execution timeout does not bound the time spent queued. A job
 that executes but fails uploading evidence indicates a separate artifact/network
 problem; inspect its execution log and summary.

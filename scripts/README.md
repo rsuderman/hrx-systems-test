@@ -4,7 +4,7 @@ Public Bash commands derive the checkout from their own path and dispatch throug
 
 | Responsibility | Canonical commands |
 | --- | --- |
-| Host runner and storage | `host/bootstrap-runner.sh`, `host/check-container-storage.sh`, `host/qualify-cached-models.sh` |
+| Host runner and storage | `host/bootstrap-runner.sh`, `host/check-runner-hardware.sh`, `host/check-container-storage.sh`, `host/qualify-cached-models.sh` |
 | Explicit host cache writers | `cache/seed-models.sh`, `cache/seed-cached-models.sh`, `cache/seed-pipelines.sh`, `cache/download-models.sh` |
 | Explicit asset receipt verification | `cache/verify-cached-assets.sh` |
 | Publication discovery and revision plans | `cache/refresh-publications.sh` |

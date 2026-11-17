@@ -15,6 +15,7 @@ ROLES = {
     'generate-model-report': 'hrx_systems.reporting.render',
     'package-model-failures': 'hrx_systems.reporting.package_failures',
     'qualify-cached-models': 'hrx_systems.host.hardware_advisory',
+    'check-runner-hardware': 'hrx_systems.host.runner_hardware',
     'sdk-environment': 'hrx_systems.sdk.environment',
     'release-runtime': 'hrx_systems.sdk.releases',
     'paired-ci': 'hrx_systems.ci.paired',
