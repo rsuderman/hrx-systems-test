@@ -104,6 +104,7 @@ def _validate_config(config):
                 seccomp['change'] != 'append unconditional allow rule for mbind only' or
                 seccomp['base_source_url'] != 'https://raw.githubusercontent.com/moby/profiles/main/seccomp/default.json'):
             raise ValueError('unsupported seccomp policy configuration')
+        _native_publications(config.get('native_publications', []))
         profiles = config['request_profiles']
         if profiles['profile_id'] != 'hrx-0.2.0-exact-reasoning-none-v1':
             raise ValueError('unsupported request profile configuration')
@@ -126,6 +127,38 @@ def _validate_config(config):
     except (KeyError, TypeError, AttributeError) as error:
         raise ValueError('malformed runtime policy configuration') from error
     return config
+
+
+def _native_publications(records):
+    if not isinstance(records, list):
+        raise ValueError('native publications must be an array')
+    seen = set()
+    for record in records:
+        selection = record['selection']
+        if (set(selection) != set(SELECTION_FIELDS) or
+                any(not isinstance(selection[k], str) or not selection[k] for k in SELECTION_FIELDS) or
+                not re.fullmatch(r'[0-9a-f]{40}', selection['publication_revision'])):
+            raise ValueError('native publication requires an exact six-field selection')
+        identity = tuple(selection[k] for k in SELECTION_FIELDS)
+        expected_url = ('https://huggingface.co/' + selection['repository'] + '/resolve/' +
+                        selection['publication_revision'] + '/README.md')
+        if identity in seen or record['runtime'] != '0.2.0' or record['evidence_url'] != expected_url:
+            raise ValueError('invalid or duplicate native publication evidence')
+        for field in ('card_sha256', 'lock_sha256', 'evidence_sha256'):
+            _sha(record[field])
+        seen.add(identity)
+
+
+def native_publication(policy, selection, card_sha256, lock_sha256):
+    """Recognize only explicitly audited immutable native 0.2 publications."""
+    config = policy.get('configuration')
+    records = config['content'].get('native_publications', []) if config else []
+    for record in records:
+        if record['selection'] == selection:
+            if (record['card_sha256'], record['lock_sha256']) != (card_sha256, lock_sha256):
+                raise ValueError('native publication card/lock identity changed')
+            return copy.deepcopy(record)
+    return None
 
 
 def _configuration():

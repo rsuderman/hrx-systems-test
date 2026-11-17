@@ -6,7 +6,7 @@
       "seed_manifest": "seed-manifest.json",
       "selection": {
         "repository": "loom-fun/unsloth-Qwen3.5-0.8B-loom",
-        "publication_revision": "874fabb4378fcf56c2c8c8c9b17ad92280c44101",
+        "publication_revision": "75026a5e383cbb3ab7aabb6f86f130f11d15ee9f",
         "model_id": "Qwen/Qwen3.5-0.8B",
         "preset": "chat",
         "variant": "gguf",
@@ -15,7 +15,6 @@
       "published_execution": {
         "rows": 4,
         "context_capacity": 262144,
-        "pool_capacity": 327680,
         "prefill_capacity": 1024,
         "max_tokens": 4096
       },
@@ -26,7 +25,7 @@
       "seed_manifest": "models/qwen25-05b/seed-manifest.json",
       "selection": {
         "repository": "loom-fun/bartowski-Qwen2.5-0.5B-Instruct-loom",
-        "publication_revision": "857f8443a06e22be2c77fc9e4080446e3af801b4",
+        "publication_revision": "600fbd00715908db7869e73a1b2636f9ff06c783",
         "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
         "preset": "chat",
         "variant": "gguf",
@@ -35,7 +34,6 @@
       "published_execution": {
         "rows": 4,
         "context_capacity": 32768,
-        "pool_capacity": 98304,
         "prefill_capacity": 1024,
         "max_tokens": 4096
       },
@@ -46,7 +44,7 @@
       "seed_manifest": "models/qwen3-06b/seed-manifest.json",
       "selection": {
         "repository": "loom-fun/unsloth-Qwen3-0.6B-loom",
-        "publication_revision": "ffe640e8f70da407505adc3fa0c1047f76e54940",
+        "publication_revision": "2a68a0bbc14a278e809706bcbc95afc42de16c16",
         "model_id": "Qwen/Qwen3-0.6B",
         "preset": "chat",
         "variant": "gguf",
@@ -55,7 +53,6 @@
       "published_execution": {
         "rows": 4,
         "context_capacity": 40960,
-        "pool_capacity": 106496,
         "prefill_capacity": 1024,
         "max_tokens": 4096
       },
@@ -66,7 +63,7 @@
       "seed_manifest": "models/gemma3-1b/seed-manifest.json",
       "selection": {
         "repository": "loom-fun/ggml-org-gemma-3-1b-it-loom",
-        "publication_revision": "00fabc5223b95eaf3b4bf83fab0f14c6e445f8cc",
+        "publication_revision": "09dec8a4c67c1aedb830cdf9ce52d2891ba3bdc8",
         "model_id": "google/gemma-3-1b-it",
         "preset": "chat",
         "variant": "gguf",
@@ -75,7 +72,6 @@
       "published_execution": {
         "rows": 4,
         "context_capacity": 32768,
-        "pool_capacity": 98304,
         "prefill_capacity": 1024,
         "max_tokens": 4096
       },
@@ -86,7 +82,7 @@
       "seed_manifest": "models/llama32-3b/seed-manifest.json",
       "selection": {
         "repository": "loom-fun/unsloth-Llama-3.2-3B-Instruct-loom",
-        "publication_revision": "7680cc5682eb6273b8d7058ad630d235dd4c7e87",
+        "publication_revision": "313d5f7a71e91cccb7f289f318506d269c1d82fb",
         "model_id": "meta-llama/Llama-3.2-3B-Instruct",
         "preset": "chat",
         "variant": "gguf",
@@ -95,7 +91,6 @@
       "published_execution": {
         "rows": 4,
         "context_capacity": 131072,
-        "pool_capacity": 196608,
         "prefill_capacity": 1024,
         "max_tokens": 4096
       },
@@ -106,7 +101,7 @@
       "seed_manifest": "models/lfm3-17b/seed-manifest.json",
       "selection": {
         "repository": "loom-fun/bartowski-LFM3-1.7B-loom",
-        "publication_revision": "cffc78e6fdb4087e99925d6374befef52cefad30",
+        "publication_revision": "d4170a40471fe759901cc832ed470238f2b71252",
         "model_id": "LiquidAI/LFM3-1.7B",
         "preset": "chat",
         "variant": "gguf",
@@ -115,7 +110,6 @@
       "published_execution": {
         "rows": 4,
         "context_capacity": 262144,
-        "pool_capacity": 327680,
         "prefill_capacity": 1024,
         "max_tokens": 4096
       },
@@ -126,7 +120,7 @@
       "seed_manifest": "models/hyperclovax-15b/seed-manifest.json",
       "selection": {
         "repository": "loom-fun/rippertnt-HyperCLOVAX-SEED-Text-Instruct-1.5B-loom",
-        "publication_revision": "f3a7b97029be5b8cae5700f19c7fac0d9f31ab8e",
+        "publication_revision": "59d42c7916ed6d34efcfe6239bdf43c78f798767",
         "model_id": "naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B",
         "preset": "chat",
         "variant": "gguf",
@@ -135,7 +129,6 @@
       "published_execution": {
         "rows": 4,
         "context_capacity": 131072,
-        "pool_capacity": 196608,
         "prefill_capacity": 1024,
         "max_tokens": 4096
       },
@@ -146,7 +139,7 @@
       "seed_manifest": "models/gpt-oss-20b/seed-manifest.json",
       "selection": {
         "repository": "loom-fun/unsloth-gpt-oss-20b-loom",
-        "publication_revision": "abf68635c8939d4bf113881972612b4728648b04",
+        "publication_revision": "c3f57f7026b37e4ab18b801e21242a6f4e9d6ebe",
         "model_id": "openai/gpt-oss-20b",
         "preset": "chat",
         "variant": "gguf",
@@ -155,7 +148,6 @@
       "published_execution": {
         "rows": 4,
         "context_capacity": 131072,
-        "pool_capacity": 196608,
         "prefill_capacity": 4096,
         "max_tokens": 4096
       },

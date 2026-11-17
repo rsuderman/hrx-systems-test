@@ -29,10 +29,12 @@ def runtime(version):
 
 
 class PipelinePreparationTests(unittest.TestCase):
-    def fixture(self, root, version='0.2.0.dev0', upgrade='auto', *, abi_profile='legacy', abi_client=None, epoch=False, snapshot_override=None):
+    def fixture(self, root, version='0.2.0.dev0', upgrade='auto', *, abi_profile='legacy', abi_client=None, epoch=False, snapshot_override=None, native=False):
         work, destination = root / 'work', root / 'models/one'
         work.mkdir(); (destination / 'model/program').mkdir(parents=True)
         card = {'schema_version': 1, 'presets': {'chat': {'execution': {'rows': 4, 'pool_capacity': 32}}}}
+        if native:
+            card['presets']['chat']['execution'].pop('pool_capacity')
         text = json.dumps(card) + '\n'
         for path in (work / 'model.json', destination / 'model/model.json'):path.write_text(text)
         (work / 'model.json.lock').write_text('{"source":"verified-original"}\n')
@@ -47,15 +49,24 @@ class PipelinePreparationTests(unittest.TestCase):
         seed = {'card_sha256': PIPE.digest(work / 'model.json'), 'lock_sha256': PIPE.digest(work / 'model.json.lock')}
         snapshot = copy.deepcopy(snapshot_override) if snapshot_override is not None else runtime(version)
         abi = publication_abi(snapshot, root, abi_profile, client=abi_client) if PREP.POLICY.needs_publication_abi(snapshot, upgrade) else None
-        policy, files = PIPE.freeze_policy(root, snapshot, pipeline_upgrade=upgrade, publication_abi=abi)
         identity = {'repository': 'example/model', 'publication_revision': 'a'*40,
                     'model_id': 'Example', 'preset': 'chat', 'variant': 'gguf', 'programs': 'source'}
+        seed['selection'] = identity
+        config = PREP.POLICY._configuration()
+        if native:
+            config['content']['native_publications'] = [{
+                'selection': identity, 'runtime': '0.2.0', **{k: seed[k] for k in ('card_sha256', 'lock_sha256')},
+                'evidence_url': 'https://huggingface.co/example/model/resolve/' + 'a'*40 + '/README.md',
+                'evidence_sha256': 'b'*64}]
+            config['content_sha256'] = PREP.POLICY.digest(config['content'])
+        with patch.object(PREP.POLICY, '_configuration', return_value=config):
+            policy, files = PIPE.freeze_policy(root, snapshot, pipeline_upgrade=upgrade, publication_abi=abi)
         baseline = {**identity, 'smoke_request': {'max_tokens': 256}, 'smoke_expected_text': '4',
                     'profile_identity': 'historical-profile', 'published_execution': card['presets']['chat']['execution']}
         baseline = PIPE.profile(baseline, policy)
         metadata = PIPE.seal_upgrade(destination, work, seed, policy, 'one')
         baseline['effective_execution'] = copy.deepcopy(baseline['published_execution'])
-        if policy['pipeline_upgrade']['enabled']:baseline['effective_execution'].pop('pool_capacity')
+        if policy['pipeline_upgrade']['enabled'] and not native:baseline['effective_execution'].pop('pool_capacity')
         manifest = {**seed, 'pipeline_upgrade': metadata, 'published_execution': baseline['published_execution'],
                     'effective_execution': baseline['effective_execution'], 'effective_test_profile': baseline['effective_test_profile']}
         entry = {'id': 'one', 'selection': identity, 'pipeline_upgrade': metadata}
@@ -75,6 +86,70 @@ class PipelinePreparationTests(unittest.TestCase):
             self.assertEqual((destination / 'model/weights.gguf').readlink(), root / 'payload.gguf')
             self.assertEqual((root / 'payload.gguf').read_bytes(), b'checkpoint bytes never transformed')
             self.assertEqual(PIPE.digest(destination / 'publication-card.json'), manifest['card_sha256'])
+
+    def test_native_publication_skips_loader_and_preserves_source_with_legacy_policy_active(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(PIPE.UPGRADER, 'load', side_effect=AssertionError('legacy migration invoked')):
+                destination, policy, manifest, baseline, entry, suite = self.fixture(root, version='0.2.0', native=True)
+            self.assertTrue(policy['pipeline_upgrade']['enabled'])
+            self.assertEqual(PIPE.validate_policy(root, suite), policy)
+            PIPE.verify_upgrade(root, entry, manifest, baseline, policy)
+            self.assertEqual(manifest['pipeline_upgrade']['status'], 'skipped')
+            self.assertEqual(manifest['pipeline_upgrade']['reason'], 'native-0.2.0-publication')
+            self.assertFalse((destination / 'model-original').exists())
+            self.assertIn('vector.constant', (destination / 'model/program/main.loom').read_text())
+            self.assertEqual(baseline['published_execution'], baseline['effective_execution'])
+            self.assertNotIn('pool_capacity', baseline['effective_execution'])
+            # The same frozen policy can prepare an unlisted legacy entry.
+            import shutil
+            legacy = root / 'models/two'
+            shutil.copytree(destination / 'model', legacy / 'model', symlinks=True)
+            old_seed = {**{k: manifest[k] for k in ('card_sha256', 'lock_sha256')},
+                        'selection': {**entry['selection'], 'publication_revision': 'c'*40}}
+            old = PIPE.seal_upgrade(legacy, root / 'work', old_seed, policy, 'two')
+            self.assertEqual(old['status'], 'applied')
+            self.assertIn('vector.splati', (legacy / 'model/program/main.loom').read_text())
+            self.assertIn('vector.constant', (destination / 'model/program/main.loom').read_text())
+            self.assertEqual(PREP.POLICY.server_args(policy), ['--pool_backing=fixed'])
+            self.assertIsNotNone(policy['seccomp'])
+            tampered = copy.deepcopy(policy)
+            tampered['configuration']['content']['native_publications'][0]['runtime'] = '0.1.0'
+            tampered['configuration']['content_sha256'] = PREP.POLICY.digest(tampered['configuration']['content'])
+            tampered['policy_sha256'] = PREP.POLICY.digest({k: v for k, v in tampered.items() if k != 'policy_sha256'})
+            with self.assertRaisesRegex(ValueError, 'native publication'):
+                PREP.POLICY.validate(tampered, suite['runtime']['resolved_runtime'])
+            report_path = destination / 'pipeline-upgrade.json'
+            report = PIPE.read_json(report_path)
+            report['native_publication']['evidence_sha256'] = 'c'*64
+            PIPE.write_json(report_path, report)
+            manifest['pipeline_upgrade']['report_sha256'] = PIPE.digest(report_path)
+            with self.assertRaisesRegex(ValueError, 'native publication evidence'):
+                PIPE.verify_upgrade(root, entry, manifest, baseline, policy)
+            report['native_publication']['evidence_sha256'] = 'b'*64
+            PIPE.write_json(report_path, report)
+            manifest['pipeline_upgrade']['report_sha256'] = PIPE.digest(report_path)
+            for field in PREP.POLICY.SELECTION_FIELDS:
+                changed = {**entry, 'selection': {**entry['selection'], field: 'changed'}}
+                with self.assertRaises(ValueError):
+                    PIPE.verify_upgrade(root, changed, manifest, baseline, policy)
+            for field in ('card_sha256', 'lock_sha256'):
+                with self.assertRaisesRegex(ValueError, 'native publication'):
+                    PIPE.verify_upgrade(root, entry, {**manifest, field: 'c'*64}, baseline, policy)
+            # An unlisted historical revision still migrates under this same policy.
+            self.assertIsNone(PREP.POLICY.native_publication(policy,
+                {**entry['selection'], 'publication_revision': 'c'*40}, manifest['card_sha256'], manifest['lock_sha256']))
+
+    def test_saved_policy_without_native_rules_keeps_legacy_migration_valid(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination, policy, manifest, baseline, entry, suite = self.fixture(root)
+            self.assertEqual(manifest['pipeline_upgrade']['status'], 'applied')
+            policy['configuration']['content'].pop('native_publications', None)
+            policy['configuration']['content_sha256'] = PREP.POLICY.digest(policy['configuration']['content'])
+            policy['policy_sha256'] = PREP.POLICY.digest({k: v for k, v in policy.items() if k != 'policy_sha256'})
+            self.assertEqual(PREP.POLICY.validate(policy, suite['runtime']['resolved_runtime']), policy)
+            self.assertIsNone(PREP.POLICY.native_publication(policy, entry['selection'], manifest['card_sha256'], manifest['lock_sha256']))
 
     def test_release_and_explicit_none_leave_source_and_request_unchanged(self):
         for version, mode in [('0.1.0','auto'),('0.2.0.dev0','none')]:

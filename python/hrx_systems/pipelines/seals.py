@@ -172,7 +172,8 @@ def seal_upgrade(destination, work, seed, policy, entry_id):
         target = destination / target_name
         shutil.copyfile(source, target)
         publication.append({'path': f'models/{entry_id}/{target_name}', 'sha256': expected})
-    enabled = policy['pipeline_upgrade']['enabled']
+    native = POLICY.native_publication(policy, seed.get('selection'), seed['card_sha256'], seed['lock_sha256'])
+    enabled = policy['pipeline_upgrade']['enabled'] and native is None
     if enabled:
         retained = destination / 'model-original'
         original.rename(retained)
@@ -190,11 +191,13 @@ def seal_upgrade(destination, work, seed, policy, entry_id):
         source_tree = f'models/{entry_id}/model-original'
     else:
         identities = source_identities(original)
-        report = {'schema_version': 1, 'status': 'skipped', 'reason': policy['pipeline_upgrade']['reason'],
+        report = {'schema_version': 1, 'status': 'skipped', 'reason': 'native-0.2.0-publication' if native else policy['pipeline_upgrade']['reason'],
                   'source_files': identities, 'output_files': identities, 'files': [],
                   'changed_file_count': 0, 'operation_counts': {}, 'publication_ready': False,
                   'locks_modified': False, 'migration_id': None}
         source_tree = f'models/{entry_id}/model'
+    if native is not None:
+        report['native_publication'] = native
     report.update(policy_sha256=policy['policy_sha256'],
                   runtime_identity_sha256=policy['runtime_identity_sha256'])
     path = destination / 'pipeline-upgrade.json'
@@ -237,7 +240,11 @@ def verify_upgrade(prepared, entry, manifest, baseline, policy):
             report.get('policy_sha256') != policy['policy_sha256'] or
             report.get('runtime_identity_sha256') != policy['runtime_identity_sha256']):
         raise ValueError('pipeline report runtime/migration identity changed')
-    if policy['pipeline_upgrade']['enabled']:
+    native = POLICY.native_publication(policy, entry['selection'], manifest['card_sha256'], manifest['lock_sha256'])
+    enabled = policy['pipeline_upgrade']['enabled'] and native is None
+    if report.get('native_publication') != native:
+        raise ValueError('pipeline native publication evidence changed')
+    if enabled:
         target = policy.get('publication_abi', {}).get('receipt', {}).get('profile', 'legacy-12')
         if ((policy['schema_version'] == 2 and 'epoch_publication_abi' not in report) or
                 report.get('epoch_publication_abi', 'legacy-12') != target):
@@ -250,9 +257,13 @@ def verify_upgrade(prepared, entry, manifest, baseline, policy):
             raise ValueError('required pipeline upgrade was not applied')
     elif metadata['status'] != 'skipped':
         raise ValueError('raw runtime unexpectedly has upgraded source')
+    if native is not None and (metadata['migration_id'] is not None or
+            report.get('reason') != 'native-0.2.0-publication' or
+            metadata.get('reason') != report.get('reason')):
+        raise ValueError('native publication unexpectedly has migration metadata')
     source = contained(prepared, metadata['source_tree'])
     output = contained(prepared, f"models/{entry['id']}/model")
-    expected_source = f"models/{entry['id']}/model-original" if policy['pipeline_upgrade']['enabled'] else f"models/{entry['id']}/model"
+    expected_source = f"models/{entry['id']}/model-original" if enabled else f"models/{entry['id']}/model"
     if metadata['source_tree'] != expected_source:
         raise ValueError('pipeline original source tree path changed')
     _verify_identities(source, report['source_files'])

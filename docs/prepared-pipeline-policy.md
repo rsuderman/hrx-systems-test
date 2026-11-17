@@ -70,3 +70,17 @@ JSON, publication evidence and migration reports through their evidence lists.
 Per-model raw metadata also carries the migration decision and published/effective
 execution and request profile. Reports can be produced after prepared staging is
 removed. Model checkpoints and installed source trees are not copied into results.
+
+Native 0.2.0 publications bypass the legacy source upgrader only when the frozen
+runtime policy contains an audited `native_publications` rule for the complete
+six-field selection and matching raw publication card and lock SHA256 values.
+Each rule records the publisher's explicit `hrx-loom[hf]==0.2.0` installation
+instruction with its immutable README URL and SHA256. The model card itself has
+no runtime-version field. Unlisted revisions retain automatic legacy migration.
+Execution rechecks the classification against the saved policy and original
+publication evidence; launch, seccomp, request profiles and model assertions
+still follow the selected runtime policy. Old saved policies remain supported.
+
+The November 17 refresh covers 50 available native publications. Ten inaccessible
+publications retain their previous revisions and legacy preparation behavior;
+HTTP 401 is tracked separately rather than counted as native compatibility.

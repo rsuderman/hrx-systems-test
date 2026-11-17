@@ -609,7 +609,8 @@ def verify_prepared(prepared, suite, inside=False):
         PIPELINE.verify_upgrade(prepared, entry, manifest, entry_baseline, policy)
         PIPELINE.verify_pipeline_cache(prepared, entry, manifest, entry_baseline,
             required=suite.get('preparation_contract', {}).get('pipeline_source') == 'host_seeded')
-        if policy is not None and policy['pipeline_upgrade']['enabled']:
+        if (policy is not None and policy['pipeline_upgrade']['enabled'] and
+                manifest['pipeline_upgrade']['status'] != 'skipped'):
             report = PIPELINE.read_json(PIPELINE.contained(prepared, manifest['pipeline_upgrade']['report_path']))
             expected_implementation = PIPELINE.migration_implementation_sha256(suite['source'])
             if report['implementation_sha256'] != expected_implementation:
