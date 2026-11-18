@@ -173,14 +173,21 @@ def seal_upgrade(destination, work, seed, policy, entry_id):
         shutil.copyfile(source, target)
         publication.append({'path': f'models/{entry_id}/{target_name}', 'sha256': expected})
     native = POLICY.native_publication(policy, seed.get('selection'), seed['card_sha256'], seed['lock_sha256'])
-    enabled = policy['pipeline_upgrade']['enabled'] and native is None
+    target = policy.get('publication_abi', {}).get('receipt', {}).get('profile', 'legacy-12')
+    proposals = target == 'proposal-counts-14'
+    enabled = policy['pipeline_upgrade']['enabled'] and (native is None or proposals)
+    if native is not None and policy['pipeline_upgrade']['enabled'] and target is None:
+        UPGRADER.load().plan(original, epoch_publication_abi=None)
     if enabled:
         retained = destination / 'model-original'
         original.rename(retained)
         upgrader = UPGRADER.load()
         target = policy.get('publication_abi', {}).get('receipt', {}).get('profile', 'legacy-12')
         try:
-            report, adjacent = upgrader.write_derivative(retained, original, epoch_publication_abi=target)
+            if proposals:
+                report, adjacent = UPGRADER.write_proposal_derivative(retained, original, legacy=native is None)
+            else:
+                report, adjacent = upgrader.write_derivative(retained, original, epoch_publication_abi=target)
         except ValueError as error:
             if target is None:
                 receipt = policy['publication_abi']['receipt']
@@ -241,7 +248,9 @@ def verify_upgrade(prepared, entry, manifest, baseline, policy):
             report.get('runtime_identity_sha256') != policy['runtime_identity_sha256']):
         raise ValueError('pipeline report runtime/migration identity changed')
     native = POLICY.native_publication(policy, entry['selection'], manifest['card_sha256'], manifest['lock_sha256'])
-    enabled = policy['pipeline_upgrade']['enabled'] and native is None
+    target = policy.get('publication_abi', {}).get('receipt', {}).get('profile', 'legacy-12')
+    proposals = target == 'proposal-counts-14'
+    enabled = policy['pipeline_upgrade']['enabled'] and (native is None or proposals)
     if report.get('native_publication') != native:
         raise ValueError('pipeline native publication evidence changed')
     if enabled:
@@ -253,11 +262,29 @@ def verify_upgrade(prepared, entry, manifest, baseline, policy):
                 not isinstance(report.get('implementation_sha256'), str) or
                 not re.fullmatch('[0-9a-f]{64}', report['implementation_sha256'])):
             raise ValueError('pipeline migration implementation identity is invalid')
+        if proposals:
+            stages = report.get('stages')
+            expected_count = 2 if native is None else 1
+            if not isinstance(stages, list) or len(stages) != expected_count:
+                raise ValueError('proposal adaptation stage closure changed')
+            if (stages[-1].get('migration_id') != 'hrx-pipelines-publication-13-to-14' or
+                    not isinstance(stages[-1].get('implementation_sha256'), str) or
+                    not re.fullmatch('[0-9a-f]{64}', stages[-1]['implementation_sha256'])):
+                raise ValueError('proposal adaptation implementation identity changed')
+            if len(stages) == 2 and (stages[0].get('migration_id') != policy['pipeline_upgrade']['migration_id'] or
+                    stages[0].get('epoch_publication_abi') != 'control-state-13'):
+                raise ValueError('legacy proposal adaptation stage changed')
+            if (stages[0]['source_files'] != report['source_files'] or
+                    stages[-1]['output_files'] != report['output_files'] or
+                    (len(stages) == 2 and stages[0]['output_files'] != stages[1]['source_files'])):
+                raise ValueError('proposal adaptation source closure changed')
+        elif 'stages' in report:
+            raise ValueError('unexpected proposal adaptation stages')
         if metadata['status'] not in ('applied', 'unchanged') or metadata['migration_id'] != policy['pipeline_upgrade']['migration_id']:
             raise ValueError('required pipeline upgrade was not applied')
     elif metadata['status'] != 'skipped':
         raise ValueError('raw runtime unexpectedly has upgraded source')
-    if native is not None and (metadata['migration_id'] is not None or
+    if native is not None and not enabled and (metadata['migration_id'] is not None or
             report.get('reason') != 'native-0.2.0-publication' or
             metadata.get('reason') != report.get('reason')):
         raise ValueError('native publication unexpectedly has migration metadata')
@@ -405,3 +432,19 @@ def migration_implementation_sha256(source, *, required=True):
     if not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value):
         raise ValueError('missing migration implementation source identity')
     return value
+
+
+def verify_migration_implementations(report, source):
+    """Bind each executed migration to the frozen preparation code closure."""
+    expected = migration_implementation_sha256(source)
+    if report['implementation_sha256'] != expected:
+        raise ValueError('pipeline report implementation differs from preparation source')
+    if report.get('epoch_publication_abi') == 'proposal-counts-14':
+        from ..layout import PROPOSAL_MIGRATION_RELATIVE
+        expected_proposals = source.get('files_sha256', {}).get(PROPOSAL_MIGRATION_RELATIVE)
+        if (not isinstance(expected_proposals, str) or
+                not re.fullmatch('[0-9a-f]{64}', expected_proposals) or
+                report['stages'][-1]['implementation_sha256'] != expected_proposals):
+            raise ValueError('proposal adaptation differs from preparation source')
+        if len(report['stages']) == 2 and report['stages'][0]['implementation_sha256'] != expected:
+            raise ValueError('legacy adaptation differs from preparation source')

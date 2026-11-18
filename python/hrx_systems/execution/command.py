@@ -612,9 +612,7 @@ def verify_prepared(prepared, suite, inside=False):
         if (policy is not None and policy['pipeline_upgrade']['enabled'] and
                 manifest['pipeline_upgrade']['status'] != 'skipped'):
             report = PIPELINE.read_json(PIPELINE.contained(prepared, manifest['pipeline_upgrade']['report_path']))
-            expected_implementation = PIPELINE.migration_implementation_sha256(suite['source'])
-            if report['implementation_sha256'] != expected_implementation:
-                raise ValueError('pipeline report implementation differs from preparation source')
+            PIPELINE.verify_migration_implementations(report, suite['source'])
         if policy is not None and entry.get('effective_execution') != manifest['effective_execution']:
             raise ValueError('prepared executable settings differ from frozen entry')
         for program in manifest['programs']:

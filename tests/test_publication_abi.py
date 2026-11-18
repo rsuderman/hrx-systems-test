@@ -27,7 +27,8 @@ class RecognitionTests(unittest.TestCase):
         for profile, commit, expected in (
                 ('legacy', '2998bccca38cb1ae06ea62f5d74743b5817f2441', 'legacy-12'),
                 ('legacy', '7bf1bd93a235aa7c74766498e3b146a4d0dfbcd7', 'legacy-12'),
-                ('state', '31cf5242e606c6cb654eabf063600e38f9e6f1f8', 'control-state-13')):
+                ('state', '31cf5242e606c6cb654eabf063600e38f9e6f1f8', 'control-state-13'),
+                ('proposals', '162b15dadef8977d93ee84684d0c3d64c694d6f0', 'proposal-counts-14')):
             with self.subTest(commit=commit), tempfile.TemporaryDirectory() as tmp:
                 snap = snapshot(); snap['source']['tested_sha'] = commit
                 snap['runtime_identity_sha256'] = SDK.runtime_identity_sha256(snap)
@@ -62,6 +63,16 @@ class RecognitionTests(unittest.TestCase):
         old = (FIXTURES / 'legacy-control.c').read_bytes()
         new = (FIXTURES / 'state-model.c').read_bytes()
         with self.assertRaisesRegex(ValueError, 'disagree'): ABI.recognize(old, new)
+
+    def test_proposal_count_buffer_must_be_last_and_agree_with_caller(self):
+        control = (FIXTURES / 'proposals-control.c').read_bytes()
+        model = (FIXTURES / 'proposals-model.c').read_bytes()
+        for bad in (model.replace(b'TEXT_HOST_PROPOSAL_COUNTS', b'TEXT_HOST_PROGRESS'),
+                    (FIXTURES / 'state-model.c').read_bytes()):
+            with self.assertRaisesRegex(ValueError, 'disagree'):
+                ABI.recognize(control, bad)
+        with self.assertRaisesRegex(ValueError, 'disagree'):
+            ABI.recognize((FIXTURES / 'state-control.c').read_bytes(), model)
 
     def test_duplicate_and_comment_string_lookalikes_cannot_supply_anchors(self):
         control = (FIXTURES / 'state-control.c').read_bytes()
@@ -184,6 +195,91 @@ class FrozenHandoffTests(unittest.TestCase):
                 expected_kinds=['runtime_policy','seccomp','publication_abi','publication_abi_source','publication_abi_source']
                 self.assertEqual([r['kind']for r in suite['policy_files']],expected_kinds)
 
+    def proposal_fixture(self, root, *, native):
+        from test_pipeline_preparation import PipelinePreparationTests
+        seal = PIPE.seal_upgrade
+        def with_sources(destination, work, seed, policy, entry_id):
+            fixture = ROOT/'tests/fixtures/publication-proposal-counts'
+            for source, name in (('plain.loom', 'control.loom'), ('service.loom', 'service.loom')):
+                text = (fixture/source).read_text()
+                if not native:
+                    text = text.replace('%control_state: buffer, %plan:', '%plan:')
+                    text = text.replace('@publish_epoch(%control_state, %plan,', '@publish_epoch(%plan,')
+                    text = text.replace(' : (buffer, buffer, buffer, i32, i32, i32, i32, i32, buffer, buffer, buffer, buffer, buffer)',
+                                        ' : (buffer, buffer, i32, i32, i32, i32, i32, buffer, buffer, buffer, buffer, buffer)')
+                (destination/'model/program'/name).write_text(text)
+            return seal(destination, work, seed, policy, entry_id)
+        with patch.object(PIPE, 'seal_upgrade', side_effect=with_sources):
+            return PipelinePreparationTests().fixture(root, native=native, abi_profile='proposals')
+
+    def test_real_proposal_adapter_seal_and_offline_verification_for_native_and_legacy(self):
+        for native in (False, True):
+            with self.subTest(native=native), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                dest, policy, manifest, baseline, entry, suite = self.proposal_fixture(root, native=native)
+                with patch('urllib.request.urlopen', side_effect=AssertionError('offline check used network')):
+                    PIPE.verify_upgrade(root, entry, manifest, baseline, PIPE.validate_policy(root, suite))
+                report = PIPE.read_json(dest/'pipeline-upgrade.json')
+                self.assertEqual(report['status'], 'applied')
+                self.assertEqual(len(report['stages']), 1 if native else 2)
+                self.assertEqual(report['epoch_publication_abi'], 'proposal-counts-14')
+                self.assertNotIn('%proposal_counts', (dest/'model-original/program/control.loom').read_text())
+                self.assertIn('%proposal_counts', (dest/'model/program/control.loom').read_text())
+                for mutation in ('stage_count', 'stage_source', 'stage_id', 'target'):
+                    changed = copy.deepcopy(report)
+                    if mutation == 'stage_count': changed['stages'].append(changed['stages'][-1])
+                    elif mutation == 'stage_source': changed['stages'][-1]['source_files'][0]['sha256'] = '0'*64
+                    elif mutation == 'stage_id': changed['stages'][-1]['migration_id'] = 'unknown'
+                    else: changed['epoch_publication_abi'] = 'control-state-13'
+                    PIPE.write_json(dest/'pipeline-upgrade.json', changed)
+                    entry['pipeline_upgrade']['report_sha256'] = PIPE.digest(dest/'pipeline-upgrade.json')
+                    with self.assertRaises(ValueError):
+                        PIPE.verify_upgrade(root, entry, manifest, baseline, policy)
+
+    def test_proposal_adapter_keeps_decision_source_unchanged(self):
+        from test_pipeline_preparation import PipelinePreparationTests
+        for native in (False, True):
+            with self.subTest(native=native), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                dest, policy, manifest, baseline, entry, _ = PipelinePreparationTests().fixture(
+                    root, native=native, abi_profile='proposals', decision=True)
+                PIPE.verify_upgrade(root, entry, manifest, baseline, policy)
+                report = PIPE.read_json(dest/'pipeline-upgrade.json')
+                self.assertEqual(report['stages'][-1]['status'], 'unchanged')
+                self.assertEqual(report['stages'][-1]['operation_counts']['publishers'], 0)
+
+    def test_stable13_native_publication_still_skips_both_migration_loaders(self):
+        from test_pipeline_preparation import PipelinePreparationTests
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(PIPE.UPGRADER, 'load', side_effect=AssertionError('legacy migration loaded')), \
+                 patch.object(PIPE.UPGRADER, 'load_proposals', side_effect=AssertionError('proposal migration loaded')):
+                dest, policy, manifest, baseline, entry, _ = PipelinePreparationTests().fixture(
+                    root, native=True, abi_profile='state')
+                PIPE.verify_upgrade(root, entry, manifest, baseline, policy)
+            self.assertEqual(manifest['pipeline_upgrade']['status'], 'skipped')
+            self.assertFalse((dest/'model-original').exists())
+
+    def test_each_composed_implementation_binds_to_frozen_source(self):
+        from hrx_systems import layout
+        source = {'layout_version': layout.LAYOUT_VERSION,
+                  'migration_implementation_path': layout.MIGRATION_RELATIVE,
+                  'files_sha256': {layout.MIGRATION_RELATIVE: 'a'*64,
+                                   layout.PROPOSAL_MIGRATION_RELATIVE: 'b'*64}}
+        for legacy in (True, False):
+            stages = ([{'implementation_sha256': 'a'*64}] if legacy else []) + [{'implementation_sha256': 'b'*64}]
+            report = {'implementation_sha256': 'a'*64, 'epoch_publication_abi': 'proposal-counts-14', 'stages': stages}
+            PIPE.verify_migration_implementations(report, source)
+            for stage in range(len(stages)):
+                changed = copy.deepcopy(report)
+                changed['stages'][stage]['implementation_sha256'] = 'c'*64
+                with self.assertRaisesRegex(ValueError, 'adaptation differs'):
+                    PIPE.verify_migration_implementations(changed, source)
+            changed = copy.deepcopy(source)
+            changed['files_sha256'].pop(layout.PROPOSAL_MIGRATION_RELATIVE)
+            with self.assertRaisesRegex(ValueError, 'proposal adaptation differs'):
+                PIPE.verify_migration_implementations(report, changed)
+
     def test_schema2_report_missing_and_mismatched_target_rejected(self):
         for profile in ('legacy','state'):
             for target in ('missing','legacy-12' if profile=='state' else 'control-state-13'):
@@ -267,6 +363,67 @@ class FrozenHandoffTests(unittest.TestCase):
                 self.assertTrue((root/'report'/rel).exists())
                 self.assertIn(str(rel),raw['evidence'])
                 self.assertIn('results/'+str(rel),(ROOT/'.github/workflows/_model-verification-worker.yml').read_text())
+
+
+class CompositionTests(unittest.TestCase):
+    def adapter(self):
+        # Use the portable planner as an identity-preserving second-stage stand-in.
+        # This isolates composition/lifetime behavior from publisher semantics.
+        from types import SimpleNamespace
+        def plan(source):
+            changes, report = PIPE.UPGRADER.load().plan(source, epoch_publication_abi='control-state-13')
+            self.assertFalse(changes, 'second stage must receive fully migrated13 source')
+            report['migration_id'] = 'hrx-pipelines-publication-13-to-14'
+            return changes, report
+        return SimpleNamespace(plan=plan)
+
+    def test_composed_writer_publishes_after_temporary_stage_cleanup(self):
+        for legacy in (True, False):
+            with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source, output = root/'source', root/'output'
+                shutil.copytree(CLOSURE, source)
+                if not legacy:
+                    changes, _ = PIPE.UPGRADER.load().plan(source, epoch_publication_abi='control-state-13')
+                    for name, raw in changes.items(): (source/name).write_bytes(raw)
+                before = PIPE.source_identities(source)
+                with patch.object(PIPE.UPGRADER, 'load_proposals', return_value=self.adapter()):
+                    report, adjacent = PIPE.UPGRADER.write_proposal_derivative(source, output, legacy=legacy)
+                self.assertTrue(output.is_dir())
+                self.assertEqual(adjacent, root/'output.upgrade.json')
+                self.assertEqual(json.loads(adjacent.read_text()), report)
+                self.assertEqual(report['source_files'], before)
+                self.assertEqual(report['output_files'], PIPE.source_identities(output))
+                self.assertEqual(len(report['stages']), 2 if legacy else 1)
+                self.assertEqual(PIPE.source_identities(source), before)
+                self.assertFalse(list(root.glob('.publication-composition-*')))
+
+    def test_native_composition_rejects_regular_weights_and_preserves_asset_links(self):
+        for linked in (False, True):
+            with self.subTest(linked=linked), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source, output = root/'source', root/'output'
+                shutil.copytree(CLOSURE, source)
+                changes, _ = PIPE.UPGRADER.load().plan(source, epoch_publication_abi='control-state-13')
+                for name, raw in changes.items(): (source/name).write_bytes(raw)
+                asset = root/'immutable.gguf'; asset.write_bytes(b'asset')
+                if linked: (source/'weights.gguf').symlink_to(asset)
+                else: (source/'weights.gguf').write_bytes(b'asset')
+                with patch.object(PIPE.UPGRADER, 'load_proposals', return_value=self.adapter()):
+                    if linked:
+                        PIPE.UPGRADER.write_proposal_derivative(source, output, legacy=False)
+                        self.assertEqual((output/'weights.gguf').readlink(), asset)
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'refusing to copy'):
+                            PIPE.UPGRADER.write_proposal_derivative(source, output, legacy=False)
+                        self.assertFalse(output.exists())
+
+    def test_unknown_target_rejects_native_text_instead_of_bypassing(self):
+        from test_pipeline_preparation import PipelinePreparationTests
+        client = SourceClient('state', lambda name, raw: raw.replace(b'control_state', b'unknown_state'))
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, 'ABI unavailable'):
+                PipelinePreparationTests().fixture(Path(tmp), native=True, epoch=True, abi_client=client)
 
 
 class PreparationSelectorTests(unittest.TestCase):

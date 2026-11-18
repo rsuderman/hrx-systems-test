@@ -1,0 +1,109 @@
+{
+  "source": "immutable cached pipeline source blobs",
+  "providers": {
+    "plain": "4d607e6629655bb0d64267716e7bd0aced55e33329d61825f4445ff2e0398ba4",
+    "spec": "a214cf791b04a0673044a969eea41645bb7756e485ae0ff7989f7f4e30dcb7ea"
+  },
+  "kernel_body_sha256": "64a9b7ba913ce10d139138b12cab9b9f683710ddf700e6724705dbf96268e408",
+  "abi_contract": "ROCm/hrx@32c3c08cc78d6861639c4b24c64cb0d44b1619f9",
+  "audited_body_families": [
+    {
+      "symbol": "plain_publish_epoch",
+      "source_blob_sha256": "b12e92b3e54ab8f6c9a98fac4c041aead0a62a81f48b565034ad5a38c9f7d7aa",
+      "body_sha256": "9e248d1c91fc0db00735201e32864bbb0cbd2df03cd210090d69a8d6bdfc6756"
+    },
+    {
+      "symbol": "publish_epoch",
+      "source_blob_sha256": "b12e92b3e54ab8f6c9a98fac4c041aead0a62a81f48b565034ad5a38c9f7d7aa",
+      "body_sha256": "d2c1501c5d45df390a47123fc6ac5350a8c47b6d6a6f438c1899b3f7a65111a5"
+    },
+    {
+      "symbol": "epoch",
+      "source_blob_sha256": "b12e92b3e54ab8f6c9a98fac4c041aead0a62a81f48b565034ad5a38c9f7d7aa",
+      "body_sha256": "7d16e0f94141c403310e6212735559821d1b81f2550e61eef87d4356b0baaf7f"
+    },
+    {
+      "symbol": "publish_epoch",
+      "source_blob_sha256": "a214cf791b04a0673044a969eea41645bb7756e485ae0ff7989f7f4e30dcb7ea",
+      "body_sha256": "29a48fd66d8fa789b9390178531eca323d9309d2efe292ac4f2fccd89a71b9ed"
+    },
+    {
+      "symbol": "epoch",
+      "source_blob_sha256": "a214cf791b04a0673044a969eea41645bb7756e485ae0ff7989f7f4e30dcb7ea",
+      "body_sha256": "c872d7d024efecd65fdcfa4fd01e8f0e000c3c8ae5ce66a911ab28455fde1034"
+    },
+    {
+      "symbol": "g_spec_accept",
+      "source_blob_sha256": "9341daf8ed619fc2d1ab1445ff7254c13ee254e121bef4d5ec16943044ba04ea",
+      "body_sha256": "64a9b7ba913ce10d139138b12cab9b9f683710ddf700e6724705dbf96268e408"
+    },
+    {
+      "symbol": "plain_publish_epoch",
+      "source_blob_sha256": "d9b9189da2db64e3e3c94a84363bf8866aa7310aa3d0145c38578f6c8b2cdc1b",
+      "body_sha256": "6e8c5d58223caf7fa146b79210b97d81f65413890580b8cede84eea50b3fe04e"
+    },
+    {
+      "symbol": "publish_epoch",
+      "source_blob_sha256": "d9b9189da2db64e3e3c94a84363bf8866aa7310aa3d0145c38578f6c8b2cdc1b",
+      "body_sha256": "a2eb8c7b5564bf46c63f4ec4a97751d9b0bf5ed9622f2cb8b313939d0a49d716"
+    },
+    {
+      "symbol": "epoch",
+      "source_blob_sha256": "4d607e6629655bb0d64267716e7bd0aced55e33329d61825f4445ff2e0398ba4",
+      "body_sha256": "9c118116b12ddcaa7259082afdf7dd8445fbb8b3b58643aa15f24ff49e065c3e"
+    },
+    {
+      "symbol": "g_spec_accept",
+      "source_blob_sha256": "aae88bdd99e704e4fdae3c2f7fc84adee8c7aa811b6d8626e763373ae24dccc6",
+      "body_sha256": "8ca3b6e44486f1fc8a608f891c118825286de1c2d8329491539130446d6fe150"
+    },
+    {
+      "symbol": "epoch",
+      "source_blob_sha256": "63a9da212104c64be85a91a4a12ae0c1099513878254150ad939a1d109164e9b",
+      "body_sha256": "8c13f023693c5d0c5f1704f6c50d70c2304b1383e7edc9376d23b346fca86833"
+    },
+    {
+      "symbol": "publish_epoch",
+      "source_blob_sha256": "8783a309e8bc7c8a48a4471b3c27a4c35801c215550abea9bf50aa7174773a2e",
+      "body_sha256": "e99a0c52ed6ee311d2aa6d0105c825be2458b89202b3ab4de24387232686c844"
+    },
+    {
+      "symbol": "epoch",
+      "source_blob_sha256": "01788b320348e707cf01d5ee7570cf134df5d0c49a457aa409f7deac86f3823b",
+      "body_sha256": "d911ae2f32286b9f5269a00adcec232bbc89b64e445db9de3deaf06242711118"
+    },
+    {
+      "symbol": "epoch",
+      "source_blob_sha256": "02f9cc14cb93d28f8dfcd022ec83cb972ca5ea5fa1db33f622604c1a0d9797b6",
+      "body_sha256": "28da79cccdf0cdf1d87dfd896b5677d0f6889e53a19c3b840e180d62faf08957"
+    },
+    {
+      "symbol": "epoch",
+      "source_blob_sha256": "1d77621ad6f87a5d7db06845b1122fbf2b3d3cc146b7d6b4f360d7feee1b21c0",
+      "body_sha256": "66896083d79bfb334dea040671a390bbff0efd49d33b17d1649734520e7f185a"
+    },
+    {
+      "symbol": "epoch",
+      "source_blob_sha256": "27cc0f5927af458238c8854a0ed3662a3bd5f6866e179d7a74df0d97768949ae",
+      "body_sha256": "540f79f83144e028960ce0db58d5e771ac2ecf57d3841f1d4c988d2eff0ccd97"
+    },
+    {
+      "symbol": "epoch",
+      "source_blob_sha256": "8e38e921bfe5a296bef4daee0e4a39bb3211b4ba2f6f51d8e66cfbaad302530e",
+      "body_sha256": "3594be70316c7706a9c55873f6826a4883dec02fb6a3a894ee9d0b7c70499641"
+    },
+    {
+      "symbol": "epoch",
+      "source_blob_sha256": "2f534f3feb5ab46d114458f457a1b05a6c438e6ab2eeb64fd3689e754cddee48",
+      "body_sha256": "af11d0c8581f35200ac802aefaaf0243b180ee8f225218c590e45b56e07e240f"
+    },
+    {
+      "symbol": "epoch",
+      "source_blob_sha256": "bfce737fbe4a75769970a70c868cd431e85467e3390fbe1d08822099e283520e",
+      "body_sha256": "69b66d6dd6fd33cbe4f4c0ac6e9df16e6326daa0ce14e9613d71415b4b5e7497"
+    }
+  ],
+  "extraction": "plain/spec fixtures retain exact provider, private plain publisher and epoch definitions; service retains exact declaration and three aliases; verifier retains exact kernel config and launch body; allocation is a two-line excerpt of named constants.",
+  "service_source_blob_sha256": "5dcd083b26d98f39b3215f9f47b9acfaa08e62df406718cdb92aa0684323f7db",
+  "allocation_source_blob_sha256": "baa168ae073e4c8116132e94f1aed605d13e2537baf8f048ea00dec104293a8f"
+}

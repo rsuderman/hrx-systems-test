@@ -10,6 +10,7 @@ PACKAGE_ROOT = PYTHON_ROOT / 'hrx_systems'
 REPO_ROOT = PYTHON_ROOT.parent
 LAUNCHER_RELATIVE = 'python/run.py'
 MIGRATION_RELATIVE = 'tools/migrations/upgrade-pipelines-0.1.0-to-0.2.0.py'
+PROPOSAL_MIGRATION_RELATIVE = 'tools/migrations/upgrade-pipelines-publication-13-to-14.py'
 LAYOUT_VERSION = 2
 
 
@@ -51,7 +52,7 @@ def mount_arguments():
 def implementation_files():
     """Canonical repository-relative implementation closure; no tests or bytecode."""
     paths = [LAUNCHER_RELATIVE, *sorted(str(path.relative_to(REPO_ROOT))
-             for path in PACKAGE_ROOT.rglob('*.py')), MIGRATION_RELATIVE]
+             for path in PACKAGE_ROOT.rglob('*.py')), MIGRATION_RELATIVE, PROPOSAL_MIGRATION_RELATIVE]
     for name in paths:
         if not repository_path(name).resolve().is_relative_to(REPO_ROOT):
             raise ValueError('implementation source escapes the trusted repository')

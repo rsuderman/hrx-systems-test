@@ -22,5 +22,17 @@
     "upstream_path": "loom/src/loom/serve/service/text/model.c",
     "full_source_sha256": "1fb756893bb342986bfc689f2b645dec0f415b7b325dd7eee40c0e751a4ff479",
     "fixture_sha256": "5fcbd4f1003966fee2c9494d7f5add2f300497753716f4deb097ad1b127e5286"
+  },
+  "proposals-control.c": {
+    "commit": "162b15dadef8977d93ee84684d0c3d64c694d6f0",
+    "upstream_path": "loom/src/loom/serve/service/text/control.c",
+    "full_source_sha256": "82ef7e9d74760d8fd4fe5c576562b3c9715427a164b13486c5cf958f3080106f",
+    "fixture_sha256": "6d969d2994741f063aa5351114fc1f8df4d2e4a7fd4e092fec9f49e7f510be3b"
+  },
+  "proposals-model.c": {
+    "commit": "162b15dadef8977d93ee84684d0c3d64c694d6f0",
+    "upstream_path": "loom/src/loom/serve/service/text/model.c",
+    "full_source_sha256": "299fe7f7da402e8a5a05a954cfc81dd2bfa6fc6b2ae99806d949f5ad29a69337",
+    "fixture_sha256": "203f11d5512aacf949cc50b433afe454979ddb5c88cfeebfa5481c671deea616"
   }
 }

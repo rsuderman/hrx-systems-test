@@ -15,8 +15,9 @@ REPOSITORY = 'ROCm/hrx-system'
 PATHS = ('loom/src/loom/serve/service/text/control.c', 'loom/src/loom/serve/service/text/model.c')
 DIRECTORY = 'policies/publication-abi'
 MAX_SOURCE_BYTES = 1024 * 1024
-PROFILES = ('legacy-12', 'control-state-13')
+PROFILES = ('legacy-12', 'control-state-13', 'proposal-counts-14')
 LEGACY_TYPES = ['buffer', 'buffer', 'i32', 'i32', 'i32', 'i32', 'i32', 'buffer', 'buffer', 'buffer', 'buffer', 'buffer']
+PROFILE_TYPES = dict(zip(PROFILES, (LEGACY_TYPES, ['buffer', *LEGACY_TYPES], ['buffer', *LEGACY_TYPES, 'buffer'])))
 _TOKEN = re.compile(r'(?P<comment>//[^\n]*|/\*[\s\S]*?\*/)|(?P<space>\s+)|(?P<string>"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')|[A-Za-z_][A-Za-z_0-9]*|[0-9]+|[^\s]')
 
 
@@ -86,7 +87,7 @@ def count_sequence(items, sequence):
     return sum(items[i:i + len(sequence)] == sequence for i in range(len(items)))
 
 
-def _caller(state):
+def _caller(state, proposals=False):
     borrowed = 'iree_vm_buffer_variant_from_ptr_borrowed(&model->source.vm_types, {})'
     values = ([borrowed.format('model->source.control_state')] if state else []) + [
         borrowed.format('model->control.host.buffers[TEXT_HOST_PLAN]'), borrowed.format('media_plan'),
@@ -96,12 +97,12 @@ def _caller(state):
         'iree_vm_variant_from_i32(iree_any_bit_set(model->invocation.flags, TEXT_EPOCH_FLAG_VERIFY))',
         'iree_vm_variant_from_i32(iree_any_bit_set(model->invocation.flags, TEXT_EPOCH_FLAG_CONTINUATION))',
         *[borrowed.format('model->control.host.buffers[TEXT_HOST_' + name + ']') for name in
-          ('CONTINUATIONS', 'OUTPUTS', 'RESULTS', 'NEXT_RESULTS', 'PROGRESS')]]
+          ('CONTINUATIONS', 'OUTPUTS', 'RESULTS', 'NEXT_RESULTS', 'PROGRESS', *(['PROPOSAL_COUNTS'] if proposals else []))]]
     return tokens(','.join(values) + ',')
 
 
 def recognize(control, model):
-    """Recognize two reviewed declaration AND caller shapes, not just arity."""
+    """Recognize reviewed declaration AND caller shapes, not just arity."""
     if any(not isinstance(raw, bytes) or len(raw) > MAX_SOURCE_BYTES for raw in (control, model)):
         raise ValueError('native publication source exceeds its bound')
     declaration = function(control.decode('utf-8'), 'loom_serve_text_control_initialize')
@@ -112,21 +113,21 @@ def recognize(control, model):
             raise ValueError('unfamiliar native publication type alias')
     args = initializer(declaration, 'publish_arguments', 'const iree_vm_signature_type_t')
     types = [t for t in args if t != ',']
-    if args not in (tokens(','.join(LEGACY_TYPES)), tokens(','.join(['buffer', *LEGACY_TYPES]))):
+    if args not in [tokens(','.join(value)) for value in PROFILE_TYPES.values()]:
         raise ValueError('unsupported native publication argument types/order')
     binding = tokens('{IREE_SVL("publish_epoch"), {publish_arguments, IREE_ARRAYSIZE(publish_arguments)}, {NULL, 0}, &control->publish_epoch}')
     if (count_sequence(declaration, binding) != 1 or
             count_sequence(declaration, tokens('IREE_SVL("publish_epoch")')) != 1):
         raise ValueError('unfamiliar native publication binding/results')
     caller = function(model.decode('utf-8'), 'loom_serve_text_model_complete_epoch')
-    state = types == ['buffer', *LEGACY_TYPES]
-    if initializer(caller, 'publish_arguments', 'iree_vm_variant_t') != _caller(state):
+    profile = next(name for name, value in PROFILE_TYPES.items() if value == types)
+    if initializer(caller, 'publish_arguments', 'iree_vm_variant_t') != _caller(profile != 'legacy-12', profile == 'proposal-counts-14'):
         raise ValueError('native publication declaration/caller disagree')
     invoke = tokens('loom_serve_text_invoke(model, model->control.publish_epoch, iree_vm_variant_span_from_array(publish_arguments), iree_vm_variant_span_empty())')
     if (count_sequence(caller, invoke) != 1 or
             count_sequence(caller, tokens('model->control.publish_epoch')) != 1):
         raise ValueError('unfamiliar native publication invocation/results')
-    return {'profile': 'control-state-13' if state else 'legacy-12', 'argument_types': types, 'result_types': []}
+    return {'profile': profile, 'argument_types': types, 'result_types': []}
 
 
 def _identity(snapshot):
@@ -192,7 +193,7 @@ def validate_descriptor(descriptor, snapshot):
         if descriptor['sha256'] != sha(encoded(receipt)):
             raise ValueError('publication ABI receipt digest changed')
         if receipt['status'] == 'recognized':
-            types = LEGACY_TYPES if receipt['profile'] == 'legacy-12' else ['buffer', *LEGACY_TYPES]
+            types = PROFILE_TYPES.get(receipt['profile'])
             if receipt['profile'] not in PROFILES or receipt['argument_types'] != types or receipt['result_types'] != [] or receipt['reason'] is not None:
                 raise ValueError('invalid recognized publication ABI profile')
             required = 2

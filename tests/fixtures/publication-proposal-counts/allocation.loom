@@ -1,0 +1,2 @@
+%result_stride = scalar.constant 84 : i64
+%first_bank_stride = scalar.constant 40 : i64

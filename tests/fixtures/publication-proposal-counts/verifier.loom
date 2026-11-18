@@ -1,0 +1,157 @@
+kernel.def export("g_spec_accept") @g_spec_accept() {
+  %c1 = index.constant 1 : index
+  kernel.launch.config workgroups(%c1, %c1, %c1) workgroup_size(%c1, %c1, %c1) : index
+} launch(%spans_arg: index, %rows_arg: index, %tokens_arg: index, %metadata: buffer, %ids: buffer, %predictions: buffer, %results: buffer, %committed: buffer, %replay: buffer) {
+  %spans = index.assume %spans_arg [range(%spans_arg, 1, 8192)] : index
+  %rows = index.assume %rows_arg [range(%rows_arg, 1, 65536)] : index
+  %tokens = index.assume %tokens_arg [range(%tokens_arg, 1, 8192)] : index
+  %zero = index.constant 0 : offset
+  %c16 = index.constant 16 : offset
+  %c36 = index.constant 36 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c8 = index.constant 8 : index
+  %c9 = index.constant 9 : index
+  %c10 = index.constant 10 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c8_i32 = scalar.constant 8 : i32
+  %c255_i32 = scalar.constant 255 : i32
+  %true = scalar.constant true : i1
+  %false = scalar.constant false : i1
+  %header = buffer.view %metadata[%zero] : buffer -> view<4xi32>
+  %count32 = view.load %header[0] : view<4xi32> -> i32
+  %eos = view.load %header[1] : view<4xi32> -> i32
+  %mixed_word = view.load %header[2] : view<4xi32> -> i32
+  %mixed = scalar.cmpi ne, %mixed_word, %c0_i32 : i32
+  %stride_one = index.constant 1 : index
+  %id_stride = scf.select %mixed, %c8, %stride_one : index
+  %n_ids = index.mul %tokens, %id_stride : index
+  %ids_flat = buffer.view %ids[%zero] : buffer -> view<[%n_ids]xi32>
+  %count_b = scalar.assume %count32 [range(%count32, 0, 8192)] : i32
+  %count_v = index.cast %count_b : i32 to index
+  %count = index.min %count_v, %spans : index
+  %m_plan = index.scale %count, %c36 : index, offset -> offset
+  %records = buffer.view %metadata[%c16] : buffer -> view<[%spans]x9xi32>
+  %crecords = buffer.view %committed[%c16] : buffer -> view<[%spans]x9xi32>
+  %rrecords = buffer.view %replay[%c16] : buffer -> view<[%spans]x9xi32>
+  %pred = buffer.view %predictions[%zero] : buffer -> view<[%rows]xi32>
+  %out = buffer.view %results[%zero] : buffer -> view<[%spans]x10xi32>
+  %row_end, %replays = scf.for %s = [%c0 to %count step %c1](%r = %c0 : index, %k = %c0 : index) -> (index, index) {
+    %sc = index.assume %s [range(%s, 0, 2147483646), lt(%s, %count)] : index
+    %sb = index.assume %s [range(%s, 0, 2147483646), lt(%s, %spans)] : index
+    %length32 = view.load %records[%sb, 0] : view<[%spans]x9xi32> -> i32
+    %cursor32 = view.load %records[%sb, 4] : view<[%spans]x9xi32> -> i32
+    %flags = view.load %records[%sb, 6] : view<[%spans]x9xi32> -> i32
+    %sel_bits = scalar.andi %flags, %c1_i32 : i32
+    %selected = scalar.cmpi ne, %sel_bits, %c0_i32 : i32
+    %spec_bits = scalar.andi %flags, %c4_i32 : i32
+    %spec = scalar.cmpi ne, %spec_bits, %c0_i32 : i32
+    %credit_raw = scalar.shrui %flags, %c8_i32 : i32
+    %credit32 = scalar.andi %credit_raw, %c255_i32 : i32
+    scf.for %w = [%c2 to %c10 step %c1] {
+      %wb = index.assume %w [range(%w, 2, 9)] : index
+      view.store %c0_i32, %out[%sb, %wb] : i32, view<[%spans]x10xi32>
+    }
+    %cursor_b = scalar.assume %cursor32 [range(%cursor32, 0, 8191)] : i32
+    %cursor = index.cast %cursor_b : i32 to index
+    %consumed, %emitted, %used = scf.if %spec -> (i32, i32, index) {
+      %length_b = scalar.assume %length32 [range(%length32, 1, 8)] : i32
+      %width = index.cast %length_b : i32 to index
+      %credit_b = scalar.assume %credit32 [range(%credit32, 0, 255)] : i32
+      %credit = index.cast %credit_b : i32 to index
+      %last_draft = index.sub %width, %c1 : index
+      %n, %live_end = scf.for %j = [%c0 to %width step %c1](%cnt = %c0 : index, %live = %true : i1) -> (index, i1) {
+        %credited = index.cmp ult, %j, %credit : index
+        %emit = scalar.andi %live, %credited : i1
+        %rj = index.add %r, %j : index
+        %row_ok = index.cmp ult, %rj, %rows : index
+        %emit_ok = scalar.andi %emit, %row_ok : i1
+        %nc, %nl = scf.if %emit_ok -> (index, i1) {
+          %rb = index.assume %rj [range(%rj, 0, 2147483646), lt(%rj, %rows)] : index
+          %p = view.load %pred[%rb] : view<[%rows]xi32> -> i32
+          %slot = index.add %j, %c2 : index
+          %slot_b = index.assume %slot [range(%slot, 2, 9)] : index
+          view.store %p, %out[%sb, %slot_b] : i32, view<[%spans]x10xi32>
+          %cnt1 = index.add %cnt, %c1 : index
+          %has_draft = index.cmp ult, %j, %last_draft : index
+          %match = scf.if %has_draft -> (i1) {
+            %rel = index.add %j, %c1 : index
+            %cand_i = index.add %cursor, %rel : index
+      %cand_e = index.mul %cand_i, %id_stride : index
+      %cand_b = index.assume %cand_e [lt(%cand_e, %n_ids)] : index
+      %cand = view.load %ids_flat[%cand_b] : view<[%n_ids]xi32> -> i32
+            %same = scalar.cmpi eq, %p, %cand : i32
+            scf.yield %same : i1
+          } else {
+            scf.yield %false : i1
+          }
+          %not_eos = scalar.cmpi ne, %p, %eos : i32
+          %go = scalar.andi %match, %not_eos : i1
+          scf.yield %cnt1, %go : index, i1
+        } else {
+          scf.yield %cnt, %false : index, i1
+        }
+        scf.yield %nc, %nl : index, i1
+      }
+      %n32 = index.cast %n : index to i32
+      scf.yield %n32, %n32, %width : i32, i32, index
+    } else {
+      %has_row = index.cmp ult, %r, %rows : index
+      %take = scalar.andi %selected, %has_row : i1
+      %e, %u = scf.if %take -> (i32, index) {
+        %rb = index.assume %r [range(%r, 0, 2147483646), lt(%r, %rows)] : index
+        %p = view.load %pred[%rb] : view<[%rows]xi32> -> i32
+        view.store %p, %out[%sb, 2] : i32, view<[%spans]x10xi32>
+        scf.yield %c1_i32, %c1 : i32, index
+      } else {
+        scf.yield %c0_i32, %c0 : i32, index
+      }
+      scf.yield %length32, %e, %u : i32, i32, index
+    }
+    view.store %consumed, %out[%sb, 0] : i32, view<[%spans]x10xi32>
+    view.store %emitted, %out[%sb, 1] : i32, view<[%spans]x10xi32>
+    scf.for %w = [%c0 to %c9 step %c1] {
+      %wb = index.assume %w [range(%w, 0, 8)] : index
+      %v = view.load %records[%sb, %wb] : view<[%spans]x9xi32> -> i32
+      view.store %v, %crecords[%sb, %wb] : i32, view<[%spans]x9xi32>
+    }
+    view.store %consumed, %crecords[%sb, 0] : i32, view<[%spans]x9xi32>
+    view.store %sel_bits, %crecords[%sb, 6] : i32, view<[%spans]x9xi32>
+    %k_now = index.assume %k [range(%k, 0, 2147483646), lt(%k, %spans)] : index
+    scf.if %spec {
+      scf.for %w = [%c0 to %c9 step %c1] {
+        %wb = index.assume %w [range(%w, 0, 8)] : index
+        %v = view.load %records[%sb, %wb] : view<[%spans]x9xi32> -> i32
+        view.store %v, %rrecords[%k_now, %wb] : i32, view<[%spans]x9xi32>
+      }
+      view.store %consumed, %rrecords[%k_now, 0] : i32, view<[%spans]x9xi32>
+      view.store %c0_i32, %rrecords[%k_now, 6] : i32, view<[%spans]x9xi32>
+    }
+    // M-RoPE offset tables follow each packet's records.
+    %m_table = index.add %c16, %m_plan : offset
+    %m_tv = buffer.view %metadata[%m_table] : buffer -> view<[%count]xi32>
+    %delta = view.load %m_tv[%sc] : view<[%count]xi32> -> i32
+    %c_tv = buffer.view %committed[%m_table] : buffer -> view<[%count]xi32>
+    view.store %delta, %c_tv[%sc] : i32, view<[%count]xi32>
+    %kinc = scf.select %spec, %c1, %c0 : index
+    %k_next = index.add %k, %kinc : index
+    %r_next = index.add %r, %used : index
+    scf.yield %r_next, %k_next : index, index
+  }
+  %count_out = index.cast %count : index to i32
+  %replay_count = index.cast %replays : index to i32
+  %ch = buffer.view %committed[%zero] : buffer -> view<4xi32>
+  view.store %count_out, %ch[0] : i32, view<4xi32>
+  view.store %eos, %ch[1] : i32, view<4xi32>
+  view.store %mixed_word, %ch[2] : i32, view<4xi32>
+  view.store %c0_i32, %ch[3] : i32, view<4xi32>
+  %rh = buffer.view %replay[%zero] : buffer -> view<4xi32>
+  view.store %replay_count, %rh[0] : i32, view<4xi32>
+  view.store %eos, %rh[1] : i32, view<4xi32>
+  view.store %mixed_word, %rh[2] : i32, view<4xi32>
+  view.store %c0_i32, %rh[3] : i32, view<4xi32>
+  kernel.return
+}

@@ -29,10 +29,12 @@ def runtime(version):
 
 
 class PipelinePreparationTests(unittest.TestCase):
-    def fixture(self, root, version='0.2.0.dev0', upgrade='auto', *, abi_profile='legacy', abi_client=None, epoch=False, snapshot_override=None, native=False):
+    def fixture(self, root, version='0.2.0.dev0', upgrade='auto', *, abi_profile='legacy', abi_client=None, epoch=False, snapshot_override=None, native=False, decision=False):
         work, destination = root / 'work', root / 'models/one'
         work.mkdir(); (destination / 'model/program').mkdir(parents=True)
         card = {'schema_version': 1, 'presets': {'chat': {'execution': {'rows': 4, 'pool_capacity': 32}}}}
+        if decision:
+            card['services'] = {'decision': {'kind': 'decision'}}
         if native:
             card['presets']['chat']['execution'].pop('pool_capacity')
         text = json.dumps(card) + '\n'
