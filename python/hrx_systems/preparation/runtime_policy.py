@@ -15,7 +15,10 @@ CONFIG_PATH = 'config/runtime-policies/0.2.0/policy.json'
 SELECTION_FIELDS = ('repository', 'publication_revision', 'model_id', 'preset', 'variant', 'programs')
 MIGRATION_ID = 'hrx-pipelines-0.1.0-to-0.2.0'
 SHA256 = re.compile(r'[0-9a-f]{64}\Z')
-VERSION = re.compile(r'0\.(1|2)\.0(?:(?:a|b|rc|\.dev|\.post)[0-9]+)*(?:\+[a-zA-Z0-9][a-zA-Z0-9._-]*)?\Z')
+VERSION = re.compile(r'(0\.[0-9]+\.[0-9]+)(?:(?:a|b|rc|\.dev|\.post)[0-9]+)*(?:\+[a-zA-Z0-9][a-zA-Z0-9._-]*)?\Z')
+# Qualified SDK patch versions share settings, not an assumed publication ABI.
+# Preparation still verifies that ABI from the exact selected SDK source.
+POLICY_FAMILIES = {'0.1.0': '0.1.0', '0.2.0': '0.2.0', '0.2.1': '0.2.0'}
 from ..sdk import environment as SDK, publication_abi as PUBLICATION_ABI
 
 
@@ -59,7 +62,7 @@ def _runtime(snapshot):
     except (KeyError, TypeError, AttributeError) as error:
         raise ValueError('malformed resolved runtime snapshot') from error
     match = VERSION.fullmatch(version)
-    return identity, version, ('0.' + match[1] + '.0') if match else 'unsupported'
+    return identity, version, POLICY_FAMILIES.get(match[1], 'unsupported') if match else 'unsupported'
 
 
 def _memory(value):

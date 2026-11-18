@@ -11,15 +11,19 @@ resolution and validates the frozen policy without fetching new inputs.
 | Resolved SDK | Source upgrade | Request/server/container settings |
 | --- | --- | --- |
 | 0.1.0, release or Actions | Skipped | Existing defaults and requests preserved |
-| 0.2.0 family, release or Actions | Versioned 0.1.0-to-0.2.0 migration | Versioned policy below |
+| 0.2.0 or qualified 0.2.1, release or Actions | Versioned migration and source-verified publication ABI adaptation | Versioned policy below |
 | Unsupported family in automatic mode | Explicit preparation failure | No guessed fallback |
 | Unsupported family with explicit raw `none` | Skipped diagnostic run | Existing defaults preserved |
 
 For a known 0.2.0 runtime, explicit `pipeline_upgrade=none` bypasses only the
 source transformation. It keeps the selected runtime request/server/container
 settings, so the override is not an implicit change of other test conditions.
-The supported families here are 0.1.0 and 0.2.0, including prerelease/development
-and local-version forms; this is not a promise about later SDK versions.
+The supported SDK versions here are 0.1.0, 0.2.0 and 0.2.1, including
+prerelease/development and local-version forms. SDK 0.2.1 reuses the 0.2.0
+policy family and settings; the exact SDK version remains recorded separately.
+Publication ABI selection still comes from frozen declaration and caller evidence
+at the tested SDK source commit, not its version string. Neither later patch
+versions nor other families are automatically enabled.
 
 ## Request profiles
 
