@@ -314,7 +314,10 @@ def cleanup_safe(attempt, stages):
     if server.get('shutdown', {}).get('forced'): return False, 'server shutdown required force'
     for model in raw.get('models', []):
         for cycle in model.get('cycles', []):
-            if cycle.get('unload', {}).get('status') != 'passed' or cycle.get('unload', {}).get('forced'):
+            # A model-level drain->abort fallback may still confirm removal.
+            # Unlike forced server termination above, it does not leave an
+            # unsafe process once removal and final teardown both succeeded.
+            if cycle.get('unload', {}).get('status') != 'passed':
                 return False, 'model removal was not safely confirmed'
     return True, 'model removal, server teardown and owned-container absence confirmed'
 

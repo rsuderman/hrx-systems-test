@@ -176,6 +176,23 @@ class PairedTests(unittest.TestCase):
         self.raw(out,True);self.assertFalse(M.cleanup_safe(out,self.stages)[0])
         (out/'results/suite-result.json').unlink();self.assertFalse(M.cleanup_safe(out,self.stages)[0])
         self.assertFalse(M.cleanup_safe(out,{**self.stages,'cleanup':'failure'})[0])
+    def test_recovered_model_abort_allows_next_lane_without_hiding_failure(self):
+        out=self.init();raw=self.raw(out)
+        raw['status']='failed';raw['models'][0]['status']='failed'
+        raw['models'][0]['cycles'][0]['unload']={'status':'passed','forced':True}
+        M.write(out/'results/suite-result.json',raw)
+        stages={**self.stages,'run':'failure'}
+        self.assertTrue(M.cleanup_safe(out,stages)[0])
+        row=M.finish(out,stages,'https://github.com/a/b/actions/artifacts/123')
+        self.assertEqual(row['status'],'failed');self.assertTrue(row['cleanup_safe'])
+        next_lane=self.init('latest-ci',safe=row['cleanup_safe'])
+        self.assertFalse(M.read(next_lane/'worker-state.json')['blocked'])
+    def test_failed_or_missing_model_removal_still_blocks_next_lane(self):
+        out=self.init();raw=self.raw(out)
+        for unload in ({'status':'failed','forced':True},{'status':'not_run'},{}):
+            raw['models'][0]['cycles'][0]['unload']=unload
+            M.write(out/'results/suite-result.json',raw)
+            self.assertFalse(M.cleanup_safe(out,self.stages)[0])
     def test_blocked_lane_retains_full_denominator_without_execution(self):
         out=self.init(safe=False);raw=M.read(out/'results/suite-result.json')
         self.assertEqual(raw['models'][0]['status'],'not_run');self.assertFalse(M.read(out/'worker-state.json')['run_invoked'])
