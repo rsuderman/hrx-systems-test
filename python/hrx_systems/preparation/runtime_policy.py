@@ -19,7 +19,7 @@ VERSION = re.compile(r'(0\.[0-9]+\.[0-9]+)(?:(?:a|b|rc|\.dev|\.post)[0-9]+)*(?:\
 # Qualified SDK patch versions share settings, not an assumed publication ABI.
 # Preparation still verifies that ABI from the exact selected SDK source.
 POLICY_FAMILIES = {'0.1.0': '0.1.0', '0.2.0': '0.2.0', '0.2.1': '0.2.0'}
-from ..sdk import environment as SDK, publication_abi as PUBLICATION_ABI
+from ..sdk import environment as SDK, publication_abi as PUBLICATION_ABI, runner_abi as RUNNER_ABI
 
 
 def _canonical(value):
@@ -45,7 +45,7 @@ def _relative(value):
     return value
 
 
-def _runtime(snapshot):
+def _runtime(snapshot, *, qualified_runner=False):
     try:
         if snapshot.get('schema_version') != 1:
             raise ValueError('unsupported runtime snapshot schema')
@@ -62,7 +62,10 @@ def _runtime(snapshot):
     except (KeyError, TypeError, AttributeError) as error:
         raise ValueError('malformed resolved runtime snapshot') from error
     match = VERSION.fullmatch(version)
-    return identity, version, POLICY_FAMILIES.get(match[1], 'unsupported') if match else 'unsupported'
+    family = POLICY_FAMILIES.get(match[1], 'unsupported') if match else 'unsupported'
+    if match and match[1] == '0.3.0' and qualified_runner:
+        family = '0.2.0'
+    return identity, version, family
 
 
 def _memory(value):
@@ -191,12 +194,12 @@ def _upgrade(mode, family):
 
 
 def needs_publication_abi(snapshot, pipeline_upgrade='auto'):
-    return _upgrade(pipeline_upgrade, _runtime(snapshot)[2])['enabled']
+    return _upgrade(pipeline_upgrade, _runtime(snapshot, qualified_runner=True)[2])['enabled']
 
 
-def resolve(snapshot, pipeline_upgrade='auto', pool_backing=None, memory_bytes=None, publication_abi=None):
+def resolve(snapshot, pipeline_upgrade='auto', pool_backing=None, memory_bytes=None, publication_abi=None, runner_abi=None):
     """Select policy after SDK metadata verification; read repository config once."""
-    runtime_id, version, family = _runtime(snapshot)
+    runtime_id, version, family = _runtime(snapshot, qualified_runner=runner_abi is not None)
     upgrade = _upgrade(pipeline_upgrade, family)
     if upgrade['enabled']:
         if publication_abi is None:
@@ -222,6 +225,13 @@ def resolve(snapshot, pipeline_upgrade='auto', pool_backing=None, memory_bytes=N
               'request_profiles': profiles, 'configuration': config}
     if upgrade['enabled']:
         policy.update(schema_version=2, publication_abi=publication_abi)
+    if runner_abi is not None:
+        if not upgrade['enabled']:
+            raise ValueError('runner ABI evidence requires automatic upgrade')
+        runner_abi = RUNNER_ABI.validate_descriptor(runner_abi, snapshot)
+        if runner_abi['receipt']['status'] != 'recognized':
+            raise ValueError('unrecognized pinned native runner ownership ABI')
+        policy.update(schema_version=3, runner_abi=runner_abi)
     policy['policy_sha256'] = digest(policy)
     return policy
 
@@ -231,17 +241,23 @@ def validate(policy, snapshot):
     try:
         value = copy.deepcopy(policy)
         recorded = _sha(value.pop('policy_sha256'))
-        if recorded != digest(value) or value['schema_version'] not in (1, 2):
+        if recorded != digest(value) or value['schema_version'] not in (1, 2, 3):
             raise ValueError('frozen runtime policy identity changed')
-        runtime_id, version, family = _runtime(snapshot)
+        runtime_id, version, family = _runtime(snapshot, qualified_runner=value['schema_version'] == 3)
         if (value['runtime_identity_sha256'], value['runtime_version'], value['runtime_family']) != (runtime_id, version, family):
             raise ValueError('runtime policy does not match the selected SDK')
-        if value['schema_version'] == 2:
+        if value['schema_version'] >= 2:
             if not value['pipeline_upgrade']['enabled'] or family != '0.2.0':
                 raise ValueError('publication ABI policy requires automatic 0.2 upgrade')
             PUBLICATION_ABI.validate_descriptor(value['publication_abi'], snapshot)
         elif 'publication_abi' in value:
             raise ValueError('legacy runtime policy cannot carry new publication ABI evidence')
+        if value['schema_version'] == 3:
+            RUNNER_ABI.validate_descriptor(value['runner_abi'], snapshot)
+            if value['runner_abi']['receipt']['status'] != 'recognized':
+                raise ValueError('unrecognized frozen runner ownership ABI')
+        elif 'runner_abi' in value:
+            raise ValueError('historical policy cannot carry runner ABI evidence')
         if value['pipeline_upgrade'] != _upgrade(value['pipeline_upgrade']['mode'], family):
             raise ValueError('frozen pipeline upgrade decision changed')
         if family == '0.2.0':

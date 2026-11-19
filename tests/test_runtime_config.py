@@ -1,4 +1,4 @@
-"""Configuration migration proves preserved selections and independent identities."""
+"""Current publication configuration preserves exact selections and independent identities."""
 import copy
 import importlib.util
 import json
@@ -14,7 +14,7 @@ SDK = CONFIG.SDK
 
 
 class RuntimeConfigTests(unittest.TestCase):
-    def test_eight_effective_samples_preserve_historical_behavior(self):
+    def test_eight_effective_samples_match_frozen_current_publications(self):
         suite = json.loads((ROOT / 'config/cached-model-tests.json').read_text())
         expected = json.loads((ROOT / 'tests/fixtures/model-config/expected-sample.json').read_text())
         runtime_ids = set()

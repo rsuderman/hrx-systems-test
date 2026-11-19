@@ -3,8 +3,11 @@
 The public preparation and composite commands accept `--pipeline-upgrade auto|none`,
 `--pool-backing fixed|elastic`, and `--memory-bytes VALUE`. Defaults come from the
 verified SDK version: HRX 0.1.0 retains the original pipelines and runtime behavior;
-HRX 0.2.0 receives the versioned migration and its frozen runtime policy. Unsupported
-versions fail automatic selection. `none` records a diagnostic source bypass.
+HRX 0.2.0 and 0.2.1 receive versioned migration and frozen runtime policy.
+HRX 0.3.0 receives the same settings only after its pinned native runner ownership
+contract is recognized; its required source migrations follow that evidence.
+Unsupported versions or runner contracts fail automatic selection. `none` records
+a diagnostic source bypass.
 Runtime settings remain version qualified; see [runtime policy](runtime-policy.md).
 
 For example, use the ordinary three stages with a dynamically selected release:
@@ -45,7 +48,11 @@ source-lock update.
 The prepared suite records `runtime_policy`, `policy_files`, and `frozen_inputs`.
 The runtime policy embeds its configuration and request rules. Policy evidence
 lives at `policies/runtime-policy.json` and, when selected, `policies/seccomp.json`.
-Frozen input evidence lives at `selection-snapshot.json` and
+Automatic policy schema 3 also seals publication declaration/caller evidence under
+`policies/publication-abi/` and runner/public-entry ownership evidence under
+`policies/runner-abi/`. Raw native sources, receipts and their digests remain in the
+policy file closure. Existing schema-1 and schema-2 policies retain historical
+offline replay. Frozen input evidence lives at `selection-snapshot.json` and
 `runtime-selection.json`. Selection snapshots are bounded to 32 MiB; other copied
 JSON evidence is bounded to 4 MiB.
 
@@ -53,7 +60,12 @@ Each entry and input manifest share `pipeline_upgrade`, containing the policy an
 migration identities, original tree path, original publication hashes, and the
 path and hash of `models/ID/pipeline-upgrade.json`. That report identifies the
 migration implementation, all original and output source hashes, operations and
-bounded diffs. Published card and lock bytes are retained as
+bounded diffs. When several migrations execute, ordered `stages` bind every
+recipe implementation hash and link each stage's output source identities to the
+next stage's input identities. Borrowed HAL input migration runs last, after any
+legacy and publication ABI migrations, including for audited native publications.
+Offline verification checks this chain and binds each executed recipe to the
+frozen preparation source closure. Published card and lock bytes are retained as
 `publication-card.json` and `publication-lock.json`. Failed offline preparation
 retains a failed or not-reached migration record and available publication evidence.
 
@@ -88,6 +100,6 @@ Execution rechecks the classification against the saved policy and original
 publication evidence; launch, seccomp, request profiles and model assertions
 still follow the selected runtime policy. Old saved policies remain supported.
 
-The November 17 refresh covers 50 available native publications. Ten inaccessible
+The current HEAD refresh covers 50 available native publications. Ten inaccessible
 publications retain their previous revisions and legacy preparation behavior;
 HTTP 401 is tracked separately rather than counted as native compatibility.

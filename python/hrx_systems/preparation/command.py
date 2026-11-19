@@ -20,7 +20,7 @@ from .. import layout
 from ..layout import REPO_ROOT as REPO
 SELECTION_FIELDS = ('repository', 'publication_revision', 'model_id', 'preset', 'variant', 'programs')
 from ..cache import seed_assets as SEED, assets as ASSETS, pipeline_reader as CACHE
-from ..sdk import environment as SDK, actions as ACTIONS, releases as RELEASES, publication_abi as ABI
+from ..sdk import environment as SDK, actions as ACTIONS, releases as RELEASES, publication_abi as ABI, runner_abi as RUNNER_ABI
 from ..selection import inventory as INVENTORY, configuration as CONFIG, snapshot as SNAPSHOT
 from ..diagnostics import progress as PROGRESS, capture as CAPTURE
 from ..pipelines import seals as PIPELINE
@@ -350,14 +350,15 @@ def run_host(args):
             actions_acquired = True
         else:
             template, runtime_snapshot, lock_path = CONFIG.runtime(runtime_path)
-        publication_abi = None
+        publication_abi = runner_abi = None
         policy_helper = POLICY
         if policy_helper.needs_publication_abi(runtime_snapshot, getattr(args, 'pipeline_upgrade', 'auto')):
             with PROGRESS.operation('prepare SDK publication ABI evidence'):
                 publication_abi = ABI.stage(
                     output, runtime_snapshot, ACTIONS.GitHubClient())
+            runner_abi = RUNNER_ABI.stage(output, runtime_snapshot, ACTIONS.GitHubClient())
         runtime_policy, policy_files = PIPELINE.freeze_policy(output, runtime_snapshot,
-            publication_abi=publication_abi,
+            publication_abi=publication_abi, runner_abi=runner_abi,
             pipeline_upgrade=getattr(args, 'pipeline_upgrade', 'auto'),
             pool_backing=getattr(args, 'pool_backing', None), memory_bytes=getattr(args, 'memory_bytes', None))
     except (ValueError, OSError, KeyError, TypeError, SDK.SdkError, subprocess.SubprocessError) as error:

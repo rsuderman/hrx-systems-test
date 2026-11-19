@@ -12,7 +12,7 @@ import shutil
 
 from ..layout import REPO_ROOT, LAYOUT_VERSION, MIGRATION_RELATIVE
 from ..preparation import runtime_policy as POLICY
-from ..sdk import publication_abi as ABI
+from ..sdk import publication_abi as ABI, runner_abi as RUNNER_ABI
 from ..cache import pipeline_reader as CACHE
 from . import upgrader as UPGRADER
 MAX_REPORT_BYTES = 4 * 1024 * 1024
@@ -56,9 +56,9 @@ def read_json(path):
     return json.loads(path.read_text())
 
 
-def freeze_policy(prepared, snapshot, *, pipeline_upgrade='auto', pool_backing=None, memory_bytes=None, publication_abi=None):
+def freeze_policy(prepared, snapshot, *, pipeline_upgrade='auto', pool_backing=None, memory_bytes=None, publication_abi=None, runner_abi=None):
     policy = POLICY.resolve(snapshot, pipeline_upgrade=pipeline_upgrade,
-                                              pool_backing=pool_backing, memory_bytes=memory_bytes, publication_abi=publication_abi)
+                                              pool_backing=pool_backing, memory_bytes=memory_bytes, publication_abi=publication_abi, runner_abi=runner_abi)
     files = []
     destination = Path(prepared) / 'policies/runtime-policy.json'
     write_json(destination, policy)
@@ -71,10 +71,13 @@ def freeze_policy(prepared, snapshot, *, pipeline_upgrade='auto', pool_backing=N
         target = Path(prepared) / 'policies/seccomp.json'
         shutil.copyfile(source, target)
         files.append({'kind': 'seccomp', 'path': 'policies/seccomp.json', 'sha256': descriptor['sha256']})
-    if policy['schema_version'] == 2:
+    if policy['schema_version'] >= 2:
         abi = ABI
         abi.validate(prepared, policy['publication_abi'], snapshot)
         files.extend(abi.files(policy['publication_abi']))
+    if policy['schema_version'] == 3:
+        RUNNER_ABI.validate(prepared, policy['runner_abi'], snapshot)
+        files.extend(RUNNER_ABI.files(policy['runner_abi']))
     return policy, files
 
 
@@ -94,10 +97,13 @@ def validate_policy(prepared, suite):
                  'sha256': records[0]['sha256']}]
     if policy['seccomp']:
         expected.append({'kind': 'seccomp', 'path': 'policies/seccomp.json', 'sha256': policy['seccomp']['sha256']})
-    if policy['schema_version'] == 2:
+    if policy['schema_version'] >= 2:
         abi = ABI
         abi.validate(prepared, policy['publication_abi'], suite['runtime']['resolved_runtime'])
         expected.extend(abi.files(policy['publication_abi']))
+    if policy['schema_version'] == 3:
+        RUNNER_ABI.validate(prepared, policy['runner_abi'], suite['runtime']['resolved_runtime'])
+        expected.extend(RUNNER_ABI.files(policy['runner_abi']))
     if records != expected:
         raise ValueError('frozen runtime policy file closure changed')
     for record in records:
@@ -174,8 +180,9 @@ def seal_upgrade(destination, work, seed, policy, entry_id):
         publication.append({'path': f'models/{entry_id}/{target_name}', 'sha256': expected})
     native = POLICY.native_publication(policy, seed.get('selection'), seed['card_sha256'], seed['lock_sha256'])
     target = policy.get('publication_abi', {}).get('receipt', {}).get('profile', 'legacy-12')
+    borrowed = policy.get('runner_abi', {}).get('receipt', {}).get('profile') == 'borrowed-ptr'
     proposals = target == 'proposal-counts-14'
-    enabled = policy['pipeline_upgrade']['enabled'] and (native is None or proposals)
+    enabled = policy['pipeline_upgrade']['enabled'] and (native is None or proposals or borrowed)
     if native is not None and policy['pipeline_upgrade']['enabled'] and target is None:
         UPGRADER.load().plan(original, epoch_publication_abi=None)
     if enabled:
@@ -184,7 +191,9 @@ def seal_upgrade(destination, work, seed, policy, entry_id):
         upgrader = UPGRADER.load()
         target = policy.get('publication_abi', {}).get('receipt', {}).get('profile', 'legacy-12')
         try:
-            if proposals:
+            if borrowed:
+                report, adjacent = UPGRADER.write_runner_derivative(retained, original, legacy=native is None, target=target)
+            elif proposals:
                 report, adjacent = UPGRADER.write_proposal_derivative(retained, original, legacy=native is None)
             else:
                 report, adjacent = upgrader.write_derivative(retained, original, epoch_publication_abi=target)
@@ -249,20 +258,23 @@ def verify_upgrade(prepared, entry, manifest, baseline, policy):
         raise ValueError('pipeline report runtime/migration identity changed')
     native = POLICY.native_publication(policy, entry['selection'], manifest['card_sha256'], manifest['lock_sha256'])
     target = policy.get('publication_abi', {}).get('receipt', {}).get('profile', 'legacy-12')
+    borrowed = policy.get('runner_abi', {}).get('receipt', {}).get('profile') == 'borrowed-ptr'
     proposals = target == 'proposal-counts-14'
-    enabled = policy['pipeline_upgrade']['enabled'] and (native is None or proposals)
+    enabled = policy['pipeline_upgrade']['enabled'] and (native is None or proposals or borrowed)
     if report.get('native_publication') != native:
         raise ValueError('pipeline native publication evidence changed')
     if enabled:
         target = policy.get('publication_abi', {}).get('receipt', {}).get('profile', 'legacy-12')
-        if ((policy['schema_version'] == 2 and 'epoch_publication_abi' not in report) or
+        if ((policy['schema_version'] >= 2 and 'epoch_publication_abi' not in report) or
                 report.get('epoch_publication_abi', 'legacy-12') != target):
             raise ValueError('pipeline report publication ABI target differs from frozen policy')
         if (type(report.get('implementation_revision')) is not int or report['implementation_revision'] < 1 or
                 not isinstance(report.get('implementation_sha256'), str) or
                 not re.fullmatch('[0-9a-f]{64}', report['implementation_sha256'])):
             raise ValueError('pipeline migration implementation identity is invalid')
-        if proposals:
+        if borrowed:
+            _verify_runner_stages(report, policy, native, target)
+        elif proposals:
             stages = report.get('stages')
             expected_count = 2 if native is None else 1
             if not isinstance(stages, list) or len(stages) != expected_count:
@@ -439,6 +451,16 @@ def verify_migration_implementations(report, source):
     expected = migration_implementation_sha256(source)
     if report['implementation_sha256'] != expected:
         raise ValueError('pipeline report implementation differs from preparation source')
+    if report.get('runner_ownership_abi') == 'borrowed-ptr':
+        from ..layout import PROPOSAL_MIGRATION_RELATIVE, RUNNER_MIGRATION_RELATIVE
+        paths = {POLICY.MIGRATION_ID: MIGRATION_RELATIVE,
+                 'hrx-pipelines-publication-13-to-14': PROPOSAL_MIGRATION_RELATIVE,
+                 'hrx-pipelines-runner-owned-to-borrowed': RUNNER_MIGRATION_RELATIVE}
+        for stage in report['stages']:
+            value = source.get('files_sha256', {}).get(paths.get(stage['migration_id']))
+            if not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value) or value != stage['implementation_sha256']:
+                raise ValueError('runner composition differs from preparation source')
+        return
     if report.get('epoch_publication_abi') == 'proposal-counts-14':
         from ..layout import PROPOSAL_MIGRATION_RELATIVE
         expected_proposals = source.get('files_sha256', {}).get(PROPOSAL_MIGRATION_RELATIVE)
@@ -448,3 +470,22 @@ def verify_migration_implementations(report, source):
             raise ValueError('proposal adaptation differs from preparation source')
         if len(report['stages']) == 2 and report['stages'][0]['implementation_sha256'] != expected:
             raise ValueError('legacy adaptation differs from preparation source')
+
+
+def _verify_runner_stages(report, policy, native, target):
+    stages = report.get('stages')
+    expected = ([] if native is not None else [policy['pipeline_upgrade']['migration_id']])
+    if target == 'proposal-counts-14':
+        expected.append('hrx-pipelines-publication-13-to-14')
+    expected.append('hrx-pipelines-runner-owned-to-borrowed')
+    if (report.get('runner_ownership_abi') != 'borrowed-ptr' or not isinstance(stages, list) or
+            [s.get('migration_id') for s in stages] != expected):
+        raise ValueError('runner adaptation stage closure changed')
+    if stages[0]['source_files'] != report['source_files'] or stages[-1]['output_files'] != report['output_files']:
+        raise ValueError('runner adaptation source endpoints changed')
+    for left, right in zip(stages, stages[1:]):
+        if left['output_files'] != right['source_files']:
+            raise ValueError('runner adaptation source chain changed')
+    for stage in stages:
+        if not isinstance(stage.get('implementation_sha256'), str) or not re.fullmatch('[0-9a-f]{64}', stage['implementation_sha256']):
+            raise ValueError('runner composition implementation identity invalid')

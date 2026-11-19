@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "path": "owning-module.c",
+      "repository": "ROCm/hrx-system",
+      "commit": "39d683333c2b5d393ddd51aef1eb3c1d01e9a07e",
+      "upstream_path": "loom/src/loom/runtime/program/module.c",
+      "sha256": "6b5a13ac761905de658e4dbca0b2c633edc761aedc3f067f81b0c34b5e0a34d9"
+    },
+    {
+      "path": "owning-control.c",
+      "repository": "ROCm/hrx-system",
+      "commit": "39d683333c2b5d393ddd51aef1eb3c1d01e9a07e",
+      "upstream_path": "loom/src/loom/serve/service/text/control.c",
+      "sha256": "82ef7e9d74760d8fd4fe5c576562b3c9715427a164b13486c5cf958f3080106f"
+    },
+    {
+      "path": "borrowed-module.c",
+      "repository": "ROCm/hrx-system",
+      "commit": "4a04532c925a66861f4175989bbc9038ed285cfb",
+      "upstream_path": "loom/src/loom/runtime/program/module.c",
+      "sha256": "32b54b9bad133504a88fd81742cb733656607475c41a1aae3df42b91cd2627c0"
+    },
+    {
+      "path": "borrowed-control.c",
+      "repository": "ROCm/hrx-system",
+      "commit": "4a04532c925a66861f4175989bbc9038ed285cfb",
+      "upstream_path": "loom/src/loom/serve/service/text/control.c",
+      "sha256": "d3aa0d209e0964e9d035bc7b1c50767ae00a61bedaf6184a48cc5ced46144627"
+    },
+    {
+      "path": "0.3.0-module.c",
+      "repository": "ROCm/hrx-system",
+      "commit": "4468e020ac06b5e96a550426f4ad4603324f86cc",
+      "upstream_path": "loom/src/loom/runtime/program/module.c",
+      "sha256": "32b54b9bad133504a88fd81742cb733656607475c41a1aae3df42b91cd2627c0"
+    },
+    {
+      "path": "0.3.0-control.c",
+      "repository": "ROCm/hrx-system",
+      "commit": "4468e020ac06b5e96a550426f4ad4603324f86cc",
+      "upstream_path": "loom/src/loom/serve/service/text/control.c",
+      "sha256": "d3aa0d209e0964e9d035bc7b1c50767ae00a61bedaf6184a48cc5ced46144627"
+    },
+    {
+      "path": "0.3.0-model.c",
+      "repository": "ROCm/hrx-system",
+      "commit": "4468e020ac06b5e96a550426f4ad4603324f86cc",
+      "upstream_path": "loom/src/loom/serve/service/text/model.c",
+      "sha256": "cadc9057584b925157a639843b25b87b0e47830d5a133b5b1f1fb74fc337e97f"
+    }
+  ],
+  "recognition": "Tokenize reviewed native signature/export construction from module->arguments[0] through timestamp export initializer. Compare normalized token digest. Separately verify canonical HAL ordinal identities, public aliases, step/epoch signatures and binding linkage."
+}

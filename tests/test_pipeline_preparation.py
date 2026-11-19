@@ -29,7 +29,7 @@ def runtime(version):
 
 
 class PipelinePreparationTests(unittest.TestCase):
-    def fixture(self, root, version='0.2.0.dev0', upgrade='auto', *, abi_profile='legacy', abi_client=None, epoch=False, snapshot_override=None, native=False, decision=False):
+    def fixture(self, root, version='0.2.0.dev0', upgrade='auto', *, abi_profile='legacy', abi_client=None, epoch=False, snapshot_override=None, native=False, decision=False, runner_profile=None):
         work, destination = root / 'work', root / 'models/one'
         work.mkdir(); (destination / 'model/program').mkdir(parents=True)
         card = {'schema_version': 1, 'presets': {'chat': {'execution': {'rows': 4, 'pool_capacity': 32}}}}
@@ -48,6 +48,9 @@ class PipelinePreparationTests(unittest.TestCase):
                 shutil.copyfile(source / name, destination / 'model/program' / name)
         asset = root / 'payload.gguf'; asset.write_bytes(b'checkpoint bytes never transformed')
         (destination / 'model/weights.gguf').symlink_to(asset)
+        if runner_profile:
+            from test_runner_ownership_upgrade import programs
+            (destination / 'model/program/runner.loom').write_text(programs()['control.loom'])
         seed = {'card_sha256': PIPE.digest(work / 'model.json'), 'lock_sha256': PIPE.digest(work / 'model.json.lock')}
         snapshot = copy.deepcopy(snapshot_override) if snapshot_override is not None else runtime(version)
         abi = publication_abi(snapshot, root, abi_profile, client=abi_client) if PREP.POLICY.needs_publication_abi(snapshot, upgrade) else None
@@ -62,7 +65,11 @@ class PipelinePreparationTests(unittest.TestCase):
                 'evidence_sha256': 'b'*64}]
             config['content_sha256'] = PREP.POLICY.digest(config['content'])
         with patch.object(PREP.POLICY, '_configuration', return_value=config):
-            policy, files = PIPE.freeze_policy(root, snapshot, pipeline_upgrade=upgrade, publication_abi=abi)
+            runner = None
+            if runner_profile:
+                from test_runner_abi import runner_descriptor
+                runner = runner_descriptor(snapshot, root, runner_profile)
+            policy, files = PIPE.freeze_policy(root, snapshot, pipeline_upgrade=upgrade, publication_abi=abi, runner_abi=runner)
         baseline = {**identity, 'smoke_request': {'max_tokens': 256}, 'smoke_expected_text': '4',
                     'profile_identity': 'historical-profile', 'published_execution': card['presets']['chat']['execution']}
         baseline = PIPE.profile(baseline, policy)

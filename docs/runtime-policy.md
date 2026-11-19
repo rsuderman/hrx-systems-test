@@ -11,19 +11,21 @@ resolution and validates the frozen policy without fetching new inputs.
 | Resolved SDK | Source upgrade | Request/server/container settings |
 | --- | --- | --- |
 | 0.1.0, release or Actions | Skipped | Existing defaults and requests preserved |
-| 0.2.0 or qualified 0.2.1, release or Actions | Versioned migration and source-verified publication ABI adaptation | Versioned policy below |
+| 0.2.0, 0.2.1 or source-qualified 0.3.0, release or Actions | Versioned migrations selected by frozen publication and runner ownership ABI evidence | Versioned policy below |
 | Unsupported family in automatic mode | Explicit preparation failure | No guessed fallback |
 | Unsupported family with explicit raw `none` | Skipped diagnostic run | Existing defaults preserved |
 
 For a known 0.2.0 runtime, explicit `pipeline_upgrade=none` bypasses only the
 source transformation. It keeps the selected runtime request/server/container
 settings, so the override is not an implicit change of other test conditions.
-The supported SDK versions here are 0.1.0, 0.2.0 and 0.2.1, including
-prerelease/development and local-version forms. SDK 0.2.1 reuses the 0.2.0
-policy family and settings; the exact SDK version remains recorded separately.
-Publication ABI selection still comes from frozen declaration and caller evidence
-at the tested SDK source commit, not its version string. Neither later patch
-versions nor other families are automatically enabled.
+The supported versions include prerelease/development and local-version forms.
+SDK 0.2.1 and source-qualified 0.3.0 reuse the 0.2.0 policy family and settings;
+the exact SDK version remains recorded separately. Automatic 0.3.0 qualification
+requires recognized runner ownership evidence from the tested SDK source commit.
+Publication and ownership ABI selection use frozen native source contracts, not
+the package version alone. Other patch versions and families are not automatically
+enabled. Historical schema-1 and schema-2 policies retain their recorded behavior,
+including an unsupported-family diagnostic for an older 0.3.0 raw policy.
 
 ## Request profiles
 
@@ -82,7 +84,8 @@ preserving Docker's existing container policy.
 
 ## Helper contract
 
-- `resolve(snapshot, pipeline_upgrade='auto', pool_backing=None, memory_bytes=None)`
+- `resolve(snapshot, pipeline_upgrade='auto', pool_backing=None, memory_bytes=None,
+  publication_abi=None, runner_abi=None)`
   validates the concrete SDK identity, reads versioned configuration once and
   returns a canonical policy dictionary with `policy_sha256`.
 - `validate(policy, snapshot)` checks the policy hash, exact runtime binding,
@@ -107,22 +110,38 @@ prepared run. The harness must additionally bind the complete policy and copied
 files into its trusted prepared-input manifest; a hash is not a signature or a
 replacement for the existing source/manifest integrity boundary.
 
-## SDK-specific publication ABI
+## SDK-specific publication and runner ownership ABI
 
-New automatic 0.2 inputs use policy schema 2. After selecting the exact SDK,
-preparation acquires the two fixed native publication source files at its tested
-commit and freezes a recognized 12/13-argument contract or an explicit unknown
-result. The receipt is bound to the existing runtime identity and wheel hash;
-backing, request and seccomp policy stay unchanged. The resolved SDK snapshot
-schema and runtime identity calculation do not change.
+New automatic 0.2 and source-qualified 0.3 inputs use policy schema 3. After
+selecting the exact SDK, preparation freezes publication declaration/caller source
+and runner/public-entry source from its tested commit. Publication recognition
+supports the reviewed 12-, 13- and 14-argument contracts. The runner receipt checks
+native signature/export construction, canonical HAL reference identities, and
+public step/epoch parameter types and bindings. It recognizes owning `REF` or
+borrowed `PTR` inputs; unknown runner contracts fail preparation explicitly.
 
-`resolve(..., publication_abi=descriptor)` requires this evidence for automatic
-0.2 upgrading. `validate` preserves already sealed schema-1 policy behavior,
-while schema-2 prepared verification requires the receipt/source closure and
-an explicit matching target in the derivative report. Valid unavailable or
-unsupported evidence is a model-local compatibility result; corrupted evidence
-is an integrity failure. Offline preparation, execution and rendering perform
-no source lookups. Release 0.1.0 and explicit `none` bypass acquisition.
+Each receipt binds its source bytes to the selected runtime identity and wheel
+hash through the existing official build provenance, not independent binary
+attestation. Evidence lives under `policies/publication-abi/` and
+`policies/runner-abi/`. Offline verification rechecks the frozen bytes and
+recognized contracts without fetching source. The resolved SDK snapshot schema
+and runtime identity calculation do not change.
 
-See [epoch publication migration](pipeline-upgrades/0.1.0-to-0.2.0/epoch-publication-abi.md)
-for the exact closure, standalone CLI and source-association limits.
+`resolve(..., publication_abi=descriptor, runner_abi=descriptor)` consumes this
+evidence. Existing schema-1 and schema-2 policies keep their historical replay
+rules. Valid unavailable publication evidence remains a model-local compatibility
+result; corrupt evidence is an integrity failure. Release 0.1.0 and explicit
+`none` bypass acquisition.
+
+A borrowed runner profile selects the versioned
+`tools/migrations/upgrade-pipelines-runner-owned-to-borrowed.py` adapter after the
+legacy and publication migrations. The adapter rewrites only reviewed borrowed
+HAL input and forwarding forms, preserving owning host buffers and original
+publication inputs. It rejects ownership-producing results, retention operations,
+unknown consumers/imports and mixed ownership forms. Native 0.2 publications still
+receive required publication and borrowed-input adaptation for the selected SDK;
+an owning runner profile retains its existing source behavior.
+
+See [prepared pipeline policy](prepared-pipeline-policy.md) for stage seals and
+[epoch publication migration](pipeline-upgrades/0.1.0-to-0.2.0/epoch-publication-abi.md)
+for publication closure, standalone CLI and source-association limits.

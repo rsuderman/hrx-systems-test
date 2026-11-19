@@ -50,9 +50,14 @@ class RuntimePolicyTests(unittest.TestCase):
             POLICY.resolve(snap)
 
     def test_unqualified_patch_versions_still_require_explicit_raw_mode(self):
-        for version in ('0.1.1', '0.2.2.dev0', '0.3.0.dev0', '1.0.0'):
+        for version in ('0.1.1', '0.2.2.dev0', '0.4.0.dev0', '1.0.0'):
             with self.subTest(version=version), self.assertRaisesRegex(ValueError, 'unsupported'):
                 POLICY.needs_publication_abi(snapshot(version))
+
+    def test_03_auto_acquires_evidence_before_qualification(self):
+        self.assertTrue(POLICY.needs_publication_abi(snapshot('0.3.0.dev0')))
+        with self.assertRaisesRegex(ValueError, 'unsupported'):
+            POLICY.resolve(snapshot('0.3.0.dev0'))
 
     def test_01_preserves_requests_and_server_container_defaults(self):
         for origin in ('release', 'github_actions'):

@@ -296,6 +296,7 @@ class FrozenHandoffTests(unittest.TestCase):
         for kind in ('unavailable','unsupported'):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
                 client=SourceClient('state')
+
                 if kind=='unavailable':client.json=lambda path:None
                 else:client.mutate=lambda path,raw: raw.replace(b'control_state',b'unknown_state')
                 root=Path(tmp);dest,policy,manifest,baseline,entry,suite=self.fixture(root,abi_client=client)
@@ -370,6 +371,7 @@ class CompositionTests(unittest.TestCase):
         # Use the portable planner as an identity-preserving second-stage stand-in.
         # This isolates composition/lifetime behavior from publisher semantics.
         from types import SimpleNamespace
+        import test_runner_abi
         def plan(source):
             changes, report = PIPE.UPGRADER.load().plan(source, epoch_publication_abi='control-state-13')
             self.assertFalse(changes, 'second stage must receive fully migrated13 source')
@@ -430,6 +432,7 @@ class PreparationSelectorTests(unittest.TestCase):
     def test_shared_preparation_hook_covers_latest_replay_and_configured_pinned_sdk(self):
         from test_host_pipeline_preparation import HostPipelinePreparationTests, P, C, W
         from types import SimpleNamespace
+        import test_runner_abi
         for route in ('actions-main','actions-replay','release'):
             with self.subTest(route=route), tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);args,_,manifest,payloads=HostPipelinePreparationTests().suite(root)
@@ -442,14 +445,16 @@ class PreparationSelectorTests(unittest.TestCase):
                 template=P.SDK.runtime_baseline(settings,snap)
                 lock=ROOT/'config'/settings['sdk']['dependency_lock']
                 client=SourceClient('state')
+
                 with patch.object(P.subprocess,'run'),patch.object(P.PROGRESS,'run'), \
                      patch.object(P,'source_identity',return_value={'commit':'fixture'}), \
                      patch.object(P.CONFIG,'runtime',return_value=(template,snap,lock)), \
                      patch.object(P,'actions_runtime',return_value=(template,snap)) as acquired, \
-                     patch.object(P.ACTIONS,'GitHubClient',return_value=client):
+                     patch.object(P.ACTIONS,'GitHubClient',return_value=client), \
+                     patch.object(P.RUNNER_ABI,'stage',side_effect=lambda root,snap,client: __import__('test_runner_abi').runner_descriptor(snap,root,'owning')):
                     P.run_host(args)
                 suite=P.read_json(root/'prepared/prepared-suite.json')
-                self.assertEqual(suite['runtime_policy']['schema_version'],2)
+                self.assertEqual(suite['runtime_policy']['schema_version'],3)
                 self.assertEqual(suite['runtime_policy']['publication_abi']['receipt']['profile'],'control-state-13')
                 self.assertEqual(len(client.calls),2)
                 self.assertEqual(acquired.call_count,0 if route=='release' else 1)
