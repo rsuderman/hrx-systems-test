@@ -100,6 +100,22 @@ class NativeSeedTests(unittest.TestCase):
             cached = self.cache / record["cache_root"] / record["cache_path"]
             self.assertEqual(SEED.digest(cached), record["sha256"])
 
+    def test_new_sdk_preserves_authored_lock_annotations(self):
+        from inspect import signature
+        from loom.model.fetch import FetchPlan
+        if 'previous_lock' not in signature(FetchPlan).parameters:
+            self.skipTest('release SDK predates retained lock annotations')
+        self.lock['x-fixture'] = {'publisher': 'preserved'}
+        self.lock['files'][0]['x-fixture'] = {'asset': 'preserved'}
+        original = json.dumps(self.lock)
+        (self.remote / 'model.json.lock').write_text(original)
+        work, _, _ = self.attempt('annotations')
+        installed = json.loads((work / 'installed/model.json.lock').read_text())
+        self.assertEqual(installed['x-fixture'], self.lock['x-fixture'])
+        self.assertEqual([f['x-fixture'] for f in installed['files'] if 'x-fixture' in f],
+                         [{'asset': 'preserved'}])
+        self.assertEqual((self.remote / 'model.json.lock').read_text(), original)
+
     def test_bad_digest_rejects_without_publishing_manifest(self):
         self.lock["files"][0]["sha256"] = "0" * 64
         (self.remote / "model.json.lock").write_text(json.dumps(self.lock))

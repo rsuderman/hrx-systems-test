@@ -125,17 +125,15 @@ class NativePreparation:
 
 
     def offline(self, baseline, seed, cache_root, work, destination, entry_id, sdk_identity, verifier=None, policy=None):
-        from loom.model.fetch import FetchPlan, install
-        from loom.model.fetch_source import Document, Source
-        from loom.model.lock import FileIdentity
+        from loom.model.fetch import install
+        from loom.model.fetch_source import Document
+        from ..sdk.fetch_plan import restore
         saved = self.read_json(work / 'sources.json')
         document = Document(**saved['document'])
         selection = self.seed.selection_for(baseline, document.text)
         cache = self.indexed_cache(selection, seed, cache_root, work, verifier)
-        plan = FetchPlan(document, selection,
-            {name: Source(**source) for name, source in saved['sources'].items()},
-            {name: FileIdentity(**identity) for name, identity in saved['identities'].items()},
-            saved['origins'], True, saved['lock_mode'], saved['lock_scope'], None)
+        plan = restore(document, selection, saved, offline=True,
+                       lock_text=(work / 'model.json.lock').read_text())
         # Local asset transports make native sharing probe the actual immutable files,
         # avoiding provider metadata writes or a second asset store.
         for name, source in plan.sources.items():

@@ -35,6 +35,13 @@ published card and lock hashes are separate from hashes of the relocated install
 original and executable derivative. Original locks describe publication provenance;
 they are not regenerated executable locks.
 
+Offline acquisition reconstructs the SDK plan from the frozen sources and
+identities. SDKs with a `previous_lock` constructor field receive the parsed,
+verified original lock so installation preserves publisher annotations while
+relocating sources. Release SDKs without that field use their existing contract.
+The same adapter serves manual asset seeding; it performs no network lookup or
+source-lock update.
+
 The prepared suite records `runtime_policy`, `policy_files`, and `frozen_inputs`.
 The runtime policy embeds its configuration and request rules. Policy evidence
 lives at `policies/runtime-policy.json` and, when selected, `policies/seccomp.json`.

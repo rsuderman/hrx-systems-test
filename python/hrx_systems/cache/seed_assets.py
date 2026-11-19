@@ -134,16 +134,15 @@ def prepare(baseline, work, cache_root, *, location=None):
 
 
 def fill(baseline, work, cache_root, output, offline):
-    from loom.model.fetch import FetchPlan, install
-    from loom.model.fetch_source import Document, Source
-    from loom.model.lock import FileIdentity, file_key
+    from loom.model.fetch import install
+    from loom.model.fetch_source import Document
+    from loom.model.lock import file_key
+    from ..sdk.fetch_plan import restore
     prepared = read_json(work / "prepared.json")
     document = Document(**prepared["document"])
     selection = selection_for(baseline, document.text)
-    plan = FetchPlan(document, selection,
-        {k: Source(**v) for k, v in prepared["sources"].items()},
-        {k: FileIdentity(**v) for k, v in prepared["identities"].items()},
-        prepared["origins"], offline, prepared["lock_mode"], prepared["lock_scope"], None)
+    plan = restore(document, selection, prepared, offline=offline,
+                   lock_text=(work / 'model.json.lock').read_text())
     cache, _ = routed_cache(selection, work, cache_root)
     install(plan, cache, work / "installed")
     files, programs = [], []
