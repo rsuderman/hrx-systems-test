@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
 """Frozen paired-runtime planning, worker attribution and saved-results aggregation."""
 import argparse
 import copy
@@ -47,7 +48,7 @@ def contained(root, relative):
 
 
 def normalize(event, raw):
-    defaults = {'hardware': 'hrx-gfx1151', 'selection': 'cached', 'runtime_source': 'both', 'device_uri': 'amdgpu://0',
+    defaults = {'hardware': 'hrx-gfx1151', 'selection': 'cached', 'runtime_source': 'all', 'device_uri': 'amdgpu://0',
                 'cycles': 2, 'full_integrity': False, 'runtime_run_id': '',
                 'runtime_run_attempt': '', 'runtime_artifact_id': '', 'runtime_wheel_sha256': ''}
     if event not in ('push', 'schedule', 'workflow_dispatch'): raise ValueError('unsupported CI event')
@@ -55,7 +56,7 @@ def normalize(event, raw):
     values = {**defaults, **raw} if event == 'workflow_dispatch' else defaults
     if not isinstance(values['hardware'], str) or values['hardware'] not in H.TARGETS: raise ValueError('unsupported CI hardware label')
     if values['selection'] not in ('cached', 'suite'): raise ValueError('invalid model selection')
-    if values['runtime_source'] not in ('both', 'release-latest', 'actions-main', 'release', 'actions-replay'):
+    if values['runtime_source'] not in ('all', 'both', 'release-latest', 'release-rc', 'actions-main', 'release', 'actions-replay'):
         raise ValueError('invalid runtime selection')
     if not isinstance(values['device_uri'], str) or not re.fullmatch(r'amdgpu://[0-9]+', values['device_uri']):
         raise ValueError('invalid device URI')
@@ -175,10 +176,13 @@ def plan(root, output, values, *, repo=REPO, freezer=None, preflight=False):
     if policy is not None: write(output / 'ci-model-exclusions.json', policy)
     settings_path = repo / 'config/runtime.json'
     settings, _, _, _ = SDK.load_runtime(settings_path)
-    modes = ['release-latest', 'actions-main'] if values['runtime_source'] == 'both' else [values['runtime_source']]
+    modes = ({'all': ['release-latest', 'release-rc', 'actions-main'],
+              'both': ['release-latest', 'actions-main']}.get(values['runtime_source'], [values['runtime_source']]))
     lanes = []
+    stable_source = None
+    rc_availability = None
     for mode in modes:
-        lane_id = {'release-latest': 'latest-release', 'actions-main': 'latest-ci', 'release': 'pinned-release', 'actions-replay': 'ci-replay'}[mode]
+        lane_id = {'release-latest': 'latest-release', 'release-rc': 'latest-rc', 'actions-main': 'latest-ci', 'release': 'pinned-release', 'actions-replay': 'ci-replay'}[mode]
         item = {'id': lane_id, 'runtime_source': mode}
         if mode == 'release':
             directory = output / 'pinned-runtime'; directory.mkdir()
@@ -191,11 +195,24 @@ def plan(root, output, values, *, repo=REPO, freezer=None, preflight=False):
             args = SimpleNamespace(runtime_source=mode, **{'runtime_' + k: values.get('runtime_' + k) or None for k in ('run_id', 'run_attempt', 'artifact_id', 'wheel_sha256')})
             selector = A.selector_from_args(args, settings['sdk']['source'])
             try:
-                frozen = (freezer or R.freeze_selection)(selector)
+                if mode == 'release-rc' and values['runtime_source'] == 'all' and stable_source is None:
+                    raise ValueError('RC eligibility unavailable because stable release resolution failed')
+                options = {'stable_source': stable_source} if mode == 'release-rc' and stable_source is not None else {}
+                frozen = (freezer or R.freeze_selection)(selector, **options)
                 item['resolution_status'] = 'selected'
+                if mode == 'release-latest': stable_source = frozen['source']
+                if mode == 'release-rc': rc_availability = {'status': 'selected', 'reason': None}
+            except R.NoActiveCandidate as error:
+                message = str(error)
+                rc_availability = {'status': 'skipped' if values['runtime_source'] == 'all' else 'failed', 'reason': message}
+                if values['runtime_source'] == 'all':
+                    continue
+                frozen = resolution_failure(selector, error)
+                item['resolution_status'] = 'failed'
             except (ValueError, OSError, KeyError, TypeError) as error:
                 frozen = resolution_failure(selector, error)
                 item['resolution_status'] = 'failed'
+                if mode == 'release-rc': rc_availability = {'status': 'failed', 'reason': frozen['error']['message']}
             name = 'runtime-selection-' + lane_id + '.json'; write(output / name, frozen)
             item.update(runtime_selection=name, runtime_selection_sha256=sha(output / name))
         if policy is not None:
@@ -210,6 +227,7 @@ def plan(root, output, values, *, repo=REPO, freezer=None, preflight=False):
                 'selection_snapshot_sha256': sha(output / 'selection-snapshot.json'),
                 'expected_entries': expected_entries(selection),
                 'lanes': lanes}
+    if rc_availability is not None: document['rc_availability'] = rc_availability
     if runner: document['planning_runner'] = runner
     if observation is not None: document['runner_hardware'] = observation
     if policy is not None:
@@ -221,13 +239,13 @@ def plan(root, output, values, *, repo=REPO, freezer=None, preflight=False):
 
 def load_plan(path):
     path = Path(path); value = read(path)
-    if value.get('schema_version') != 1 or not isinstance(value.get('lanes'), list) or not value['lanes'] or len(value['lanes']) > 2:
+    if value.get('schema_version') != 1 or not isinstance(value.get('lanes'), list) or not value['lanes'] or len(value['lanes']) > 3:
         raise ValueError('invalid paired CI plan')
     references = {value['selection_snapshot']: value['selection_snapshot_sha256']}
     if 'exclusion_policy' in value: references[value['exclusion_policy']] = value['exclusion_policy_sha256']
     ids = set()
     for lane in value['lanes']:
-        if lane['id'] not in ('latest-release', 'latest-ci', 'pinned-release', 'ci-replay') or lane['id'] in ids:
+        if lane['id'] not in ('latest-release', 'latest-rc', 'latest-ci', 'pinned-release', 'ci-replay') or lane['id'] in ids:
             raise ValueError('invalid/duplicate lane identity')
         ids.add(lane['id'])
         fields = ('selection_snapshot', 'selection_snapshot_sha256', 'expected_entries', 'excluded_entries')
@@ -240,6 +258,14 @@ def load_plan(path):
         else:
             references[lane['runtime_config']] = lane['runtime_config_sha256']
             references['pinned-runtime/' + lane['dependency_lock']] = lane['dependency_lock_sha256']
+    if value.get('inputs', {}).get('runtime_source') in ('all', 'release-rc') or 'rc_availability' in value:
+        availability = value.get('rc_availability')
+        if (not isinstance(availability, dict) or set(availability) != {'status', 'reason'}
+                or availability['status'] not in ('selected', 'skipped', 'failed')
+                or (availability['status'] == 'selected' and availability['reason'] is not None)
+                or (availability['status'] != 'selected' and (not isinstance(availability['reason'], str) or not availability['reason'] or len(availability['reason']) > 4096))
+                or (availability['status'] == 'skipped') != ('latest-rc' not in ids)):
+            raise ValueError('invalid RC availability in frozen plan')
     for name, expected in references.items():
         if sha(contained(path.parent, name)) != expected: raise ValueError('frozen plan input digest changed: ' + name)
     snapshot = read(contained(path.parent, value['selection_snapshot']))
@@ -284,7 +310,7 @@ def initialize(plan_path, lane_id, output, previous_safe=True, *, hardware=None,
                                          'expected_entries': enabled, 'excluded_entries': excluded})
     write(output / 'worker-state.json', {'schema_version':1, 'lane_id':lane_id, 'run_invoked':False, 'blocked':not previous_safe})
     if not previous_safe:
-        reason = 'Previous lane GPU cleanup was not confirmed; no second GPU server started.'
+        reason = 'Previous lane GPU cleanup was not confirmed; no subsequent GPU server started.'
         models = [{'id':e['id'], 'selection':e['selection'], 'status':'not_run', 'reason':reason,
                    'preparation':{'status':'not_run','reason':reason}, 'cycles':[], 'evidence':[]} for e in enabled]
         raw = {'schema_version':1,'attempt_id':output.name,'mode':'real','status':'failed','reason':reason,
@@ -303,6 +329,7 @@ def cleanup_safe(attempt, stages):
     attempt = Path(attempt)
     if stages.get('cleanup') != 'success': return False, 'owned-container cleanup command did not succeed'
     state = read(attempt / 'worker-state.json')
+    if state['blocked']: return False, 'earlier lane GPU cleanup was not confirmed'
     if not state['run_invoked']: return True, 'no GPU execution invoked; owned-container absence confirmed'
     try: raw = read(attempt / 'results/suite-result.json')
     except (ValueError, OSError): return False, 'execution result missing; GPU teardown unknown'
@@ -379,15 +406,20 @@ def aggregate(plan_path, results_root, output):
                 raise ValueError('lane result exclusions differ from frozen plan')
             if row.get('counts', {}).get('expected') != len(lane['expected_entries']):
                 raise ValueError('lane result denominator differs from frozen plan')
-        if row.get('report_url') and not re.fullmatch(r'https://[A-Za-z0-9./_%?=&:+~-]+',row['report_url']): raise ValueError('invalid report URL')
+        for key in ('report_url', 'failure_url'):
+            if row.get(key) and not re.fullmatch(r'https://[A-Za-z0-9./_%?=&:+~-]+',row[key]): raise ValueError('invalid artifact URL')
         rows[identity]=row
     ordered=[]
     for lane in plan['lanes']:
         ordered.append(rows.get(lane['id'],{'lane_id':lane['id'],'status':'not_run','counts':{'expected':len(lane.get('expected_entries', plan['expected_entries']))},'excluded_entries':lane.get('excluded_entries', []),'cleanup_safe':False,'cleanup_reason':'No lane result artifact was retained'}))
     passed=all(x['status']=='passed' and x.get('cleanup_safe') for x in ordered)
     value={'schema_version':1,'status':'passed' if passed else 'failed','plan_sha256':sha(plan_path),'selected_at':plan['selected_at'],'lanes':ordered}
+    if 'rc_availability' in plan: value['rc_availability'] = plan['rc_availability']
     write(output/'paired-result.json',value)
-    lines=['# Release and CI model verification','',f"Overall: **{value['status']}**. Runtime selections frozen at {plan['selected_at']}."]
+    lines=['# Release, candidate and CI model verification','',f"Overall: **{value['status']}**. Runtime selections frozen at {plan['selected_at']}."]
+    if 'rc_availability' in plan:
+        availability = plan['rc_availability']
+        lines += ['', 'Release candidate: **' + availability['status'] + '**.' + (' ' + str(availability['reason']).replace('\n', ' ').replace('<', '&lt;') if availability['reason'] else '')]
     if plan['inputs'].get('hardware'):
         lines += ['', 'Requested hardware: `' + plan['inputs']['hardware'] + '`.']
     def cell(text): return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('|', '&#124;').replace('\r', ' ').replace('\n', ' ')
@@ -396,15 +428,16 @@ def aggregate(plan_path, results_root, output):
         runner = row.get('workflow', {}).get('runner')
         if runner:
             lines += ['', f"{row['lane_id']}: runner **{cell(runner)}**, device `{cell(observation.get('device_uri', 'unavailable'))}`, render `{cell(observation.get('render_node', 'unavailable'))}`, raw gfx target `{cell(observation.get('gfx_target_version', 'unavailable'))}`."]
-    lines += ['', '| Lane | SDK version / source | Result | Enabled | Excluded | Passed | Failed | Not run | Cleanup | Report |','| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |']
+    lines += ['', '| Lane | SDK version / source | Result | Enabled | Excluded | Passed | Failed | Not run | Cleanup | Report | Failures |','| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |']
     for row in ordered:
         c=row.get('counts',{});link='[Download report]('+row['report_url']+')' if row.get('report_url') else 'Unavailable'
+        failures='[Download failures]('+row['failure_url']+')' if row.get('failure_url') else 'Unavailable'
         selected = row.get('selected_runtime',{}).get('selection',{})
         source = selected.get('source',{})
         identity = row.get('runtime',{}).get('sdk_identity',{}).get('version') or row.get('runtime',{}).get('resolved_runtime',{}).get('wheel',{}).get('version') or source.get('version') or source.get('release') or source.get('release_tag') or source.get('tag') or source.get('tested_sha') or source.get('commit') or source.get('run_id') or 'Unresolved'
         provenance = ' '.join(str(source[key]) for key in ('tested_sha','run_id','run_attempt','artifact_id') if source.get(key) is not None)
         identity = (str(identity) + (' / ' + provenance if provenance else '')).replace('|','&#124;').replace('\n',' ')
-        lines.append(f"| {row['lane_id']} | {identity} | {row['status']} | {c.get('expected',0)} | {len(row.get('excluded_entries',[]))} | {c.get('passed',0)} | {c.get('failed',0)} | {c.get('not_run',0)} | {'confirmed' if row.get('cleanup_safe') else 'unconfirmed'} | {link} |")
+        lines.append(f"| {row['lane_id']} | {identity} | {row['status']} | {c.get('expected',0)} | {len(row.get('excluded_entries',[]))} | {c.get('passed',0)} | {c.get('failed',0)} | {c.get('not_run',0)} | {'confirmed' if row.get('cleanup_safe') else 'unconfirmed'} | {link} | {failures} |")
     excluded = [(row['lane_id'], entry) for row in ordered for entry in row.get('excluded_entries', [])]
     if excluded:
         lines += ['', '## Temporary exclusions', '', 'Excluded entries were not prepared or executed and are not counted as passes.', '',
@@ -428,7 +461,7 @@ def _main(argv=None):
     args=parser.parse_args(argv)
     if args.command=='plan':
         value=plan(args.root,args.output,normalize(args.event,read(args.inputs)),preflight=args.preflight);lanes=[x['id'] for x in value['lanes']]
-        outputs(args.github_output,{'ready':'true','hardware':value['inputs']['hardware'],'first_lane':lanes[0],'second_lane':lanes[1] if len(lanes)>1 else ''});return 0
+        outputs(args.github_output,{'ready':'true','hardware':value['inputs']['hardware'],'first_lane':lanes[0],'second_lane':lanes[1] if len(lanes)>1 else '', 'third_lane':lanes[2] if len(lanes)>2 else ''});return 0
     if args.command=='initialize':
         outputs(args.github_env,initialize(args.plan,args.lane,args.output,args.previous_safe=='true',hardware=args.hardware,preflight=args.preflight));return 0
     if args.command=='prepare-args':

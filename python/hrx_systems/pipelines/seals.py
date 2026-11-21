@@ -343,7 +343,8 @@ def failed_selection(value):
     if not isinstance(selector, dict) or selector.get('kind') not in ('release_latest', 'github_actions', 'release'):
         raise ValueError('invalid frozen failure selector')
     if selector['kind'] == 'release_latest':
-        if selector != {'kind': 'release_latest', 'repository': 'ROCm/hrx-system', 'mode': 'latest-stable'}:
+        if selector not in ({'kind': 'release_latest', 'repository': 'ROCm/hrx-system', 'mode': 'latest-stable'},
+                            {'kind': 'release_latest', 'repository': 'ROCm/hrx-system', 'mode': 'latest-rc'}):
             raise ValueError('invalid frozen latest-release failure selector')
     elif selector['kind'] == 'github_actions':
         fields = {'kind', 'repository', 'branch', 'mode', 'artifact_name'}

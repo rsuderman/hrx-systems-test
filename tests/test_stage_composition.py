@@ -121,11 +121,16 @@ class StageCompositionTests(unittest.TestCase):
             plan_dir = self.root / ('plan-' + str(number)); plan_dir.mkdir()
             module.write(plan_dir / 'selection.json', {'entries': []})
             module.write(plan_dir / 'runtime.json', {})
-            mode = values['runtime_source'] if values['runtime_source'] != 'both' else 'latest-release'
-            module.write(plan_dir / 'ci-plan.json', {'schema_version':1,'inputs':values,
+            mode = values['runtime_source'] if values['runtime_source'] not in ('both', 'all') else 'release-latest'
+            document = {'schema_version':1,'inputs':values,
                 'selection_snapshot':'selection.json','selection_snapshot_sha256':module.sha(plan_dir/'selection.json'),
                 'expected_entries':[], 'lanes':[{'id':'latest-release','runtime_source':mode,
-                    'runtime_selection':'runtime.json','runtime_selection_sha256':module.sha(plan_dir/'runtime.json')}]})
+                    'runtime_selection':'runtime.json','runtime_selection_sha256':module.sha(plan_dir/'runtime.json')}]}
+            if values['runtime_source'] == 'all':
+                document['rc_availability'] = {'status': 'selected', 'reason': None}
+                document['lanes'] += [{**document['lanes'][0], 'id': lane, 'runtime_source': source}
+                    for lane, source in [('latest-rc', 'release-rc'), ('latest-ci', 'actions-main')]]
+            module.write(plan_dir / 'ci-plan.json', document)
             from unittest.mock import patch
             with patch.dict(os.environ, environment):
                 exported = module.initialize(plan_dir/'ci-plan.json','latest-release',self.root/('initialized-'+str(number)))
@@ -139,7 +144,7 @@ class StageCompositionTests(unittest.TestCase):
             result, exported, identity = self.initialize_workflow(event)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(exported['MODEL_SELECTION'], 'cached')
-            self.assertEqual(exported['RUNTIME_SOURCE'], 'latest-release')
+            self.assertEqual(exported['RUNTIME_SOURCE'], 'release-latest')
             self.assertEqual(exported['DEVICE_URI'], 'amdgpu://0')
             self.assertEqual(exported['TEST_CYCLES'], '2')
             self.assertEqual(exported['FULL_INTEGRITY'], 'false')
@@ -160,7 +165,7 @@ class StageCompositionTests(unittest.TestCase):
                 'selection': 'suite', 'runtime_source': 'release', 'cycles': 0, 'full_integrity': True})
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(exported['MODEL_SELECTION'], 'cached')
-            self.assertEqual(exported['RUNTIME_SOURCE'], 'latest-release')
+            self.assertEqual(exported['RUNTIME_SOURCE'], 'release-latest')
             self.assertEqual(exported['TEST_CYCLES'], '2')
             self.assertEqual(exported['FULL_INTEGRITY'], 'false')
 

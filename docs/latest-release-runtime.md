@@ -1,8 +1,23 @@
-# Resolve the latest stable HRX SDK
+# Resolve stable and release-candidate HRX SDKs
 
 The `release-latest` source selector means the upstream's latest published stable
 release. It differs from `release`, which retains the configured release pin.
 The latest selector does not change `config/runtime.json` or the local default.
+
+`release-rc` selects the highest numeric published RC version newer than the
+frozen stable release, such as `0.3.0rc10` after `0.3.0rc2`. Only non-draft
+GitHub prereleases with `vX.Y.ZrcN` (or `X.Y.ZrcN`) tags qualify; beta, development
+and superseded RC versions do not. Discovery reads complete pages of 100 releases,
+up to 20 pages; exceeding that bound fails instead of claiming no candidate.
+Duplicate normalized RC versions are an error. A selected RC with an invalid or
+missing canonical wheel fails without falling back to an older RC.
+
+The RC reference retains its stable eligibility baseline and the exact candidate
+tag/commit, asset ID, version, size and digest. Normal `all` CI runs freeze stable
+once and reuse it for RC eligibility. No active RC is explicitly skipped there;
+an RC-only request fails clearly when none exists. API/authentication/discovery
+failures always fail the RC lane. Existing source-qualified ABI checks also apply
+to RC SDKs; selecting an RC does not automatically qualify its runtime contract.
 
 The resolver reads `ROCm/hrx-system` release metadata, excludes drafts and
 prereleases, and requires exactly one canonical Linux x86_64 Release SDK wheel.
@@ -22,6 +37,9 @@ python3 -I python/run.py release-runtime freeze \
   --runtime-source release-latest --output /absolute/new/runtime-selection.json
 python3 -I python/run.py release-runtime verify \
   --input /absolute/runtime-selection.json
+# RC-only metadata selection:
+python3 -I python/run.py release-runtime freeze \
+  --runtime-source release-rc --output /absolute/new/rc-selection.json
 ```
 
 `freeze` creates a new JSON reference without downloading a wheel, installing an
@@ -31,15 +49,15 @@ frozen reference. `verify` performs structural validation only; callers must bin
 the reference's file hash into their own plan to detect changes to otherwise
 valid recorded identities.
 
-The preparation and paired-CI integrations consume this helper; the helper itself
-does not start either CI lane or implement `--runtime-selection` on preparation.
-That public-command integration belongs to the following work package.
+Preparation consumes the frozen reference with `--runtime-selection`; the helper
+itself starts no model server or CI lane. Both selected channels reuse the same
+verified release-asset downloader and per-attempt SDK staging.
 
 ## Integration API
 
 Import `hrx_systems.sdk.releases` from the trusted package. Repository commands use `python3 -I python/run.py release-runtime`; the legacy script is a CLI alias:
 
-- `freeze_selection(selector, *, client=None, now=None, observe_request=None)`
+- `freeze_selection(selector, *, client=None, now=None, observe_request=None, stable_source=None)`
   returns `{schema_version: 1, selector, source}`. It resolves metadata exactly
   once and supports the `release_latest` and `github_actions` selectors. The
   callback can retain bounded initial request provenance on resolution failure.

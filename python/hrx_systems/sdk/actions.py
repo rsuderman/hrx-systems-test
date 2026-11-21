@@ -60,7 +60,7 @@ def sha(value, length=40):
 
 
 def add_source_arguments(parser):
-    parser.add_argument('--runtime-source', choices=('release', 'release-latest', 'actions-main', 'actions-replay'))
+    parser.add_argument('--runtime-source', choices=('release', 'release-latest', 'release-rc', 'actions-main', 'actions-replay'))
     parser.add_argument('--runtime-run-id')
     parser.add_argument('--runtime-run-attempt')
     parser.add_argument('--runtime-artifact-id')
@@ -77,6 +77,8 @@ def selector_from_args(args, configured=None):
         return copy.deepcopy(configured)
     if mode == 'release-latest':
         return {'kind': 'release_latest', 'repository': REPOSITORY, 'mode': 'latest-stable'}
+    if mode == 'release-rc':
+        return {'kind': 'release_latest', 'repository': REPOSITORY, 'mode': 'latest-rc'}
     if mode == 'release':
         if configured and configured.get('kind') == 'release':
             return copy.deepcopy(configured)
@@ -118,14 +120,14 @@ class GitHubClient:
             return ActionsError(f'Upstream Actions API failed (HTTP {error.code})', 'acquisition')
         return ActionsError('Upstream Actions API/transfer could not be reached', 'acquisition')
 
-    def json(self, path):
+    def json(self, path, *, expected_type=dict):
         try:
             with urllib.request.urlopen(self._request(path), timeout=60) as response:
                 data = response.read(16 * 1024 * 1024 + 1)
             if len(data) > 16 * 1024 * 1024:
                 raise ActionsError('Upstream API metadata exceeds limit')
             value = json.loads(data)
-            if not isinstance(value, dict):
+            if not isinstance(value, expected_type):
                 raise ActionsError('Upstream API returned invalid metadata')
             return value
         except (urllib.error.HTTPError, urllib.error.URLError) as error:

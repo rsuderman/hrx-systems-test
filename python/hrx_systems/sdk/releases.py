@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
 """Freeze latest SDK selections and acquire the exact official release wheel.
 
 Selection reads metadata only. Acquisition accepts frozen source identities and
@@ -19,12 +20,58 @@ import urllib.request
 from . import actions as A
 REPOSITORY = A.REPOSITORY
 SELECTOR = {'kind': 'release_latest', 'repository': REPOSITORY, 'mode': 'latest-stable'}
+RC_SELECTOR = {'kind': 'release_latest', 'repository': REPOSITORY, 'mode': 'latest-rc'}
 _VERSION = re.compile(r'v?(?P<version>[0-9]+\.[0-9]+\.[0-9]+)\Z')
+_RC_VERSION = re.compile(r'v?(?P<version>[0-9]+\.[0-9]+\.[0-9]+rc[0-9]+)\Z')
 _WHEEL = re.compile(r'hrx_loom-(?P<version>[0-9]+\.[0-9]+\.[0-9]+)-py3-none-manylinux_[0-9]+_[0-9]+_x86_64\.whl\Z')
+_RC_WHEEL = re.compile(r'hrx_loom-(?P<version>[0-9]+\.[0-9]+\.[0-9]+rc[0-9]+)-py3-none-manylinux_[0-9]+_[0-9]+_x86_64\.whl\Z')
+MAX_RELEASE_PAGES = 20
 
 
 class ReleaseError(A.ActionsError):
     pass
+
+
+class NoActiveCandidate(ReleaseError):
+    """Successful complete discovery found no RC newer than the stable release."""
+
+
+def _version_key(version):
+    base, *candidate = version.split('rc')
+    return (*map(int, base.split('.')), 0 if candidate else 1,
+            int(candidate[0]) if candidate else 0)
+
+
+def _active_candidate(client, stable, requested):
+    candidates = {}
+    for page in range(1, MAX_RELEASE_PAGES + 1):
+        rows = client.json(f'/repos/{REPOSITORY}/releases?per_page=100&page={page}')
+        if not isinstance(rows, list) or len(rows) > 100:
+            raise ReleaseError('Malformed release discovery page', 'acquisition')
+        for release in rows:
+            if not isinstance(release, dict):
+                raise ReleaseError('Malformed release discovery record', 'acquisition')
+            if release.get('draft') is not False or release.get('prerelease') is not True:
+                continue
+            match = _RC_VERSION.fullmatch(release.get('tag_name', ''))
+            if not match:
+                continue
+            published = A.stamp(release.get('published_at'))
+            if published > requested:
+                raise ReleaseError('RC publication timestamp is after selection time')
+            key = _version_key(match['version'])
+            if key <= _version_key(stable['version']):
+                continue
+            if key in candidates:
+                raise ReleaseError('Ambiguous duplicate normalized RC versions', 'integrity')
+            candidates[key] = release
+        if len(rows) < 100:
+            break
+    else:
+        raise ReleaseError('Release discovery exceeds complete bounded search', 'acquisition')
+    if not candidates:
+        raise NoActiveCandidate('No published release candidate newer than stable ' + stable['release'], 'unavailable')
+    return candidates[max(candidates)]
 
 
 def _digest(value):
@@ -38,6 +85,10 @@ def _url(tag, name):
 
 
 class GitHubClient(A.GitHubClient):
+    def json(self, path):
+        listing = re.fullmatch('/repos/' + REPOSITORY + r'/releases\?per_page=100&page=[1-9][0-9]*', path)
+        return super().json(path, expected_type=list if listing else dict)
+
     @staticmethod
     def _error(error):
         original = A.GitHubClient._error(error)
@@ -97,9 +148,9 @@ def _tag_commit(client, tag):
     raise ReleaseError('Release annotated tag chain exceeds resolution limit')
 
 
-def resolve_source(selector=None, *, client=None, now=None, observe_request=None):
+def resolve_source(selector=None, *, client=None, now=None, observe_request=None, stable_source=None):
     selector = SELECTOR if selector is None else selector
-    if selector != SELECTOR:
+    if selector not in (SELECTOR, RC_SELECTOR):
         raise ReleaseError('Unsupported latest-release selector', 'configuration')
     client = client or GitHubClient()
     requested = A.stamp(now) if isinstance(now, str) else now or datetime.now(timezone.utc)
@@ -108,12 +159,21 @@ def resolve_source(selector=None, *, client=None, now=None, observe_request=None
     requested = requested.astimezone(timezone.utc)
     if observe_request is not None:
         observe_request({'kind': 'release', 'repository': REPOSITORY,
-                         'selection_mode': 'latest-stable', 'requested_at': requested.isoformat()})
-    release = client.json(f'/repos/{REPOSITORY}/releases/latest')
-    if release.get('draft') is not False or release.get('prerelease') is not False:
-        raise ReleaseError('Latest official release must be published and stable')
+                         'selection_mode': selector['mode'], 'requested_at': requested.isoformat()})
+    rc = selector == RC_SELECTOR
+    stable = None
+    if rc:
+        stable = (resolve_source(SELECTOR, client=client, now=requested) if stable_source is None
+                  else validate_source(stable_source))
+        if stable['selection_mode'] != 'latest-stable':
+            raise ReleaseError('RC eligibility requires a frozen stable release', 'configuration')
+        release = _active_candidate(client, stable, requested)
+    else:
+        release = client.json(f'/repos/{REPOSITORY}/releases/latest')
+    if release.get('draft') is not False or release.get('prerelease') is not rc:
+        raise ReleaseError('Official release publication/channel flags disagree')
     tag = release.get('tag_name')
-    version = _VERSION.fullmatch(tag) if isinstance(tag, str) else None
+    version = (_RC_VERSION if rc else _VERSION).fullmatch(tag) if isinstance(tag, str) else None
     if not version:
         raise ReleaseError('Latest release tag is not a stable HRX SDK version')
     published = A.stamp(release.get('published_at'))
@@ -128,7 +188,7 @@ def resolve_source(selector=None, *, client=None, now=None, observe_request=None
         if not isinstance(asset, dict):
             raise ReleaseError('Malformed release asset metadata')
         name = asset.get('name')
-        match = _WHEEL.fullmatch(name) if isinstance(name, str) else None
+        match = (_RC_WHEEL if rc else _WHEEL).fullmatch(name) if isinstance(name, str) else None
         if match:
             candidates.append((asset, match))
     if len(candidates) != 1:
@@ -146,12 +206,14 @@ def resolve_source(selector=None, *, client=None, now=None, observe_request=None
     if asset.get('browser_download_url') != url:
         raise ReleaseError('Release asset URL disagrees with canonical selected source')
     tested, tag_sha = _tag_commit(client, tag)
-    source = {'kind': 'release', 'repository': REPOSITORY, 'selection_mode': 'latest-stable',
+    source = {'kind': 'release', 'repository': REPOSITORY, 'selection_mode': selector['mode'],
         'requested_at': requested.isoformat(), 'release_id': release_id, 'release': tag,
         'published_at': release['published_at'], 'tested_sha': tested, 'tag_sha': tag_sha,
         'asset_id': asset_id, 'version': version['version'],
         'asset': {'id': asset_id, 'name': asset['name'], 'size_bytes': size,
                   'upstream_digest': upstream_digest, 'url': url}}
+    if rc:
+        source['stable_baseline'] = {k: stable[k] for k in ('release', 'version', 'release_id', 'tested_sha')}
     return validate_source(source)
 
 
@@ -160,7 +222,7 @@ def validate_source(source):
     if not isinstance(source, dict):
         raise ReleaseError('Frozen release source must be an object', 'configuration')
     if (source.get('kind') != 'release' or source.get('repository') != REPOSITORY
-            or source.get('selection_mode') != 'latest-stable'):
+            or source.get('selection_mode') not in ('latest-stable', 'latest-rc')):
         raise ReleaseError('Unapproved frozen release source', 'configuration')
     A.sha(source.get('tested_sha')); A.sha(source.get('tag_sha'))
     A.positive(source.get('release_id'), 'release_id')
@@ -168,11 +230,22 @@ def validate_source(source):
     if published > requested:
         raise ReleaseError('Frozen release publication is after its selection')
     tag = source.get('release')
-    match = _VERSION.fullmatch(tag) if isinstance(tag, str) else None
+    rc = source['selection_mode'] == 'latest-rc'
+    match = (_RC_VERSION if rc else _VERSION).fullmatch(tag) if isinstance(tag, str) else None
     if not match or source.get('version') != match['version']:
         raise ReleaseError('Frozen release version/tag changed', 'integrity')
+    if rc:
+        stable = source.get('stable_baseline')
+        if not isinstance(stable, dict) or set(stable) != {'release', 'version', 'release_id', 'tested_sha'}:
+            raise ReleaseError('RC lacks frozen stable baseline', 'integrity')
+        baseline = _VERSION.fullmatch(stable.get('release', ''))
+        if not baseline or baseline['version'] != stable.get('version') or _version_key(source['version']) <= _version_key(stable['version']):
+            raise ReleaseError('RC is not newer than its frozen stable baseline', 'integrity')
+        A.sha(stable['tested_sha']); A.positive(stable['release_id'], 'stable release_id')
     allowed = {'kind', 'repository', 'selection_mode', 'requested_at', 'release_id', 'release',
                'published_at', 'tested_sha', 'tag_sha', 'asset_id', 'version', 'asset'}
+    if rc:
+        allowed.add('stable_baseline')
     if source.keys() - allowed:
         raise ReleaseError('Frozen release source contains unknown fields', 'configuration')
     asset = source.get('asset') or {}
@@ -181,7 +254,7 @@ def validate_source(source):
     if asset.keys() - {'id', 'name', 'size_bytes', 'upstream_digest', 'url', 'sha256', 'digest_verified'}:
         raise ReleaseError('Frozen release asset contains unknown fields', 'configuration')
     name = asset.get('name')
-    filename = _WHEEL.fullmatch(name) if isinstance(name, str) else None
+    filename = (_RC_WHEEL if rc else _WHEEL).fullmatch(name) if isinstance(name, str) else None
     if not filename or filename['version'] != match['version']:
         raise ReleaseError('Frozen release filename/version changed', 'integrity')
     asset_id = A.positive(asset.get('id'), 'asset_id')
@@ -247,10 +320,11 @@ def _actions_source(source):
     return copy.deepcopy(source)
 
 
-def freeze_selection(selector, *, client=None, now=None, observe_request=None):
+def freeze_selection(selector, *, client=None, now=None, observe_request=None, stable_source=None):
     """Resolve metadata once; the returned reference contains no payload bytes."""
-    if selector == SELECTOR:
-        source = resolve_source(selector, client=client, now=now, observe_request=observe_request)
+    if selector in (SELECTOR, RC_SELECTOR):
+        source = resolve_source(selector, client=client, now=now, observe_request=observe_request,
+                                stable_source=stable_source)
     elif isinstance(selector, dict) and selector.get('kind') == 'github_actions':
         source = A.resolve_source(selector, client=client, now=now, observe_request=observe_request)
     else:
@@ -265,8 +339,10 @@ def load_selection(value):
     if not isinstance(value, dict) or value.get('schema_version') != 1:
         raise ReleaseError('Unsupported frozen runtime selection schema', 'configuration')
     selector, source = value.get('selector'), value.get('source')
-    if selector == SELECTOR:
+    if selector in (SELECTOR, RC_SELECTOR):
         source = validate_source(source)
+        if source['selection_mode'] != selector['mode']:
+            raise ReleaseError('Frozen release channel disagrees with selector', 'integrity')
     elif (isinstance(selector, dict) and selector.get('kind') == 'github_actions'
           and selector.get('repository') == REPOSITORY and selector.get('branch') == 'main'
           and selector.get('mode') in ('latest-successful', 'replay')

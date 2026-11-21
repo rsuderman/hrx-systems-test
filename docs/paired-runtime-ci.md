@@ -1,6 +1,18 @@
-# Paired release and CI verification
+# Stable, release-candidate and CI verification
 
-The normal main push, nightly schedule and manual default compare the latest stable release with the latest eligible successful main SDK build. The outer workflow owns the hardware concurrency lock for the entire comparison. Its reusable worker has no competing lock.
+The normal main push, nightly schedule and manual default (`all`) run the latest
+stable release, newest active RC and latest eligible successful main SDK build,
+in that order. The outer workflow owns the hardware concurrency lock for the
+entire comparison. Its reusable worker has no competing lock. Manual `both`
+retains the historical stable-plus-CI pair; `release-rc` runs only the candidate.
+Other single-channel and exact pinned/replay diagnostics remain available.
+
+RC selection uses the same frozen stable release as the stable lane. A candidate
+must be a published, non-draft RC version newer than stable. When none exists,
+`all` compacts execution to stable plus CI and records an explicit availability
+skip in combined JSON and Markdown; it is not counted as a pass. RC-only requests
+without an active candidate fail with a clear diagnostic. Discovery or selected
+asset failures are failures, never absence or an older-candidate fallback.
 
 All planning, worker and comparison jobs select `hrx-gfx1151`; manual dispatch
 exposes the same explicit `hardware` choice. Dogwood is the sole eligible runner.
@@ -10,7 +22,7 @@ seeding, smoke probes, source enrollment and rollback. A label selects a pool;
 it does not establish job affinity. Do not add a second matching runner before
 the guide's affinity/concurrency prerequisites are implemented.
 
-The planner freezes the ordered model denominator, exact seed bytes and aliases, authored suite entries, repository configuration hashes and both runtime references before either lane starts. Resolution failures become frozen error references: preparation accounts for every selected entry as a runtime setup failure without retrying a moving alias. A missing plan fails the comparison before GPU execution.
+The planner freezes the ordered model denominator, exact seed bytes and aliases, authored suite entries, repository configuration hashes and all selected runtime references before any lane starts. Resolution failures become frozen error references: preparation accounts for every selected entry as a runtime setup failure without retrying a moving alias. A missing plan fails the comparison before GPU execution.
 
 CI planning checks the raw physical identity before inventory discovery or SDK
 resolution, then freezes the requested hardware and planning runner name. Each
@@ -20,7 +32,22 @@ The check is SDK-free and does not require advisory runtime mapping or memory
 qualification. The global lock, cache membership and model expectations remain
 independent of this hardware identity check.
 
-Each lane independently stages verified original pipelines from the host-seeded read-only cache, acquires its selected SDK once, starts one shared server, runs all selected entries, confirms teardown and publishes its report and bounded evidence. The release lane precedes the CI lane. Model, assertion, acquisition, rendering and upload failures do not by themselves block the second lane. The second lane requires confirmed cleanup: unknown or failed model removal, unknown teardown, forced server shutdown or failed owned-container cleanup produces a blocked second result with every entry marked not run. A model-level drain-to-abort fallback may continue once removal and pool reclamation succeed and final server teardown is graceful; this does not erase the model or lane failure. Cancellation prevents new GPU work; existing cleanup and aggregation remain eligible.
+Each lane independently stages verified original pipelines from the host-seeded
+read-only cache, acquires its selected SDK once, starts one shared server, runs
+all selected entries, confirms teardown and publishes its report and bounded
+evidence. Ordinary model, acquisition, assertion or reporting failures do not
+block subsequent lanes when cleanup is confirmed. Unsafe cleanup blocks every
+later GPU lane, with every entry marked not run. A blocked intermediate worker
+cannot clear that unsafe state merely by cleaning its own unused container.
+A model-level drain-to-abort fallback may continue once removal and pool
+reclamation succeed and final server teardown is graceful; this does not erase
+the model or lane failure. Cancellation prevents new GPU work; cleanup and
+aggregation remain eligible.
+
+The combined summary includes each lane's SDK version/commit, outcome, counts and
+direct downloads for its report and failure bundle. Every selected lane must pass
+for the overall comparison to pass. The comparison keeps its historical
+`paired-result.json` filename and `paired-ci` CLI for existing consumers.
 
 The comparison artifact contains `paired-result.json` and `summary.md`; each lane has its own report, failure bundle and `lane-result.json`. Results retain SDK identities, the common plan digest, frozen inputs, runtime policy and any migration reports. An unavailable lane result is a failed comparison, never a successful partial run. Runtime 0.1.0 keeps its published pipelines; the qualified 0.2.0 family uses the pinned runtime policy in either lane, skipping source migration for the 50 audited native publications and migrating the ten retained legacy selections.
 

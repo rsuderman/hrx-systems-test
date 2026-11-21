@@ -13,10 +13,10 @@ on:
         options: [hrx-gfx1151]
         default: hrx-gfx1151
       runtime_source:
-        description: Both latest SDKs, one latest SDK, or an exact pinned/replay diagnostic
+        description: All channels, stable+CI (both), one channel, or pinned/replay diagnostic
         type: choice
-        options: [both, release-latest, actions-main, release, actions-replay]
-        default: both
+        options: [all, both, release-latest, release-rc, actions-main, release, actions-replay]
+        default: all
       runtime_run_id:
         description: Replay only - upstream Actions run ID
         type: string
@@ -48,19 +48,20 @@ on:
         default: 2
 permissions:
   contents: read
-# Keep the hardware lock on the outer pair, never on its called worker.
+# Keep the hardware lock on the outer workflow, never on its called worker.
 concurrency:
   group: hrx-single-model-hardware
   cancel-in-progress: false
 jobs:
   plan:
-    name: Freeze common inventory and both runtime selections
+    name: Freeze common inventory and runtime selections
     runs-on: ${{ inputs.hardware || 'hrx-gfx1151' }}
     timeout-minutes: 15
     outputs:
       ready: ${{ steps.resolve.outputs.ready == 'true' && steps.upload_plan.outcome == 'success' }}
       first_lane: ${{ steps.resolve.outputs.first_lane }}
       second_lane: ${{ steps.resolve.outputs.second_lane }}
+      third_lane: ${{ steps.resolve.outputs.third_lane }}
       hardware: ${{ steps.resolve.outputs.hardware }}
     env:
       CONFIGURED_CACHE_ROOT: ${{ vars.HRX_SYSTEMS_ROOT }}
@@ -126,9 +127,20 @@ jobs:
       previous_cleanup_safe: ${{ needs.first.outputs.cleanup_safe == 'true' && 'true' || 'false' }}
     secrets:
       HRX_ACTIONS_TOKEN: ${{ secrets.HRX_ACTIONS_TOKEN }}
-  comparison:
-    name: Report both runtime results
+  third:
+    name: Verify ${{ needs.plan.outputs.third_lane }}
     needs: [plan, first, second]
+    if: ${{ always() && !cancelled() && needs.plan.outputs.ready == 'true' && needs.plan.outputs.third_lane != '' }}
+    uses: ./.github/workflows/_model-verification-worker.yml
+    with:
+      lane_id: ${{ needs.plan.outputs.third_lane }}
+      hardware: ${{ needs.plan.outputs.hardware }}
+      previous_cleanup_safe: ${{ needs.first.outputs.cleanup_safe == 'true' && needs.second.outputs.cleanup_safe == 'true' && 'true' || 'false' }}
+    secrets:
+      HRX_ACTIONS_TOKEN: ${{ secrets.HRX_ACTIONS_TOKEN }}
+  comparison:
+    name: Report runtime results
+    needs: [plan, first, second, third]
     if: always()
     runs-on: ${{ inputs.hardware || 'hrx-gfx1151' }}
     timeout-minutes: 10
@@ -181,7 +193,7 @@ jobs:
           set -euo pipefail
           summary="$RUNNER_TEMP/hrx-model-comparison/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/summary/summary.md"
           if [[ -f "$summary" ]]; then cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
-      - name: Require both requested lanes and publication
+      - name: Require all selected lanes and publication
         if: always()
         shell: bash
         env:

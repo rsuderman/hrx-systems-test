@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
 import copy
 import argparse
 import importlib.util
@@ -23,7 +24,7 @@ class PairedTests(unittest.TestCase):
         self.root=Path(self.tmp.name);self.plan=self.root/'plan';self.plan.mkdir()
         M.write(self.plan/'selection.json',{'entries':[{'entry':{'id':'example'},'selection':{'model_id':'example'}}]})
         for lane in ('latest-release','latest-ci'):M.write(self.plan/(lane+'.json'),{'schema_version':1,'selector':{},'source':{'tag':'0.2.0'}})
-        self.doc={'schema_version':1,'selected_at':'2026-11-12T00:00:00Z','inputs':M.normalize('push',{}),
+        self.doc={'schema_version':1,'selected_at':'2026-11-12T00:00:00Z','inputs':M.normalize('workflow_dispatch',{'runtime_source':'both'}),
           'selection_snapshot':'selection.json','selection_snapshot_sha256':M.sha(self.plan/'selection.json'),
           'expected_entries':[{'id':'example','selection':{'model_id':'example'}}],
           'lanes':[{'id':lane,'runtime_source':source,'runtime_selection':lane+'.json','runtime_selection_sha256':M.sha(self.plan/(lane+'.json'))} for lane,source in [('latest-release','release-latest'),('latest-ci','actions-main')]]}
@@ -37,7 +38,7 @@ class PairedTests(unittest.TestCase):
              'server':{key:{'status':'passed'} for key in ('start','shutdown','cleanup')}}
         raw['server']['shutdown']['forced']=forced;M.write(out/'results/suite-result.json',raw);return raw
     def test_default_pair_and_replay_validation(self):
-        self.assertEqual(M.normalize('push',{'runtime_source':'release'})['runtime_source'],'both')
+        self.assertEqual(M.normalize('push',{'runtime_source':'release'})['runtime_source'],'all')
         with self.assertRaises(ValueError):M.normalize('workflow_dispatch',{'runtime_source':'actions-replay'})
         with self.assertRaises(ValueError):M.normalize('workflow_dispatch',{'cycles':False})
     def test_hardware_normalization_for_push_schedule_and_manual_events(self):
@@ -80,6 +81,7 @@ class PairedTests(unittest.TestCase):
                 self.assertEqual(M.main(['plan','--root',str(self.root),'--output',str(output),
                     '--inputs',str(inputs),'--event',event,'--github-output',str(github_output),'--preflight']),0)
                 self.assertIn('hardware=hrx-gfx1151\n',github_output.read_text())
+                self.assertIn('third_lane=latest-ci\n',github_output.read_text())
                 self.assertEqual(M.load_plan(output/'ci-plan.json')['planning_runner'],'dogwood-fixture')
 
     def test_failed_planning_physical_check_retains_reason_before_inventory_or_runtime_resolution(self):
@@ -155,7 +157,7 @@ class PairedTests(unittest.TestCase):
             if len(calls)==1: raise ValueError('release metadata unavailable')
             return {'schema_version':1,'selector':selector,'source':{'run_id':123}}
         with patch.object(M.S, 'freeze', return_value=frozen):
-            doc=M.plan(self.root,self.root/'resolved-plan',M.normalize('push',{}),freezer=freezer)
+            doc=M.plan(self.root,self.root/'resolved-plan',M.normalize('workflow_dispatch',{'runtime_source':'both'}),freezer=freezer)
         self.assertEqual(len(calls),2)
         self.assertEqual([x['resolution_status'] for x in doc['lanes']],['failed','selected'])
         envelope=M.read(self.root/'resolved-plan/runtime-selection-latest-release.json')
@@ -197,7 +199,7 @@ class PairedTests(unittest.TestCase):
         out=self.init(safe=False);raw=M.read(out/'results/suite-result.json')
         self.assertEqual(raw['models'][0]['status'],'not_run');self.assertFalse(M.read(out/'worker-state.json')['run_invoked'])
         row=M.finish(out,self.stages,'https://github.com/a/b/actions/artifacts/123')
-        self.assertEqual(row['status'],'blocked');self.assertTrue(row['cleanup_safe'])
+        self.assertEqual(row['status'],'blocked');self.assertFalse(row['cleanup_safe'])
     def test_pair_requires_both_results_and_exact_plan_attribution(self):
         out=self.init();self.raw(out);M.finish(out,self.stages,'https://github.com/a/b/actions/artifacts/123')
         result=M.aggregate(self.path,self.root,self.root/'combined');self.assertEqual(result['status'],'failed')
@@ -212,10 +214,13 @@ class PairedTests(unittest.TestCase):
     def test_workflow_serializes_gpu_lanes_with_outer_lock_only(self):
         outer=(ROOT/'.github/workflows/single-model-e2e.yml').read_text();worker=(ROOT/'.github/workflows/_model-verification-worker.yml').read_text()
         self.assertIn('needs: [plan, first]',outer);self.assertIn('needs.first.outputs.cleanup_safe',outer)
+        self.assertIn('needs: [plan, first, second]', outer)
+        self.assertIn("needs.first.outputs.cleanup_safe == 'true' && needs.second.outputs.cleanup_safe == 'true'", outer)
+        self.assertIn('needs: [plan, first, second, third]', outer)
         self.assertIn('cancel-in-progress: false',outer);self.assertNotIn('concurrency:',worker)
         self.assertIn("env.BLOCKED != 'true'",worker);self.assertIn('LANE_UPLOAD',worker)
         self.assertEqual(outer.count("runs-on: ${{ inputs.hardware || 'hrx-gfx1151' }}"),2)
-        self.assertEqual(outer.count('hardware: ${{ needs.plan.outputs.hardware }}'),2)
+        self.assertEqual(outer.count('hardware: ${{ needs.plan.outputs.hardware }}'),3)
         self.assertIn('runs-on: ${{ inputs.hardware }}',worker)
         self.assertIn('--hardware "$REQUESTED_HARDWARE" --preflight',worker)
         self.assertIn('"$GITHUB_OUTPUT" --preflight',outer)

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
 """Latest release selection, frozen references and exact payload acquisition."""
 import argparse
 import copy
