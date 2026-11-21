@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
 """Bounded native publication ABI evidence for one pinned SDK source commit.
 
 Only stage() performs source acquisition. validate() uses sealed local bytes only.
@@ -116,6 +117,28 @@ def recognize(control, model):
     if args not in [tokens(','.join(value)) for value in PROFILE_TYPES.values()]:
         raise ValueError('unsupported native publication argument types/order')
     binding = tokens('{IREE_SVL("publish_epoch"), {publish_arguments, IREE_ARRAYSIZE(publish_arguments)}, {NULL, 0}, &control->publish_epoch}')
+    selected = count_sequence(declaration, tokens('control->publish_argument_count')) > 0
+    if selected:
+        # ABI-1 publications may omit the final proposal-count buffer. We still
+        # generate the full 14-argument form and require the exact bounded route.
+        selection = tokens('''
+            control->publish_argument_count = IREE_ARRAYSIZE(publish_arguments);
+            if (source->v1) {
+                iree_vm_module_signature_t signature = {0};
+                IREE_RETURN_IF_ERROR(loom_runtime_program_service_signature(
+                    source->module, loom_runtime_preparation_card(source->preparation),
+                    loom_runtime_preparation_component(source->preparation),
+                    IREE_SV("publish_epoch"), host_allocator, &signature));
+                if (signature.arguments.count == IREE_ARRAYSIZE(publish_arguments) - 1) {
+                    --control->publish_argument_count;
+                }
+            }
+        ''')
+        if (types != PROFILE_TYPES['proposal-counts-14']
+                or count_sequence(declaration, selection) != 1
+                or count_sequence(declaration, tokens('control->publish_argument_count')) != 3):
+            raise ValueError('unfamiliar native publication count selection')
+        binding = tokens('{IREE_SVL("publish_epoch"), {publish_arguments, control->publish_argument_count}, {NULL, 0}, &control->publish_epoch}')
     if (count_sequence(declaration, binding) != 1 or
             count_sequence(declaration, tokens('IREE_SVL("publish_epoch")')) != 1):
         raise ValueError('unfamiliar native publication binding/results')
@@ -124,6 +147,16 @@ def recognize(control, model):
     if initializer(caller, 'publish_arguments', 'iree_vm_variant_t') != _caller(profile != 'legacy-12', profile == 'proposal-counts-14'):
         raise ValueError('native publication declaration/caller disagree')
     invoke = tokens('loom_serve_text_invoke(model, model->control.publish_epoch, iree_vm_variant_span_from_array(publish_arguments), iree_vm_variant_span_empty())')
+    if selected:
+        invoke = tokens('loom_serve_text_invoke(model, model->control.publish_epoch, iree_vm_variant_span_from_ptr(publish_arguments, model->control.publish_argument_count), iree_vm_variant_span_empty())')
+        result_count = tokens('''result.proposal_count =
+            model->control.publish_argument_count == IREE_ARRAYSIZE(publish_arguments)
+                ? iree_unaligned_load_le_u32(
+                    model->control.host.bytes[TEXT_HOST_PROPOSAL_COUNTS].data + i * sizeof(uint32_t))
+                : (result.verification_count ? UINT32_MAX : 0);''')
+        if (count_sequence(caller, tokens('model->control.publish_argument_count')) != 2
+                or count_sequence(caller, result_count) != 1):
+            raise ValueError('unfamiliar native publication invocation count')
     if (count_sequence(caller, invoke) != 1 or
             count_sequence(caller, tokens('model->control.publish_epoch')) != 1):
         raise ValueError('unfamiliar native publication invocation/results')

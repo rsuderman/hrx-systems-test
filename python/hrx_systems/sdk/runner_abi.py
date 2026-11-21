@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
 """Bounded native runner ownership ABI evidence for one pinned SDK source commit.
 
 Only stage() performs source acquisition. validate() uses sealed local bytes only.
@@ -18,6 +19,9 @@ MAX_SOURCE_BYTES = 1024 * 1024
 # Structural signatures from the reviewed ownership transition. Comments and
 # unrelated source edits do not participate. Unknown signature/export wiring fails.
 RUNNER_BLOCK_PROFILES = {'d07e21e3e9e2109a5175db922da9d0d9cb6a6dc22a0f464d973517138a46a1b1': 'borrowed-ptr', 'a3592f603e2aec049b48b0ace1c474b18f64b1363983554304ea8f1e834ae715': 'owning-ref'}
+# This constructor supports both forms; the reviewed control selection below
+# routes our borrowed-input derivatives to its PTR branch.
+SELECTED_OWNERSHIP_BLOCK = 'b02907258acb1155566a3cf17b58cad9ddf412a945fa12a15c2150f0de86dd2b'
 PROFILES = ('owning-ref', 'borrowed-ptr')
 PROFILE_TYPES = {'owning-ref': ['REF'], 'borrowed-ptr': ['PTR']}
 from .publication_abi import tokens, function, initializer, count_sequence
@@ -51,15 +55,44 @@ def recognize(module, control):
     opening = body.index('{', hi)
     close = matching(body, opening)
     block = body[lo:close + 2]
-    profile = RUNNER_BLOCK_PROFILES.get(sha(' '.join(block).encode()))
+    signature = sha(' '.join(block).encode())
+    selected = signature == SELECTED_OWNERSHIP_BLOCK
+    profile = 'borrowed-ptr' if selected else RUNNER_BLOCK_PROFILES.get(signature)
     if profile is None:
         raise ValueError('unsupported native runner signature/export construction')
     public = function(control.decode('utf-8'), 'loom_serve_text_control_initialize')
+    if selected:
+        selection = tokens('''
+            iree_vm_signature_type_t device_buffer = {
+                .kind = IREE_VM_SIGNATURE_TYPE_KIND_PTR,
+                .value.ref = source->types.buffer};
+            if (source->v1) {
+                IREE_RETURN_IF_ERROR(loom_runtime_preparation_device_buffer_argument(
+                    source->preparation, source->module, IREE_SV("epoch"),
+                    source->types.buffer, &device_buffer));
+            }
+            const bool owned_hal_arguments =
+                device_buffer.kind == IREE_VM_SIGNATURE_TYPE_KIND_REF;
+        ''')
+        options = tokens('''const loom_runtime_module_options_t options = {
+            .owned_hal_arguments = owned_hal_arguments, .binding_capacity = 7,
+            .stages = {stage_count, stages},
+            .feedback = {IREE_ARRAYSIZE(feedback), feedback},};''')
+        create = tokens('''loom_runtime_module_create(&source->types, execution, options,
+            host_allocator, &control->native_module)''')
+        if (count_sequence(public, selection) != 1 or count_sequence(public, options) != 1
+                or count_sequence(public, create) != 1
+                or count_sequence(public, tokens('&device_buffer')) != 1
+                or count_sequence(public, tokens('device_buffer')) != 21
+                or count_sequence(public, tokens('options')) != 4
+                or count_sequence(public, tokens('owned_hal_arguments')) != 6):
+            raise ValueError('unfamiliar runner ownership selection')
     kind = 'PTR' if profile == 'borrowed-ptr' else 'REF'
     for name, value in (
         ('buffer', '.kind = IREE_VM_SIGNATURE_TYPE_KIND_REF, .value.ref = source->vm_types.buffer'),
         ('device_buffer', '.kind = IREE_VM_SIGNATURE_TYPE_KIND_' + kind + ', .value.ref = source->types.buffer')):
-        if initializer(public, name, 'const iree_vm_signature_type_t') != tokens(value):
+        declaration = 'iree_vm_signature_type_t' if selected and name == 'device_buffer' else 'const iree_vm_signature_type_t'
+        if initializer(public, name, declaration) != tokens(value):
             raise ValueError('native runner/public buffer ownership disagrees')
     for name, types in (('step_arguments', ['buffer'] + ['i32'] * 3 + ['device_buffer'] * 6),
                         ('epoch_arguments', ['buffer'] + ['i32'] * 10 + ['device_buffer'] * 12)):

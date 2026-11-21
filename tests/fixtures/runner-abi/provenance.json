@@ -49,6 +49,33 @@
       "commit": "4468e020ac06b5e96a550426f4ad4603324f86cc",
       "upstream_path": "loom/src/loom/serve/service/text/model.c",
       "sha256": "cadc9057584b925157a639843b25b87b0e47830d5a133b5b1f1fb74fc337e97f"
+    },
+    {
+      "path": "selected-module.c",
+      "repository": "ROCm/hrx-system",
+      "commit": "beb700e3f94d44689d56437b479e8c629085a76a",
+      "upstream_path": "loom/src/loom/runtime/program/module.c",
+      "sha256": "958778fe5313cef96805985bde2c190170b9ea906f866bacbd645d75ffc5ee27",
+      "upstream_sha256": "23414d9c4cede36806780e7409dceb62a3662b60beeabadd908933d3526e40b0",
+      "normalization": "Copyright header uses AMD; executable source tokens unchanged."
+    },
+    {
+      "path": "selected-control.c",
+      "repository": "ROCm/hrx-system",
+      "commit": "beb700e3f94d44689d56437b479e8c629085a76a",
+      "upstream_path": "loom/src/loom/serve/service/text/control.c",
+      "sha256": "5ef569566925f58056598232019a98a16a1340a434d982c2de44c2b44f915e2b",
+      "upstream_sha256": "92f66fa87598b5c2e5a1bd0119d25832e058f00c99d0480f2fee33faa1482106",
+      "normalization": "Copyright header uses AMD; executable source tokens unchanged."
+    },
+    {
+      "path": "selected-model.c",
+      "repository": "ROCm/hrx-system",
+      "commit": "beb700e3f94d44689d56437b479e8c629085a76a",
+      "upstream_path": "loom/src/loom/serve/service/text/model.c",
+      "sha256": "eb283062316d671e934a2dc6c448fd8375bea73ed5764d756d3e07ef1d36b470",
+      "upstream_sha256": "ec1b604161ff8520decca37e182a437690290f75ab5b4c31d491f964c4d3bcfa",
+      "normalization": "Copyright header uses AMD; executable source tokens unchanged."
     }
   ],
   "recognition": "Tokenize reviewed native signature/export construction from module->arguments[0] through timestamp export initializer. Compare normalized token digest. Separately verify canonical HAL ordinal identities, public aliases, step/epoch signatures and binding linkage."

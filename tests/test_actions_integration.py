@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
 """Frozen runtime acquisition composition and early-failure evidence."""
 import copy
 import hashlib
@@ -51,7 +52,10 @@ class ActionsIntegrationTests(unittest.TestCase):
             self.assertEqual(kind, 'python')
             return {'kind': kind, 'filename': payload['filename'], 'downloaded_bytes': payload['size_bytes']}
 
-        with tempfile.TemporaryDirectory() as directory, patch.object(SDK, 'acquire_payload', side_effect=dependency) as transfer:
+        # Artifact expiry belongs to the captured fixture clock, not wall time.
+        resolve = FIXTURE.A.resolve_source
+        with tempfile.TemporaryDirectory() as directory, patch.object(SDK, 'acquire_payload', side_effect=dependency) as transfer, \
+                patch.object(FIXTURE.A, 'resolve_source', side_effect=lambda *a, **kw: resolve(*a, now=FIXTURE.NOW, **kw)):
             payloads = Path(directory) / 'payloads'
             snapshot, events = SDK.acquire_actions_runtime(settings, payloads,
                 selector=FIXTURE.SELECTOR, environment=FIXTURE.ENV, qualifier=qualify,

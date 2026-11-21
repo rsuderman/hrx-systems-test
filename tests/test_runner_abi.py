@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
 """Offline runner ownership recognition, frozen evidence and composition checks."""
 import base64
 import copy
@@ -30,6 +31,45 @@ def runner_descriptor(snap, root, profile='borrowed'):
 
 
 class RunnerAbiTests(unittest.TestCase):
+    def test_signature_selected_ownership_and_publication(self):
+        from hrx_systems.sdk import publication_abi
+        module, control, model = [(FIXTURES / ('selected-' + n + '.c')).read_bytes()
+                                  for n in ('module', 'control', 'model')]
+        self.assertEqual(ABI.recognize(module, control)['profile'], 'borrowed-ptr')
+        self.assertEqual(publication_abi.recognize(control, model)['profile'], 'proposal-counts-14')
+        with tempfile.TemporaryDirectory() as tmp:
+            snap = snapshot('0.3.0.dev0')
+            runner = ABI.stage(tmp, snap, Client('selected'))
+            pub = publication_abi.stage(tmp, snap, Client('selected'))
+            policy = POLICY.resolve(snap, publication_abi=pub, runner_abi=runner)
+            ABI.validate(tmp, runner, snap)
+            publication_abi.validate(tmp, pub, snap)
+            POLICY.validate(policy, snap)
+
+    def test_signature_selection_rejects_changed_routes(self):
+        from hrx_systems.sdk import publication_abi
+        raw = {n: (FIXTURES / ('selected-' + n + '.c')).read_bytes()
+               for n in ('module', 'control', 'model')}
+        for name, old, new, recognizer, inputs in (
+            ('module', b'options.owned_hal_arguments ?', b'!options.owned_hal_arguments ?', ABI, ('module', 'control')),
+            ('control', b'device_buffer.kind == IREE_VM_SIGNATURE_TYPE_KIND_REF', b'device_buffer.kind != IREE_VM_SIGNATURE_TYPE_KIND_REF', ABI, ('module', 'control')),
+            ('control', b'.owned_hal_arguments = owned_hal_arguments', b'.owned_hal_arguments = true', ABI, ('module', 'control')),
+            ('control', b'source->types.buffer, &device_buffer', b'source->vm_types.buffer, &device_buffer', ABI, ('module', 'control')),
+            ('control', b'const iree_vm_signature_type_t step_arguments[]', b'device_buffer.kind = IREE_VM_SIGNATURE_TYPE_KIND_REF; const iree_vm_signature_type_t step_arguments[]', ABI, ('module', 'control')),
+            ('control', b'status = loom_runtime_module_create', b'options.owned_hal_arguments = true; status = loom_runtime_module_create', ABI, ('module', 'control')),
+            ('control', b'--control->publish_argument_count', b'++control->publish_argument_count', publication_abi, ('control', 'model')),
+            ('control', b'IREE_ARRAYSIZE(publish_arguments) - 1', b'IREE_ARRAYSIZE(publish_arguments) - 2', publication_abi, ('control', 'model')),
+            ('model', b'model->control.publish_argument_count),', b'13),', publication_abi, ('control', 'model')),
+            ('model', b'model->control.publish_argument_count ==', b'model->control.publish_argument_count =', publication_abi, ('control', 'model')),
+            ('model', b'const uint8_t* records =', b'model->control.publish_argument_count = 13; const uint8_t* records =', publication_abi, ('control', 'model')),
+            ('model', b'TEXT_HOST_PROPOSAL_COUNTS', b'TEXT_HOST_PROGRESS', publication_abi, ('control', 'model')),
+        ):
+            with self.subTest(name=name, old=old):
+                self.assertIn(old, raw[name])
+                changed = dict(raw); changed[name] = raw[name].replace(old, new)
+                with self.assertRaises(ValueError):
+                    recognizer.recognize(*(changed[n] for n in inputs))
+
     def test_reviewed_profiles_and_unrelated_source_edits(self):
         for name, profile in [('owning', 'owning-ref'), ('borrowed', 'borrowed-ptr')]:
             raw = [(FIXTURES / (name + '-' + Path(p).name)).read_bytes() for p in ABI.PATHS]

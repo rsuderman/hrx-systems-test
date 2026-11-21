@@ -120,6 +120,15 @@ native signature/export construction, canonical HAL reference identities, and
 public step/epoch parameter types and bindings. It recognizes owning `REF` or
 borrowed `PTR` inputs; unknown runner contracts fail preparation explicitly.
 
+The signature-selected compatibility constructor introduced at HRX `beb700e3`
+also qualifies for borrowed derivatives. Recognition checks its reviewed native
+export block and the control path that chooses the same ownership for native
+runner arguments and public device-buffer arguments. Publication recognition
+checks the matching signature-selected 13/14-argument binding and invocation.
+The selected profile remains the full 14-argument publication with borrowed
+inputs, so existing adapters and strict verification still apply. These SDK
+compatibility branches do not require another pipeline rewrite.
+
 Each receipt binds its source bytes to the selected runtime identity and wheel
 hash through the existing official build provenance, not independent binary
 attestation. Evidence lives under `policies/publication-abi/` and
